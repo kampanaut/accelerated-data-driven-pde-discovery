@@ -1,0 +1,19 @@
+# Resolution comparison - same IC at different grid densities
+
+simulation:
+  nu: 0.01
+  domain_size: [6.283185307179586, 6.283185307179586]
+  resolution: [64, 64]  # This will be the baseline
+  t_end: 2.0  # Short sim for quick comparison
+  dt: 0.01
+  save_interval: 0.5
+
+output_dir: "resolution_test"
+
+initial_conditions:
+  - name: "dipole_64x64"
+    type: "dipole"
+    center: [3.14, 3.14]
+    separation: 1.5
+    width: 0.4
+    strength: 1.0

@@ -161,7 +161,11 @@ def solve_navier_stokes_with_params(
     # Generate initial condition
     ic_type = ic_params['type']
 
-    if ic_type == 'gaussian_vortex':
+    if ic_type == 'custom':
+        # Directly use provided velocity fields
+        u_init = ic_params['u_init']
+        v_init = ic_params['v_init']
+    elif ic_type == 'gaussian_vortex':
         u_init, v_init = gaussian_vortex_ic(
             center=ic_params['center'],
             width=ic_params['width'],

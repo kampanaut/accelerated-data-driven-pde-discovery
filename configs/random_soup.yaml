@@ -1,0 +1,34 @@
+# Configuration for random vortex soup
+# Multiple vortices at random positions - turbulent-like
+
+simulation:
+  nu: 0.01
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2π × 2π
+  resolution: [32, 64]
+  t_end: 10.0
+  dt: 0.01
+  save_interval: 0.2
+
+output_dir: "random_soup"
+
+initial_conditions:
+  - name: "soup_5vortices"
+    type: "random_soup"
+    n_vortices: 5
+    strength_range: [-1.5, 1.5]
+    width_range: [0.3, 0.6]
+    seed: 42
+
+  - name: "soup_10vortices"
+    type: "random_soup"
+    n_vortices: 10
+    strength_range: [-1.0, 1.0]
+    width_range: [0.2, 0.5]
+    seed: 123
+
+  - name: "soup_15vortices"
+    type: "random_soup"
+    n_vortices: 15
+    strength_range: [-0.8, 0.8]
+    width_range: [0.2, 0.4]
+    seed: 456

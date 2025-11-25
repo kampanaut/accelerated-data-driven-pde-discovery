@@ -1,0 +1,21 @@
+# Configuration for Von Kármán vortex street
+# Alternating wake pattern - classic instability
+
+simulation:
+  nu: 0.01
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2π × 2π
+  resolution: [32, 64]
+  t_end: 10.0
+  dt: 0.01
+  save_interval: 0.2
+
+output_dir: "von_karman"
+
+initial_conditions:
+  - name: "karman_street"
+    type: "von_karman"
+    n_vortices: 8  # Will create 8 vortices (4 per row)
+    spacing: 1.2
+    offset: 2.0
+    width: 0.4
+    strength: 1.0

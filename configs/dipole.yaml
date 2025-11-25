@@ -1,0 +1,20 @@
+# Configuration for dipole (vortex pair)
+# Two counter-rotating vortices that self-propel
+
+simulation:
+  nu: 0.01
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2π × 2π
+  resolution: [32, 64]
+  t_end: 10.0
+  dt: 0.01
+  save_interval: 0.2
+
+output_dir: "dipole"
+
+initial_conditions:
+  - name: "dipole_horizontal"
+    type: "dipole"
+    center: [3.141592653589793, 3.141592653589793]  # π, π
+    separation: 1.5
+    width: 0.4
+    strength: 1.0

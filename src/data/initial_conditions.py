@@ -263,3 +263,284 @@ def taylor_green_vortex(
     v = amplitude * np.cos(X) * np.sin(Y)
 
     return u, v
+
+
+def shear_layer_ic(
+    y_center: float,
+    thickness: float,
+    velocity_jump: float,
+    perturbation_amplitude: float,
+    x: np.ndarray,
+    y: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate shear layer initial condition (Kelvin-Helmholtz setup).
+
+    Creates a velocity jump across y = y_center with tanh profile.
+    Optional sinusoidal perturbation triggers instability.
+
+    Vorticity: ω = dU/dy where U(y) = (velocity_jump/2) * tanh((y - y_center) / thickness)
+
+    Args:
+        y_center: Location of shear layer
+        thickness: Thickness of transition region
+        velocity_jump: Velocity difference across layer
+        perturbation_amplitude: Amplitude of sinusoidal perturbation
+        x, y: Coordinate arrays
+
+    Returns:
+        Tuple of (u, v) velocity components
+    """
+    X, Y = np.meshgrid(x, y)
+
+    # Base flow: u varies with y, v = 0
+    u_base = (velocity_jump / 2) * np.tanh((Y - y_center) / thickness)
+
+    # Add sinusoidal perturbation to trigger instability
+    v_pert = perturbation_amplitude * np.sin(2 * np.pi * X / (x[-1] - x[0]))
+
+    u = u_base
+    v = v_pert
+
+    return u, v
+
+
+def lamb_oseen_vortex_ic(
+    center: Tuple[float, float],
+    core_radius: float,
+    circulation: float,
+    x: np.ndarray,
+    y: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate Lamb-Oseen vortex (smooth vortex with finite core).
+
+    Velocity profile: v_θ(r) = (Γ / 2πr) * (1 - exp(-r² / a²))
+    where Γ is circulation and a is core radius.
+
+    This is a more realistic vortex model than Gaussian.
+
+    Args:
+        center: (x, y) position of vortex center
+        core_radius: Core radius a
+        circulation: Total circulation Γ
+        x, y: Coordinate arrays
+
+    Returns:
+        Tuple of (u, v) velocity components
+    """
+    X, Y = np.meshgrid(x, y)
+
+    # Distance from center
+    dx_grid = X - center[0]
+    dy_grid = Y - center[1]
+    r = np.sqrt(dx_grid**2 + dy_grid**2)
+
+    # Avoid division by zero at center
+    r = np.maximum(r, 1e-10)
+
+    # Tangential velocity magnitude
+    v_theta = (circulation / (2 * np.pi * r)) * (1 - np.exp(-r**2 / core_radius**2))
+
+    # Convert to Cartesian components: u = -v_θ * sin(θ), v = v_θ * cos(θ)
+    # sin(θ) = dy/r, cos(θ) = dx/r
+    u = -v_theta * (dy_grid / r)
+    v = v_theta * (dx_grid / r)
+
+    return u, v
+
+
+def dipole_vortex_ic(
+    center: Tuple[float, float],
+    separation: float,
+    width: float,
+    strength: float,
+    x: np.ndarray,
+    y: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate dipole (vortex pair) - two counter-rotating vortices.
+
+    Creates a pair of vortices with opposite circulation,
+    separated horizontally. This creates a self-propelling structure.
+
+    Args:
+        center: (x, y) midpoint between the two vortices
+        separation: Distance between vortex centers
+        width: Gaussian width of each vortex
+        strength: Circulation strength (one positive, one negative)
+        x, y: Coordinate arrays
+
+    Returns:
+        Tuple of (u, v) velocity components
+    """
+    # Two vortices: one at center - separation/2, one at center + separation/2
+    vortex_params = [
+        {
+            'center': (center[0] - separation / 2, center[1]),
+            'width': width,
+            'strength': strength
+        },
+        {
+            'center': (center[0] + separation / 2, center[1]),
+            'width': width,
+            'strength': -strength  # Opposite sign
+        }
+    ]
+
+    return multi_vortex_ic(vortex_params, x, y)
+
+
+def perturbed_uniform_flow_ic(
+    u_mean: float,
+    v_mean: float,
+    perturbation_amplitude: float,
+    perturbation_wavelength: float,
+    x: np.ndarray,
+    y: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate uniform flow with small random perturbations.
+
+    Useful for studying transition to turbulence.
+
+    Args:
+        u_mean: Mean x-velocity
+        v_mean: Mean y-velocity
+        perturbation_amplitude: RMS amplitude of perturbations
+        perturbation_wavelength: Dominant wavelength of perturbations
+        x, y: Coordinate arrays
+
+    Returns:
+        Tuple of (u, v) velocity components
+    """
+    X, Y = np.meshgrid(x, y)
+
+    # Random Fourier modes
+    rng = np.random.RandomState(42)  # Fixed seed for reproducibility
+
+    k_pert = 2 * np.pi / perturbation_wavelength
+
+    # Generate random phases
+    n_modes = 5
+    u_pert = np.zeros_like(X)
+    v_pert = np.zeros_like(Y)
+
+    for i in range(n_modes):
+        phase_u = rng.uniform(0, 2 * np.pi)
+        phase_v = rng.uniform(0, 2 * np.pi)
+        kx = k_pert * rng.uniform(0.5, 1.5)
+        ky = k_pert * rng.uniform(0.5, 1.5)
+
+        u_pert += np.sin(kx * X + ky * Y + phase_u)
+        v_pert += np.sin(kx * X + ky * Y + phase_v)
+
+    # Normalize perturbations
+    u_pert = perturbation_amplitude * u_pert / np.sqrt(n_modes)
+    v_pert = perturbation_amplitude * v_pert / np.sqrt(n_modes)
+
+    u = u_mean + u_pert
+    v = v_mean + v_pert
+
+    return u, v
+
+
+def random_vortex_soup_ic(
+    n_vortices: int,
+    strength_range: Tuple[float, float],
+    width_range: Tuple[float, float],
+    x: np.ndarray,
+    y: np.ndarray,
+    seed: int = None
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate random collection of vortices (turbulent-like initial state).
+
+    Places n_vortices at random locations with random strengths and widths.
+    Useful for generating diverse training data.
+
+    Args:
+        n_vortices: Number of vortices to place
+        strength_range: (min, max) circulation strength
+        width_range: (min, max) vortex width
+        x, y: Coordinate arrays
+        seed: Random seed for reproducibility
+
+    Returns:
+        Tuple of (u, v) velocity components
+    """
+    rng = np.random.RandomState(seed)
+
+    domain_x = (x[0], x[-1])
+    domain_y = (y[0], y[-1])
+
+    vortex_params = []
+
+    for _ in range(n_vortices):
+        center_x = rng.uniform(domain_x[0], domain_x[1])
+        center_y = rng.uniform(domain_y[0], domain_y[1])
+        strength = rng.uniform(strength_range[0], strength_range[1])
+        width = rng.uniform(width_range[0], width_range[1])
+
+        vortex_params.append({
+            'center': (center_x, center_y),
+            'width': width,
+            'strength': strength
+        })
+
+    return multi_vortex_ic(vortex_params, x, y)
+
+
+def von_karman_street_ic(
+    n_vortices: int,
+    spacing: float,
+    offset: float,
+    width: float,
+    strength: float,
+    x: np.ndarray,
+    y: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate Von Kármán vortex street (alternating wake pattern).
+
+    Creates two parallel rows of vortices with opposite circulation,
+    staggered to create the classic wake instability pattern.
+
+    Args:
+        n_vortices: Number of vortices (will be split between two rows)
+        spacing: Horizontal spacing between vortices in same row
+        offset: Vertical distance between the two rows
+        width: Gaussian width of each vortex
+        strength: Circulation magnitude (alternates sign)
+        x, y: Coordinate arrays
+
+    Returns:
+        Tuple of (u, v) velocity components
+    """
+    domain_x = x[-1] - x[0]
+    domain_y = y[-1] - y[0]
+    center_y = domain_y / 2
+
+    vortex_params = []
+
+    # Determine number of vortices per row
+    n_per_row = n_vortices // 2
+
+    for i in range(n_per_row):
+        x_pos = x[0] + spacing * (i + 0.5)
+
+        # Top row (positive circulation)
+        vortex_params.append({
+            'center': (x_pos, center_y + offset / 2),
+            'width': width,
+            'strength': strength
+        })
+
+        # Bottom row (negative circulation, staggered by spacing/2)
+        vortex_params.append({
+            'center': (x_pos + spacing / 2, center_y - offset / 2),
+            'width': width,
+            'strength': -strength
+        })
+
+    return multi_vortex_ic(vortex_params, x, y)

@@ -1,0 +1,54 @@
+# Configuration demonstrating multiple IC types in one run
+# Generates datasets from various IC families
+
+simulation:
+  nu: 0.01
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2π × 2π
+  resolution: [32, 64]
+  t_end: 10.0
+  dt: 0.01
+  save_interval: 0.2
+
+output_dir: "mixed_ics"
+
+initial_conditions:
+  # Single vortex
+  - name: "gaussian_single"
+    type: "gaussian_vortex"
+    center: [3.141592653589793, 3.141592653589793]
+    width: 0.5
+    strength: 1.0
+
+  # Taylor-Green
+  - name: "taylor_green"
+    type: "taylor_green"
+    amplitude: 1.0
+
+  # Dipole
+  - name: "dipole"
+    type: "dipole"
+    center: [3.141592653589793, 3.141592653589793]
+    separation: 1.5
+    width: 0.4
+    strength: 1.0
+
+  # Lamb-Oseen vortex
+  - name: "lamb_oseen"
+    type: "lamb_oseen"
+    center: [3.141592653589793, 3.141592653589793]
+    core_radius: 0.6
+    circulation: 2.0
+
+  # Multi-vortex
+  - name: "three_vortices"
+    type: "multi_vortex"
+    vortices:
+      - center: [2.0, 2.0]
+        width: 0.4
+        strength: 1.0
+      - center: [4.0, 4.0]
+        width: 0.4
+        strength: -1.0
+      - center: [3.0, 4.5]
+        width: 0.3
+        strength: 0.8
