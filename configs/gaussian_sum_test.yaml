@@ -1,0 +1,56 @@
+# Test configuration for Gaussian sum initial conditions with varied viscosity
+# Demonstrates both features: gaussian_sum IC type and per-task nu override
+
+simulation:
+  nu: 0.01  # Global default viscosity
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2π × 2π
+  resolution: [64, 64]
+  t_end: 10.0
+  dt: 0.01
+  save_interval: 0.2
+
+output_dir: "gaussian_sum_test"
+
+initial_conditions:
+  # Test 1: Fixed seed (reproducible)
+  - name: "gaussian_fixed_seed"
+    type: "gaussian_sum"
+    n_gaussians: 3
+    amplitude_range: [-1.0, 1.0]
+    width_range: [0.3, 0.6]
+    seed: 42  # Should produce identical results each run
+
+  # Test 2: Low viscosity override
+  - name: "gaussian_low_nu"
+    type: "gaussian_sum"
+    nu: 0.0087  # Task-specific override (lower than default)
+    n_gaussians: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.2, 0.7]
+    seed: 100
+
+  # Test 3: High viscosity override
+  - name: "gaussian_high_nu"
+    type: "gaussian_sum"
+    nu: 0.0135  # Task-specific override (higher than default)
+    n_gaussians: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.2, 0.7]
+    seed: 200
+
+  # Test 4: Default viscosity (no override)
+  - name: "gaussian_default_nu"
+    type: "gaussian_sum"
+    # Uses global nu = 0.01
+    n_gaussians: 4
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.25, 0.75]
+    seed: 300
+
+  # Test 5: Random (no seed - different each run)
+  - name: "gaussian_random"
+    type: "gaussian_sum"
+    n_gaussians: 6
+    amplitude_range: [-1.2, 1.2]
+    width_range: [0.3, 0.8]
+    # No seed specified - truly random

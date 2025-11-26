@@ -227,6 +227,16 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
             y=y
         )
 
+    elif ic_type == 'gaussian_sum':
+        return initial_conditions.gaussian_sum_ic(
+            n_gaussians=ic_config['n_gaussians'],
+            amplitude_range=tuple(ic_config['amplitude_range']),
+            width_range=tuple(ic_config['width_range']),
+            x=x,
+            y=y,
+            seed=ic_config.get('seed', None)
+        )
+
     else:
         raise ValueError(f"Unknown IC type: {ic_type}")
 
@@ -289,6 +299,15 @@ def main():
         print(f"IC {ic_idx + 1}/{len(ic_configs)}: {ic_name} ({ic_config['type']})")
         print(f"{'-' * 60}")
 
+        # Check for task-specific viscosity override
+        task_nu = ic_config.get('nu', simulation_params['nu'])
+
+        # Create task-specific simulation params
+        task_sim_params = simulation_params.copy()
+        task_sim_params['nu'] = task_nu
+
+        print(f"Using ν = {task_nu:.6f}")
+
         # Create initial condition
         u_init, v_init = create_ic_from_config(ic_config, x, y)
 
@@ -299,8 +318,8 @@ def main():
             'v_init': v_init,
         }
 
-        # Solve Navier-Stokes
-        results = solve_navier_stokes_with_params(ic_params_for_solver, simulation_params)
+        # Solve Navier-Stokes with task-specific parameters
+        results = solve_navier_stokes_with_params(ic_params_for_solver, task_sim_params)
 
         # Extract results
         velocity_history = results['velocity_history']
@@ -317,7 +336,8 @@ def main():
             output_file,
             **training_data,
             ic_config=ic_config,
-            simulation_params=simulation_params,
+            simulation_params=task_sim_params,  # Save actual params used (with task-specific nu)
+            nu_used=task_nu,  # Explicit nu value for this task
             x=x_result,
             y=y_result,
         )

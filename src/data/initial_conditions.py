@@ -491,6 +491,74 @@ def random_vortex_soup_ic(
     return multi_vortex_ic(vortex_params, x, y)
 
 
+def gaussian_sum_ic(
+    n_gaussians: int,
+    amplitude_range: Tuple[float, float],
+    width_range: Tuple[float, float],
+    x: np.ndarray,
+    y: np.ndarray,
+    seed: int = None
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate velocity field from sum of random Gaussian vorticity distributions.
+
+    Creates smooth random initial conditions by:
+    1. Sampling N Gaussians with random (A, w, x₀, y₀) parameters
+    2. Summing as vorticity field: ω = Σ Aᵢ·exp(-rᵢ²/wᵢ²)
+    3. Solving Poisson equation ∇²ψ = ω for stream function
+    4. Extracting velocity: u = -∂ψ/∂y, v = ∂ψ/∂x
+
+    This approach guarantees divergence-free velocity fields (∇·u = 0) by construction,
+    making it suitable for generating diverse training data for meta-learning.
+
+    Args:
+        n_gaussians: Number of Gaussian components to sum
+        amplitude_range: (min, max) for random amplitude sampling (vortex strength)
+        width_range: (min, max) for random width sampling (vortex size)
+        x: 1D array of x-coordinates
+        y: 1D array of y-coordinates
+        seed: Random seed for reproducibility (None = truly random)
+
+    Returns:
+        Tuple of (u, v) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+
+    Example:
+        >>> x = np.linspace(0, 2*np.pi, 64)
+        >>> y = np.linspace(0, 2*np.pi, 64)
+        >>> u, v = gaussian_sum_ic(
+        ...     n_gaussians=5,
+        ...     amplitude_range=(-2.0, 2.0),
+        ...     width_range=(0.2, 0.8),
+        ...     x=x, y=y,
+        ...     seed=42
+        ... )
+    """
+    rng = np.random.RandomState(seed)
+
+    # Domain bounds for random placement
+    domain_x = (x[0], x[-1])
+    domain_y = (y[0], y[-1])
+
+    # Generate random parameters for each Gaussian
+    vortex_params = []
+    for _ in range(n_gaussians):
+        center_x = rng.uniform(domain_x[0], domain_x[1])
+        center_y = rng.uniform(domain_y[0], domain_y[1])
+        amplitude = rng.uniform(amplitude_range[0], amplitude_range[1])
+        width = rng.uniform(width_range[0], width_range[1])
+
+        vortex_params.append({
+            'center': (center_x, center_y),
+            'width': width,
+            'strength': amplitude
+        })
+
+    # Use existing multi_vortex infrastructure to compute velocity
+    return multi_vortex_ic(vortex_params, x, y)
+
+
 def von_karman_street_ic(
     n_vortices: int,
     spacing: float,
