@@ -17,6 +17,7 @@ import sys
 import argparse
 import yaml
 from pathlib import Path
+from datetime import datetime
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -25,6 +26,13 @@ from src.pde.navier_stokes import solve_navier_stokes_with_params
 from src.data.derivatives import spatial_derivatives, temporal_derivative
 from src.utils.visualization import save_flow_evolution
 from src.data import initial_conditions
+
+# Import for catching divergence errors
+try:
+    from phiml.math._optimize import Diverged
+except ImportError:
+    # Fallback if phiml structure changes
+    Diverged = Exception
 
 
 def generate_training_samples(
@@ -237,8 +245,102 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
             seed=ic_config.get('seed', None)
         )
 
+    elif ic_type == 'gaussian_direct':
+        return initial_conditions.gaussian_direct_ic(
+            n_gaussians_u=ic_config['n_gaussians_u'],
+            n_gaussians_v=ic_config['n_gaussians_v'],
+            amplitude_range=tuple(ic_config['amplitude_range']),
+            width_range=tuple(ic_config['width_range']),
+            x=x,
+            y=y,
+            seed=ic_config.get('seed', None)
+        )
+
+    elif ic_type == 'gaussian_hybrid':
+        return initial_conditions.gaussian_hybrid_ic(
+            n_gaussians_vorticity=ic_config['n_gaussians_vorticity'],
+            n_gaussians_u=ic_config['n_gaussians_u'],
+            n_gaussians_v=ic_config['n_gaussians_v'],
+            amplitude_range=tuple(ic_config['amplitude_range']),
+            width_range=tuple(ic_config['width_range']),
+            alpha=ic_config['alpha'],
+            beta=ic_config['beta'],
+            x=x,
+            y=y,
+            seed=ic_config.get('seed', None)
+        )
+
     else:
         raise ValueError(f"Unknown IC type: {ic_type}")
+
+
+def save_metadata_txt(output_path: Path, ic_config: dict, simulation_params: dict,
+                      training_data: dict, success: bool = True, error_msg: str = None):
+    """
+    Save human-readable metadata alongside .npz file.
+    Shows exact parameters used for reproducibility/debugging.
+
+    Args:
+        output_path: Path to .npz file (will create .txt with same name)
+        ic_config: Initial condition configuration
+        simulation_params: Simulation parameters used
+        training_data: Generated training data (for statistics)
+        success: Whether simulation succeeded
+        error_msg: Error message if failed
+    """
+    txt_path = output_path.with_suffix('.txt')
+
+    with open(txt_path, 'w') as f:
+        f.write("Navier-Stokes Simulation Metadata\n")
+        f.write("=" * 60 + "\n")
+        f.write(f"Task Name: {output_path.stem}\n")
+        f.write(f"IC Type: {ic_config.get('type', 'unknown')}\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Status: {'SUCCESS' if success else 'FAILED'}\n")
+        if not success and error_msg:
+            f.write(f"Error: {error_msg}\n")
+        f.write("\n")
+
+        # IC parameters
+        f.write("Initial Condition Parameters:\n")
+        for key, value in ic_config.items():
+            if key not in ['type', 'name']:
+                f.write(f"  {key}: {value}\n")
+        f.write("\n")
+
+        # Simulation parameters
+        f.write("Simulation Parameters:\n")
+        f.write(f"  ν (viscosity): {simulation_params['nu']:.6f}\n")
+        f.write(f"  Domain: {simulation_params['domain_size']}\n")
+        f.write(f"  Resolution: {simulation_params['resolution']}\n")
+        f.write(f"  Time range: [0, {simulation_params['t_end']}]\n")
+        f.write(f"  Time step: dt={simulation_params['dt']}\n")
+        if 'save_interval' in simulation_params:
+            f.write(f"  Save interval: {simulation_params['save_interval']}\n")
+        f.write("\n")
+
+        if success and training_data:
+            # Output statistics
+            f.write("Output Statistics:\n")
+            f.write(f"  Total samples: {len(training_data['u']):,}\n")
+            f.write(f"  Features: 10 (u, v, spatial derivatives)\n")
+            f.write(f"  Targets: 2 (u_t, v_t)\n")
+            f.write("\n")
+
+            # Data ranges
+            f.write("Data Ranges:\n")
+            for key in ['u', 'v', 'u_t', 'v_t']:
+                if key in training_data:
+                    values = training_data[key]
+                    f.write(f"  {key:4s}: [{values.min():>8.4f}, {values.max():>8.4f}]\n")
+            f.write("\n")
+
+            # Check for potential issues
+            f.write("Data Quality Checks:\n")
+            has_nan = any(np.any(np.isnan(training_data[k])) for k in ['u', 'v', 'u_t', 'v_t'])
+            has_inf = any(np.any(np.isinf(training_data[k])) for k in ['u', 'v', 'u_t', 'v_t'])
+            f.write(f"  NaN values: {'DETECTED' if has_nan else 'None'}\n")
+            f.write(f"  Inf values: {'DETECTED' if has_inf else 'None'}\n")
 
 
 def main():
@@ -282,7 +384,7 @@ def main():
 
     # Create output directory
     output_dir_name = config.get('output_dir', 'navier_stokes')
-    data_dir = Path(__file__).parent.parent / 'data' / output_dir_name
+    data_dir = Path(__file__).parent.parent / 'data' / 'datasets' / output_dir_name
     data_dir.mkdir(parents=True, exist_ok=True)
     print(f"\nOutput directory: {data_dir}")
 
@@ -292,6 +394,10 @@ def main():
     x = np.linspace(0, domain_size[0], resolution[1])
     y = np.linspace(0, domain_size[1], resolution[0])
 
+    # Track success/failure
+    successful = 0
+    failed_tasks = []
+
     # Process each IC
     for ic_idx, ic_config in enumerate(ic_configs):
         ic_name = ic_config.get('name', f'ic_{ic_idx}')
@@ -300,71 +406,125 @@ def main():
         print(f"{'-' * 60}")
 
         # Check for task-specific viscosity override
-        task_nu = ic_config.get('nu', simulation_params['nu'])
+        # nu can be a fixed value or a [min, max] range for uniform sampling
+        raw_nu = ic_config.get('nu', simulation_params['nu'])
+
+        if isinstance(raw_nu, list):
+            if len(raw_nu) != 2:
+                raise ValueError(
+                    f"Task '{ic_name}': nu as list must have exactly 2 elements [min, max], "
+                    f"got {len(raw_nu)} elements: {raw_nu}"
+                )
+            # Sample nu uniformly from range, using task seed for reproducibility
+            rng = np.random.default_rng(ic_config.get('seed'))
+            task_nu = rng.uniform(raw_nu[0], raw_nu[1])
+            print(f"Sampled ν = {task_nu:.6f} from range {raw_nu}")
+        else:
+            task_nu = raw_nu
+            print(f"Using ν = {task_nu:.6f}")
 
         # Create task-specific simulation params
         task_sim_params = simulation_params.copy()
         task_sim_params['nu'] = task_nu
 
-        print(f"Using ν = {task_nu:.6f}")
+        try:
+            # Create initial condition
+            u_init, v_init = create_ic_from_config(ic_config, x, y)
 
-        # Create initial condition
-        u_init, v_init = create_ic_from_config(ic_config, x, y)
+            # Wrap IC for solver
+            ic_params_for_solver = {
+                'type': 'custom',
+                'u_init': u_init,
+                'v_init': v_init,
+            }
 
-        # Wrap IC for solver
-        ic_params_for_solver = {
-            'type': 'custom',
-            'u_init': u_init,
-            'v_init': v_init,
-        }
+            # Solve Navier-Stokes with task-specific parameters
+            results = solve_navier_stokes_with_params(ic_params_for_solver, task_sim_params)
 
-        # Solve Navier-Stokes with task-specific parameters
-        results = solve_navier_stokes_with_params(ic_params_for_solver, task_sim_params)
+            # Extract results
+            velocity_history = results['velocity_history']
+            times = results['times']
+            x_result = results['x']
+            y_result = results['y']
 
-        # Extract results
-        velocity_history = results['velocity_history']
-        times = results['times']
-        x_result = results['x']
-        y_result = results['y']
+            # Compute derivatives and format as training data
+            training_data = generate_training_samples(velocity_history, times, x_result, y_result)
 
-        # Compute derivatives and format as training data
-        training_data = generate_training_samples(velocity_history, times, x_result, y_result)
+            # Save data
+            output_file = data_dir / f"{ic_name}.npz"
+            np.savez(
+                output_file,
+                **training_data,
+                ic_config=ic_config,
+                simulation_params=task_sim_params,  # Save actual params used (with task-specific nu)
+                nu_used=task_nu,  # Explicit nu value for this task
+                x=x_result,
+                y=y_result,
+            )
+            print(f"\nSaved training data to {output_file}")
 
-        # Save data
-        output_file = data_dir / f"{ic_name}.npz"
-        np.savez(
-            output_file,
-            **training_data,
-            ic_config=ic_config,
-            simulation_params=task_sim_params,  # Save actual params used (with task-specific nu)
-            nu_used=task_nu,  # Explicit nu value for this task
-            x=x_result,
-            y=y_result,
-        )
-        print(f"\nSaved training data to {output_file}")
+            # Save metadata
+            save_metadata_txt(output_file, ic_config, task_sim_params, training_data, success=True)
 
-        # Generate visualization
-        vis_file = data_dir / f"{ic_name}_evolution.png"
-        dx = x_result[1] - x_result[0]
-        dy = y_result[1] - y_result[0]
-        save_flow_evolution(velocity_history, times, x_result, y_result, dx, dy, str(vis_file), n_snapshots=4)
+            # Generate visualization
+            vis_file = data_dir / f"{ic_name}_evolution.png"
+            dx = x_result[1] - x_result[0]
+            dy = y_result[1] - y_result[0]
+            save_flow_evolution(velocity_history, times, x_result, y_result, dx, dy, str(vis_file), n_snapshots=4)
 
-        # Print sample data
-        print(f"\nSample data point (first sample):")
-        print(f"  u={training_data['u'][0]:.4f}, v={training_data['v'][0]:.4f}")
-        print(f"  u_x={training_data['u_x'][0]:.4f}, u_y={training_data['u_y'][0]:.4f}")
-        print(f"  u_t={training_data['u_t'][0]:.4f}, v_t={training_data['v_t'][0]:.4f}")
-        print(f"  t={training_data['t'][0]:.4f}, x={training_data['x_coord'][0]:.4f}, y={training_data['y_coord'][0]:.4f}")
+            # Print sample data
+            print(f"\nSample data point (first sample):")
+            print(f"  u={training_data['u'][0]:.4f}, v={training_data['v'][0]:.4f}")
+            print(f"  u_x={training_data['u_x'][0]:.4f}, u_y={training_data['u_y'][0]:.4f}")
+            print(f"  u_t={training_data['u_t'][0]:.4f}, v_t={training_data['v_t'][0]:.4f}")
+            print(f"  t={training_data['t'][0]:.4f}, x={training_data['x_coord'][0]:.4f}, y={training_data['y_coord'][0]:.4f}")
+
+            successful += 1
+
+        except Diverged as e:
+            print(f"\n⚠️  SKIPPED: {ic_name}")
+            print(f"    Reason: IC violated incompressibility too severely for pressure projection")
+            print(f"    Details: {str(e)}")
+            failed_tasks.append((ic_name, "diverged", str(e)))
+
+            # Save failed metadata
+            output_file = data_dir / f"{ic_name}.npz"
+            save_metadata_txt(output_file, ic_config, task_sim_params, None,
+                            success=False, error_msg=f"Diverged: {str(e)}")
+            continue
+
+        except Exception as e:
+            print(f"\n⚠️  SKIPPED: {ic_name}")
+            print(f"    Unexpected error: {type(e).__name__}: {str(e)}")
+            failed_tasks.append((ic_name, "error", str(e)))
+
+            # Save failed metadata
+            output_file = data_dir / f"{ic_name}.npz"
+            save_metadata_txt(output_file, ic_config, task_sim_params, None,
+                            success=False, error_msg=f"{type(e).__name__}: {str(e)}")
+            continue
 
     print(f"\n{'=' * 60}")
     print("Data generation complete!")
     print(f"{'=' * 60}")
-    print(f"\nGenerated {len(ic_configs)} datasets in {data_dir}")
-    print(f"Each dataset contains:")
-    print(f"  - Training samples: {len(training_data['u']):,} samples")
-    print(f"  - Features: u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy")
-    print(f"  - Targets: u_t, v_t")
-    print(f"  - Metadata: t, x, y coordinates")
+    print(f"\nSummary:")
+    print(f"  Total tasks: {len(ic_configs)}")
+    print(f"  ✓ Successful: {successful}")
+    print(f"  ✗ Failed: {len(failed_tasks)}")
+    print(f"\nOutput directory: {data_dir}")
+
+    if failed_tasks:
+        print(f"\n⚠️  Failed tasks:")
+        for name, reason, details in failed_tasks:
+            print(f"    - {name}: {reason}")
+            if reason == "diverged":
+                print(f"      (IC violated incompressibility too severely)")
+
+    if successful > 0:
+        print(f"\nEach successful dataset contains:")
+        print(f"  - Features: u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy (10 inputs)")
+        print(f"  - Targets: u_t, v_t (2 outputs)")
+        print(f"  - Metadata: t, x, y coordinates + .txt file with parameters")
 
 
 if __name__ == '__main__':

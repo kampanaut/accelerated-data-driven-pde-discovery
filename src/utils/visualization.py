@@ -190,6 +190,13 @@ def save_flow_evolution(
     """
     Save a multi-panel figure showing flow evolution over time.
 
+    Creates a 5×n_snapshots grid:
+    - Row 1: Velocity vector fields (2D)
+    - Row 2: Vorticity contours (2D)
+    - Row 3: Vorticity surfaces (3D)
+    - Row 4: Velocity magnitude contours (2D)
+    - Row 5: Velocity magnitude surfaces (3D)
+
     Args:
         velocity_history: List of (u, v) tuples at different times
         times: Array of time values
@@ -198,43 +205,89 @@ def save_flow_evolution(
         output_path: Path to save the figure
         n_snapshots: Number of snapshots to show
     """
+    from mpl_toolkits.mplot3d import Axes3D
+
     indices = np.linspace(0, len(velocity_history) - 1, n_snapshots, dtype=int)
 
-    fig, axes = plt.subplots(2, n_snapshots, figsize=(5 * n_snapshots, 10))
+    fig = plt.figure(figsize=(5 * n_snapshots, 25))
 
     for col, idx in enumerate(indices):
         u, v = velocity_history[idx]
         t = times[idx]
 
-        # Top row: velocity field
-        ax_vel = axes[0, col]
+        # Prepare grid
         if x.ndim == 1 and y.ndim == 1:
             x_grid, y_grid = np.meshgrid(x, y)
         else:
             x_grid, y_grid = x, y
 
+        # Compute derived fields
+        from src.data.derivatives import compute_vorticity
+        vorticity = compute_vorticity(u, v, dx, dy)
+        vel_mag = np.sqrt(u**2 + v**2)
+
+        # Row 1: Velocity field (2D quiver)
+        ax_vel = plt.subplot(5, n_snapshots, col + 1)
         quiver = ax_vel.quiver(
             x_grid[::4, ::4], y_grid[::4, ::4],
             u[::4, ::4], v[::4, ::4],
-            np.sqrt(u[::4, ::4]**2 + v[::4, ::4]**2),
+            vel_mag[::4, ::4],
             cmap='viridis'
         )
         ax_vel.set_title(f't={t:.3f}')
         ax_vel.set_aspect('equal')
 
-        # Bottom row: vorticity
-        from src.data.derivatives import compute_vorticity
-        vorticity = compute_vorticity(u, v, dx, dy)
-        ax_vort = axes[1, col]
-        contour = ax_vort.contourf(x_grid, y_grid, vorticity, levels=20, cmap='RdBu_r')
-        plt.colorbar(contour, ax=ax_vort)
-        ax_vort.set_aspect('equal')
+        # Row 2: Vorticity (2D contour)
+        ax_vort_2d = plt.subplot(5, n_snapshots, n_snapshots + col + 1)
+        contour_vort = ax_vort_2d.contourf(x_grid, y_grid, vorticity, levels=20, cmap='RdBu_r')
+        plt.colorbar(contour_vort, ax=ax_vort_2d, fraction=0.046, pad=0.04)
+        ax_vort_2d.set_aspect('equal')
 
-    axes[0, 0].set_ylabel('Velocity field')
-    axes[1, 0].set_ylabel('Vorticity')
+        # Row 3: Vorticity (3D surface)
+        ax_vort_3d = plt.subplot(5, n_snapshots, 2 * n_snapshots + col + 1, projection='3d')
+        surf_vort = ax_vort_3d.plot_surface(
+            x_grid, y_grid, vorticity,
+            cmap='RdBu_r',
+            linewidth=0,
+            antialiased=True,
+            alpha=0.9
+        )
+        ax_vort_3d.set_xlabel('x')
+        ax_vort_3d.set_ylabel('y')
+        ax_vort_3d.set_zlabel('ω')
+        ax_vort_3d.view_init(elev=30, azim=45)
+        fig.colorbar(surf_vort, ax=ax_vort_3d, fraction=0.03, pad=0.1, shrink=0.5)
 
-    fig.suptitle('Flow Evolution', fontsize=16)
-    fig.tight_layout()
+        # Row 4: Velocity magnitude (2D contour)
+        ax_mag_2d = plt.subplot(5, n_snapshots, 3 * n_snapshots + col + 1)
+        contour_mag = ax_mag_2d.contourf(x_grid, y_grid, vel_mag, levels=20, cmap='viridis')
+        plt.colorbar(contour_mag, ax=ax_mag_2d, fraction=0.046, pad=0.04)
+        ax_mag_2d.set_aspect('equal')
+
+        # Row 5: Velocity magnitude (3D surface)
+        ax_mag_3d = plt.subplot(5, n_snapshots, 4 * n_snapshots + col + 1, projection='3d')
+        surf_mag = ax_mag_3d.plot_surface(
+            x_grid, y_grid, vel_mag,
+            cmap='viridis',
+            linewidth=0,
+            antialiased=True,
+            alpha=0.9
+        )
+        ax_mag_3d.set_xlabel('x')
+        ax_mag_3d.set_ylabel('y')
+        ax_mag_3d.set_zlabel('|v|')
+        ax_mag_3d.view_init(elev=30, azim=45)
+        fig.colorbar(surf_mag, ax=ax_mag_3d, fraction=0.03, pad=0.1, shrink=0.5)
+
+    # Add row labels
+    fig.text(0.02, 0.88, 'Velocity vectors', va='center', rotation='vertical', fontsize=11, weight='bold')
+    fig.text(0.02, 0.72, 'Vorticity (2D)', va='center', rotation='vertical', fontsize=11, weight='bold')
+    fig.text(0.02, 0.55, 'Vorticity (3D)', va='center', rotation='vertical', fontsize=11, weight='bold')
+    fig.text(0.02, 0.38, 'Velocity mag (2D)', va='center', rotation='vertical', fontsize=11, weight='bold')
+    fig.text(0.02, 0.20, 'Velocity mag (3D)', va='center', rotation='vertical', fontsize=11, weight='bold')
+
+    fig.suptitle('Flow Evolution', fontsize=16, y=0.99)
+    fig.tight_layout(rect=[0.03, 0, 1, 0.98])
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 

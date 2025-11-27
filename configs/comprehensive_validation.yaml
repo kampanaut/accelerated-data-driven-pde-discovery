@@ -1,0 +1,347 @@
+# Comprehensive validation config testing all IC types with parameter variations
+# Tests: 12 IC types × ~3-4 variants each = 40+ tasks
+# Covers: seed variation, parameter scaling, edge cases
+
+simulation:
+  nu: 0.01
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2π × 2π
+  resolution: [64, 64]
+  t_end: 10.0
+  dt: 0.01
+  save_interval: 0.2
+
+output_dir: "comprehensive_validation"
+
+initial_conditions:
+  # ===== 1. GAUSSIAN_VORTEX (3 variants) =====
+  - name: "gaussian_vortex_standard"
+    type: "gaussian_vortex"
+    center: [3.14, 3.14]
+    width: 0.5
+    strength: 1.0
+
+  - name: "gaussian_vortex_wide"
+    type: "gaussian_vortex"
+    center: [2.0, 4.0]
+    width: 1.2
+    strength: 1.5
+
+  - name: "gaussian_vortex_narrow"
+    type: "gaussian_vortex"
+    center: [4.5, 2.5]
+    width: 0.2
+    strength: -1.0  # Clockwise
+
+  # ===== 2. LAMB_OSEEN (3 variants) =====
+  - name: "lamb_oseen_standard"
+    type: "lamb_oseen"
+    center: [3.14, 3.14]
+    core_radius: 0.6
+    circulation: 2.0
+
+  - name: "lamb_oseen_tight"
+    type: "lamb_oseen"
+    center: [2.0, 2.0]
+    core_radius: 0.3
+    circulation: 1.5
+
+  - name: "lamb_oseen_large"
+    type: "lamb_oseen"
+    center: [4.0, 4.0]
+    core_radius: 1.0
+    circulation: 3.0
+
+  # ===== 3. TAYLOR_GREEN (2 variants) =====
+  - name: "taylor_green_unit"
+    type: "taylor_green"
+    amplitude: 1.0
+
+  - name: "taylor_green_scaled"
+    type: "taylor_green"
+    amplitude: 2.5
+
+  # ===== 4. SHEAR_LAYER (3 variants) =====
+  - name: "shear_layer_standard"
+    type: "shear_layer"
+    y_center: 3.14
+    thickness: 0.3
+    velocity_jump: 1.0
+    perturbation_amplitude: 0.2
+
+  - name: "shear_layer_sharp"
+    type: "shear_layer"
+    y_center: 3.14
+    thickness: 0.1
+    velocity_jump: 2.0
+    perturbation_amplitude: 0.1
+
+  - name: "shear_layer_thick"
+    type: "shear_layer"
+    y_center: 3.14
+    thickness: 0.8
+    velocity_jump: 1.5
+    perturbation_amplitude: 0.3
+
+  # ===== 5. MULTI_VORTEX (3 variants) =====
+  - name: "multi_vortex_pair"
+    type: "multi_vortex"
+    vortices:
+      - center: [2.0, 3.14]
+        width: 0.4
+        strength: 1.0
+      - center: [4.28, 3.14]
+        width: 0.4
+        strength: -1.0
+
+  - name: "multi_vortex_triangle"
+    type: "multi_vortex"
+    vortices:
+      - center: [3.14, 2.0]
+        width: 0.5
+        strength: 1.0
+      - center: [2.0, 4.5]
+        width: 0.5
+        strength: 1.0
+      - center: [4.28, 4.5]
+        width: 0.5
+        strength: 1.0
+
+  - name: "multi_vortex_chaos"
+    type: "multi_vortex"
+    vortices:
+      - center: [1.5, 1.5]
+        width: 0.3
+        strength: 1.2
+      - center: [3.0, 2.0]
+        width: 0.4
+        strength: -0.8
+      - center: [4.5, 1.8]
+        width: 0.35
+        strength: 0.9
+      - center: [2.2, 4.0]
+        width: 0.4
+        strength: -1.1
+      - center: [5.0, 4.5]
+        width: 0.3
+        strength: 0.7
+
+  # ===== 6. DIPOLE (3 variants) =====
+  - name: "dipole_standard"
+    type: "dipole"
+    nu: [0.230, 1.6]
+    center: [3.14, 3.14]
+    separation: 1.5
+    width: 0.4
+    strength: 1.0
+
+  - name: "dipole_tight"
+    type: "dipole"
+    center: [2.5, 3.14]
+    separation: 0.8
+    width: 0.3
+    strength: 1.5
+
+  - name: "dipole_wide"
+    type: "dipole"
+    center: [4.0, 3.14]
+    separation: 2.5
+    width: 0.6
+    strength: 0.8
+
+  # ===== 7. RANDOM_SOUP (4 variants - test seeds) =====
+  - name: "random_soup_seed100"
+    type: "random_soup"
+    n_vortices: 8
+    strength_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    seed: 100
+
+  - name: "random_soup_seed200"
+    type: "random_soup"
+    n_vortices: 8
+    strength_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    seed: 200
+
+  - name: "random_soup_sparse"
+    type: "random_soup"
+    n_vortices: 3
+    strength_range: [-2.0, 2.0]
+    width_range: [0.5, 1.0]
+    seed: 300
+
+  - name: "random_soup_dense"
+    type: "random_soup"
+    n_vortices: 15
+    strength_range: [-1.0, 1.0]
+    width_range: [0.2, 0.5]
+    seed: 400
+
+  # ===== 8. VON_KARMAN (2 variants) =====
+  - name: "von_karman_standard"
+    type: "von_karman"
+    n_vortices: 8
+    spacing: 1.0
+    offset: 1.2
+    width: 0.4
+    strength: 1.0
+
+  - name: "von_karman_dense"
+    type: "von_karman"
+    n_vortices: 12
+    spacing: 0.7
+    offset: 0.8
+    width: 0.3
+    strength: 1.5
+
+  # ===== 9. PERTURBED_FLOW (3 variants) =====
+  - name: "perturbed_horizontal"
+    type: "perturbed_flow"
+    u_mean: 1.0
+    v_mean: 0.0
+    perturbation_amplitude: 0.2
+    perturbation_wavelength: 2.0
+
+  - name: "perturbed_diagonal"
+    type: "perturbed_flow"
+    u_mean: 0.7
+    v_mean: 0.7
+    perturbation_amplitude: 0.3
+    perturbation_wavelength: 1.5
+
+  - name: "perturbed_weak"
+    type: "perturbed_flow"
+    nu: [0.00001, 0.01]
+    u_mean: 0.5
+    v_mean: 0.0
+    perturbation_amplitude: 0.05
+    perturbation_wavelength: 3.0
+
+  # ===== 10. GAUSSIAN_SUM (4 variants - new) =====
+  - name: "gaussian_sum_seed100"
+    type: "gaussian_sum"
+    n_gaussians: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    seed: 100
+
+  - name: "gaussian_sum_seed200"
+    type: "gaussian_sum"
+    n_gaussians: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    seed: 200
+
+  - name: "gaussian_sum_sparse"
+    type: "gaussian_sum"
+    n_gaussians: 2
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.5, 1.0]
+    seed: 300
+
+  - name: "gaussian_sum_dense"
+    type: "gaussian_sum"
+    n_gaussians: 10
+    amplitude_range: [-1.0, 1.0]
+    width_range: [0.2, 0.5]
+    seed: 400
+
+  # ===== 11. GAUSSIAN_DIRECT (4 variants - new) =====
+  - name: "gaussian_direct_symmetric"
+    type: "gaussian_direct"
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.3, 0.7]
+    seed: 100
+
+  - name: "gaussian_direct_asymmetric"
+    type: "gaussian_direct"
+    n_gaussians_u: 8
+    n_gaussians_v: 3
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.6]
+    seed: 200
+
+  - name: "gaussian_direct_u_heavy"
+    type: "gaussian_direct"
+    n_gaussians_u: 10
+    n_gaussians_v: 2
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 0.8]
+    seed: 300
+
+  - name: "gaussian_direct_v_heavy"
+    type: "gaussian_direct"
+    n_gaussians_u: 2
+    n_gaussians_v: 10
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 0.8]
+    seed: 400
+
+  # ===== 12. GAUSSIAN_HYBRID (6 variants - new) =====
+  - name: "hybrid_pure_vorticity"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: 1.0
+    beta: 0.0
+    seed: 100
+
+  - name: "hybrid_pure_direct"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: 0.0
+    beta: 1.0
+    seed: 200
+
+  - name: "hybrid_equal"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 4
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-1.0, 1.0]
+    width_range: [0.3, 0.6]
+    alpha: 1.0
+    beta: 1.0
+    seed: 300
+
+  - name: "hybrid_mostly_vorticity"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: 0.8
+    beta: 0.2
+    seed: 400
+
+  - name: "hybrid_mostly_direct"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: 0.2
+    beta: 0.8
+    seed: 500
+
+  - name: "hybrid_inverted"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 4
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: -1.0
+    beta: 1.0
+    seed: 600

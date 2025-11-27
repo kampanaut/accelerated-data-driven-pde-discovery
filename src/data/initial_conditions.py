@@ -559,6 +559,170 @@ def gaussian_sum_ic(
     return multi_vortex_ic(vortex_params, x, y)
 
 
+def gaussian_direct_ic(
+    n_gaussians_u: int,
+    n_gaussians_v: int,
+    amplitude_range: Tuple[float, float],
+    width_range: Tuple[float, float],
+    x: np.ndarray,
+    y: np.ndarray,
+    seed: int = None
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate velocity field by directly constructing u and v from independent Gaussian sums.
+
+    Unlike the vorticity-based approach, this method independently constructs each velocity
+    component using separate sets of Gaussian functions. This creates arbitrary flow patterns
+    without the rotational structure imposed by vorticity fields.
+
+    The resulting velocity field is NOT guaranteed to be divergence-free initially, but
+    PhiFlow's pressure projection will enforce incompressibility at the first timestep.
+
+    Args:
+        n_gaussians_u: Number of Gaussians for u component
+        n_gaussians_v: Number of Gaussians for v component
+        amplitude_range: (min, max) for random amplitude sampling
+        width_range: (min, max) for random width sampling
+        x: 1D array of x-coordinates
+        y: 1D array of y-coordinates
+        seed: Random seed for reproducibility (None = truly random)
+
+    Returns:
+        Tuple of (u, v) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+
+    Example:
+        >>> x = np.linspace(0, 2*np.pi, 64)
+        >>> y = np.linspace(0, 2*np.pi, 64)
+        >>> u, v = gaussian_direct_ic(
+        ...     n_gaussians_u=5,
+        ...     n_gaussians_v=3,
+        ...     amplitude_range=(-2.0, 2.0),
+        ...     width_range=(0.2, 0.8),
+        ...     x=x, y=y,
+        ...     seed=42
+        ... )
+    """
+    rng = np.random.RandomState(seed)
+
+    # Create 2D grid
+    X, Y = np.meshgrid(x, y)
+
+    # Domain bounds
+    domain_x = (x[0], x[-1])
+    domain_y = (y[0], y[-1])
+
+    # Initialize velocity components
+    u = np.zeros_like(X)
+    v = np.zeros_like(Y)
+
+    # Build u component from independent Gaussians
+    for _ in range(n_gaussians_u):
+        center_x = rng.uniform(domain_x[0], domain_x[1])
+        center_y = rng.uniform(domain_y[0], domain_y[1])
+        amplitude = rng.uniform(amplitude_range[0], amplitude_range[1])
+        width = rng.uniform(width_range[0], width_range[1])
+
+        r_squared = (X - center_x)**2 + (Y - center_y)**2
+        u += amplitude * np.exp(-r_squared / (2 * width**2))
+
+    # Build v component from different independent Gaussians
+    for _ in range(n_gaussians_v):
+        center_x = rng.uniform(domain_x[0], domain_x[1])
+        center_y = rng.uniform(domain_y[0], domain_y[1])
+        amplitude = rng.uniform(amplitude_range[0], amplitude_range[1])
+        width = rng.uniform(width_range[0], width_range[1])
+
+        r_squared = (X - center_x)**2 + (Y - center_y)**2
+        v += amplitude * np.exp(-r_squared / (2 * width**2))
+
+    return u, v
+
+
+def gaussian_hybrid_ic(
+    n_gaussians_vorticity: int,
+    n_gaussians_u: int,
+    n_gaussians_v: int,
+    amplitude_range: Tuple[float, float],
+    width_range: Tuple[float, float],
+    alpha: float,
+    beta: float,
+    x: np.ndarray,
+    y: np.ndarray,
+    seed: int = None
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Generate hybrid velocity field combining vorticity-based and direct construction.
+
+    Creates a weighted combination of:
+    1. Vorticity-based component (swirling, divergence-free)
+    2. Direct velocity component (arbitrary directions, not divergence-free)
+
+    The mixing formula is:
+        u_final = alpha * u_vorticity + beta * u_direct
+        v_final = alpha * v_vorticity + beta * v_direct
+
+    where alpha, beta ∈ (-∞, ∞) provide full control over the balance.
+
+    Args:
+        n_gaussians_vorticity: Number of Gaussians for vorticity field
+        n_gaussians_u: Number of Gaussians for direct u component
+        n_gaussians_v: Number of Gaussians for direct v component
+        amplitude_range: (min, max) for random amplitude sampling
+        width_range: (min, max) for random width sampling
+        alpha: Weight for vorticity component (unbounded)
+        beta: Weight for direct component (unbounded)
+        x: 1D array of x-coordinates
+        y: 1D array of y-coordinates
+        seed: Random seed for reproducibility (None = truly random)
+
+    Returns:
+        Tuple of (u, v) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+
+    Examples:
+        Pure vorticity (swirling only):
+        >>> u, v = gaussian_hybrid_ic(..., alpha=1.0, beta=0.0, ...)
+
+        Equal contribution:
+        >>> u, v = gaussian_hybrid_ic(..., alpha=1.0, beta=1.0, ...)
+
+        Mostly vorticity with direct perturbations:
+        >>> u, v = gaussian_hybrid_ic(..., alpha=0.7, beta=0.3, ...)
+
+        Inverted vorticity:
+        >>> u, v = gaussian_hybrid_ic(..., alpha=-1.0, beta=1.0, ...)
+    """
+    # Generate vorticity-based component (swirling, divergence-free)
+    u_vort, v_vort = gaussian_sum_ic(
+        n_gaussians=n_gaussians_vorticity,
+        amplitude_range=amplitude_range,
+        width_range=width_range,
+        x=x, y=y,
+        seed=seed
+    )
+
+    # Generate direct component (arbitrary directions, not divergence-free)
+    # Use seed offset to ensure decorrelation when seed is specified
+    seed_direct = (seed + 1000) if seed is not None else None
+    u_direct, v_direct = gaussian_direct_ic(
+        n_gaussians_u=n_gaussians_u,
+        n_gaussians_v=n_gaussians_v,
+        amplitude_range=amplitude_range,
+        width_range=width_range,
+        x=x, y=y,
+        seed=seed_direct
+    )
+
+    # Weighted combination
+    u = alpha * u_vort + beta * u_direct
+    v = alpha * v_vort + beta * v_direct
+
+    return u, v
+
+
 def von_karman_street_ic(
     n_vortices: int,
     spacing: float,

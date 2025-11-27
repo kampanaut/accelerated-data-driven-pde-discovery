@@ -1,0 +1,127 @@
+# Comprehensive test config for all Gaussian IC types:
+# - gaussian_sum (vorticity-based, swirling)
+# - gaussian_direct (independent u/v, arbitrary directions)
+# - gaussian_hybrid (weighted combination)
+
+simulation:
+  nu: 0.01
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2π × 2π
+  resolution: [64, 64]
+  t_end: 10.0
+  dt: 0.01
+  save_interval: 0.2
+
+output_dir: "gaussian_all_types"
+
+initial_conditions:
+  # ===== Vorticity-based (original gaussian_sum) =====
+  - name: "vorticity_swirling"
+    type: "gaussian_sum"
+    n_gaussians: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    seed: 100
+
+  # ===== Direct velocity (no swirling) =====
+  # Symmetric counts
+  - name: "direct_symmetric"
+    type: "gaussian_direct"
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 0.8]
+    seed: 200
+
+  # Asymmetric counts (more structure in x-direction)
+  - name: "direct_asymmetric"
+    type: "gaussian_direct"
+    n_gaussians_u: 7
+    n_gaussians_v: 3
+    amplitude_range: [-1.0, 1.0]
+    width_range: [0.3, 0.6]
+    seed: 300
+
+  # ===== Hybrid (mixed vorticity + direct) =====
+  # Pure vorticity (α=1, β=0)
+  - name: "hybrid_pure_vorticity"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 3
+    n_gaussians_v: 3
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: 1.0
+    beta: 0.0
+    seed: 400
+
+  # Pure direct (α=0, β=1)
+  - name: "hybrid_pure_direct"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: 0.0
+    beta: 1.0
+    seed: 500
+
+  # Equal contribution (α=1, β=1)
+  - name: "hybrid_equal"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 4
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-1.0, 1.0]
+    width_range: [0.3, 0.6]
+    alpha: 1.0
+    beta: 1.0
+    seed: 600
+
+  # Weighted mix (α=0.7, β=0.3 - mostly vorticity)
+  - name: "hybrid_mostly_vorticity"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 0.8]
+    alpha: 0.7
+    beta: 0.3
+    seed: 700
+
+  # Weighted mix (α=0.3, β=0.7 - mostly direct)
+  - name: "hybrid_mostly_direct"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 0.8]
+    alpha: 0.3
+    beta: 0.7
+    seed: 800
+
+  # Amplified (α=2, β=2 - both components doubled)
+  - name: "hybrid_amplified"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 3
+    n_gaussians_u: 3
+    n_gaussians_v: 3
+    amplitude_range: [-1.0, 1.0]
+    width_range: [0.4, 0.7]
+    alpha: 2.0
+    beta: 2.0
+    seed: 900
+
+  # Inverted vorticity (α=-1, β=1)
+  - name: "hybrid_inverted_vorticity"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 4
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: -1.0
+    beta: 1.0
+    seed: 1000
