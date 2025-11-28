@@ -13,21 +13,22 @@ simulation:
 output_dir: "comprehensive_validation"
 
 initial_conditions:
-  # ===== 1. GAUSSIAN_VORTEX (3 variants) =====
-  - name: "gaussian_vortex_standard"
-    type: "gaussian_vortex"
+  # ===== 1. GAUSSIAN_HILL (3 variants) =====
+  # Single Gaussian vorticity bump - produces localized swirling
+  - name: "gaussian_hill_standard"
+    type: "gaussian_hill"
     center: [3.14, 3.14]
     width: 0.5
     strength: 1.0
 
-  - name: "gaussian_vortex_wide"
-    type: "gaussian_vortex"
+  - name: "gaussian_hill_wide"
+    type: "gaussian_hill"
     center: [2.0, 4.0]
     width: 1.2
     strength: 1.5
 
-  - name: "gaussian_vortex_narrow"
-    type: "gaussian_vortex"
+  - name: "gaussian_hill_narrow"
+    type: "gaussian_hill"
     center: [4.5, 2.5]
     width: 0.2
     strength: -1.0  # Clockwise
@@ -217,30 +218,31 @@ initial_conditions:
     perturbation_amplitude: 0.05
     perturbation_wavelength: 3.0
 
-  # ===== 10. GAUSSIAN_SUM (4 variants - new) =====
-  - name: "gaussian_sum_seed100"
-    type: "gaussian_sum"
+  # ===== 10. GAUSSIAN_VORTEX (4 variants) =====
+  # Random sum of Gaussian vorticity distributions - primary IC for meta-learning
+  - name: "gaussian_vortex_seed100"
+    type: "gaussian_vortex"
     n_gaussians: 5
     amplitude_range: [-1.5, 1.5]
     width_range: [0.3, 0.7]
     seed: 100
 
-  - name: "gaussian_sum_seed200"
-    type: "gaussian_sum"
+  - name: "gaussian_vortex_seed200"
+    type: "gaussian_vortex"
     n_gaussians: 5
     amplitude_range: [-1.5, 1.5]
     width_range: [0.3, 0.7]
     seed: 200
 
-  - name: "gaussian_sum_sparse"
-    type: "gaussian_sum"
+  - name: "gaussian_vortex_sparse"
+    type: "gaussian_vortex"
     n_gaussians: 2
     amplitude_range: [-2.0, 2.0]
     width_range: [0.5, 1.0]
     seed: 300
 
-  - name: "gaussian_sum_dense"
-    type: "gaussian_sum"
+  - name: "gaussian_vortex_dense"
+    type: "gaussian_vortex"
     n_gaussians: 10
     amplitude_range: [-1.0, 1.0]
     width_range: [0.2, 0.5]

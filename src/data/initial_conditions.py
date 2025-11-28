@@ -11,7 +11,7 @@ from scipy.sparse.linalg import spsolve
 from typing import Tuple
 
 
-def gaussian_vortex_ic(
+def gaussian_hill_ic(
     center: Tuple[float, float],
     width: float,
     strength: float,
@@ -19,7 +19,11 @@ def gaussian_vortex_ic(
     y: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Generate velocity field from a Gaussian vorticity distribution.
+    Generate velocity field from a single Gaussian vorticity "hill".
+
+    Creates a single Gaussian bump of vorticity, which produces a localized
+    swirling flow pattern. Named "hill" because the vorticity profile looks
+    like a smooth hill/bump in 2D.
 
     The process:
     1. Create Gaussian vorticity: ω(r) = strength * exp(-r²/width²)
@@ -27,9 +31,9 @@ def gaussian_vortex_ic(
     3. Compute velocity from stream function: u = -∂ψ/∂y, v = ∂ψ/∂x
 
     Args:
-        center: (x_center, y_center) position of vortex
+        center: (x_center, y_center) position of the hill
         width: Width parameter σ of the Gaussian
-        strength: Vortex strength (circulation)
+        strength: Peak vorticity strength
         x: 1D array of x-coordinates
         y: 1D array of y-coordinates
 
@@ -491,7 +495,7 @@ def random_vortex_soup_ic(
     return multi_vortex_ic(vortex_params, x, y)
 
 
-def gaussian_sum_ic(
+def gaussian_vortex_ic(
     n_gaussians: int,
     amplitude_range: Tuple[float, float],
     width_range: Tuple[float, float],
@@ -502,17 +506,20 @@ def gaussian_sum_ic(
     """
     Generate velocity field from sum of random Gaussian vorticity distributions.
 
-    Creates smooth random initial conditions by:
-    1. Sampling N Gaussians with random (A, w, x₀, y₀) parameters
-    2. Summing as vorticity field: ω = Σ Aᵢ·exp(-rᵢ²/wᵢ²)
-    3. Solving Poisson equation ∇²ψ = ω for stream function
-    4. Extracting velocity: u = -∂ψ/∂y, v = ∂ψ/∂x
+    This is the primary IC generator for meta-learning: creates diverse swirling
+    flow patterns by randomly placing multiple Gaussian vorticity bumps.
+
+    The process:
+    1. Sample N Gaussians with random (amplitude, width, x₀, y₀) parameters
+    2. Sum as vorticity field: ω = Σ Aᵢ·exp(-rᵢ²/wᵢ²)
+    3. Solve Poisson equation ∇²ψ = -ω for stream function
+    4. Extract velocity: u = -∂ψ/∂y, v = ∂ψ/∂x
 
     This approach guarantees divergence-free velocity fields (∇·u = 0) by construction,
     making it suitable for generating diverse training data for meta-learning.
 
     Args:
-        n_gaussians: Number of Gaussian components to sum
+        n_gaussians: Number of Gaussian vorticity components to sum
         amplitude_range: (min, max) for random amplitude sampling (vortex strength)
         width_range: (min, max) for random width sampling (vortex size)
         x: 1D array of x-coordinates
@@ -527,7 +534,7 @@ def gaussian_sum_ic(
     Example:
         >>> x = np.linspace(0, 2*np.pi, 64)
         >>> y = np.linspace(0, 2*np.pi, 64)
-        >>> u, v = gaussian_sum_ic(
+        >>> u, v = gaussian_vortex_ic(
         ...     n_gaussians=5,
         ...     amplitude_range=(-2.0, 2.0),
         ...     width_range=(0.2, 0.8),
@@ -696,7 +703,7 @@ def gaussian_hybrid_ic(
         >>> u, v = gaussian_hybrid_ic(..., alpha=-1.0, beta=1.0, ...)
     """
     # Generate vorticity-based component (swirling, divergence-free)
-    u_vort, v_vort = gaussian_sum_ic(
+    u_vort, v_vort = gaussian_vortex_ic(
         n_gaussians=n_gaussians_vorticity,
         amplitude_range=amplitude_range,
         width_range=width_range,

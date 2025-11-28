@@ -1,5 +1,5 @@
 # Comprehensive test config for all Gaussian IC types:
-# - gaussian_sum (vorticity-based, swirling)
+# - gaussian_vortex (vorticity-based, swirling)
 # - gaussian_direct (independent u/v, arbitrary directions)
 # - gaussian_hybrid (weighted combination)
 
@@ -14,9 +14,9 @@ simulation:
 output_dir: "gaussian_all_types"
 
 initial_conditions:
-  # ===== Vorticity-based (original gaussian_sum) =====
+  # ===== Vorticity-based (sum of random Gaussian vorticity) =====
   - name: "vorticity_swirling"
-    type: "gaussian_sum"
+    type: "gaussian_vortex"
     n_gaussians: 5
     amplitude_range: [-1.5, 1.5]
     width_range: [0.3, 0.7]

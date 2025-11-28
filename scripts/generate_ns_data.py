@@ -152,8 +152,8 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
     """
     ic_type = ic_config['type']
 
-    if ic_type == 'gaussian_vortex':
-        return initial_conditions.gaussian_vortex_ic(
+    if ic_type == 'gaussian_hill':
+        return initial_conditions.gaussian_hill_ic(
             center=tuple(ic_config['center']),
             width=ic_config['width'],
             strength=ic_config['strength'],
@@ -235,8 +235,8 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
             y=y
         )
 
-    elif ic_type == 'gaussian_sum':
-        return initial_conditions.gaussian_sum_ic(
+    elif ic_type == 'gaussian_vortex':
+        return initial_conditions.gaussian_vortex_ic(
             n_gaussians=ic_config['n_gaussians'],
             amplitude_range=tuple(ic_config['amplitude_range']),
             width_range=tuple(ic_config['width_range']),
