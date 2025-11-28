@@ -1,0 +1,178 @@
+# ============================================================================
+# IC Config Template - Copy/paste reference for all initial condition types
+# ============================================================================
+# Usage: uv run python scripts/generate_ns_data.py --config configs/your_config.yaml
+# Output: data/datasets/{output_dir}/
+
+# ----------------------------------------------------------------------------
+# Simulation parameters (shared across all ICs)
+# ----------------------------------------------------------------------------
+simulation:
+  nu: 0.01                            # Viscosity (or [min, max] to sample)
+  domain_size: [6.283185, 6.283185]   # 2pi x 2pi
+  resolution: [64, 64]                # ny x nx grid
+  t_end: 10.0                         # Simulation end time
+  dt: 0.01                            # Timestep
+  save_interval: 0.2                  # Snapshot frequency
+
+output_dir: "my_dataset"
+
+# ----------------------------------------------------------------------------
+# Initial conditions - all 12 types with their fields
+# ----------------------------------------------------------------------------
+initial_conditions:
+
+  # ==========================================================================
+  # PER-IC VISCOSITY OVERRIDE (works on ALL types)
+  # ==========================================================================
+  # Every IC type below can have:
+  #   nu: 0.005              # Fixed value, overrides simulation.nu
+  #   nu: [0.008, 0.015]     # Sample uniformly from range
+  #   seed: 42               # For reproducible nu sampling
+  #
+  # If omitted, uses simulation.nu
+
+  # ==========================================================================
+  # 1. GAUSSIAN HILL
+  # Single Gaussian vorticity bump. Simple, localized swirling.
+  # ==========================================================================
+  - name: "gaussian_hill_example"
+    type: "gaussian_hill"
+    center: [3.14, 3.14]    # Position (x, y)
+    width: 0.5              # Gaussian width sigma
+    strength: 1.0           # Peak vorticity
+    # nu: 0.01              # Optional: fixed override
+    # nu: [0.008, 0.015]    # Optional: sample from range
+
+  # ==========================================================================
+  # 2. MULTI VORTEX
+  # Multiple vortices that interact, merge, or orbit.
+  # ==========================================================================
+  - name: "multi_vortex_example"
+    type: "multi_vortex"
+    vortices:
+      - center: [2.0, 2.0]
+        width: 0.4
+        strength: 1.0       # Positive = counter-clockwise
+      - center: [4.0, 4.0]
+        width: 0.4
+        strength: -1.0      # Negative = clockwise
+      - center: [3.0, 4.5]
+        width: 0.3
+        strength: 0.8
+
+  # ==========================================================================
+  # 3. TAYLOR-GREEN VORTEX
+  # Classic exact solution. Periodic, symmetric, decays analytically.
+  # ==========================================================================
+  - name: "taylor_green_example"
+    type: "taylor_green"
+    amplitude: 1.0          # Velocity scale
+
+  # ==========================================================================
+  # 4. LAMB-OSEEN VORTEX
+  # Realistic vortex with finite core. Better physics than Gaussian.
+  # ==========================================================================
+  - name: "lamb_oseen_example"
+    type: "lamb_oseen"
+    center: [3.14, 3.14]    # Position
+    core_radius: 0.6        # Core radius a
+    circulation: 2.0        # Total circulation Gamma
+
+  # ==========================================================================
+  # 5. DIPOLE (Vortex Pair)
+  # Two counter-rotating vortices that self-propel.
+  # ==========================================================================
+  - name: "dipole_example"
+    type: "dipole"
+    center: [3.14, 3.14]    # Midpoint between vortices
+    separation: 1.5         # Distance between vortices
+    width: 0.4              # Gaussian width of each vortex
+    strength: 1.0           # Strength magnitude
+
+  # ==========================================================================
+  # 6. SHEAR LAYER (Kelvin-Helmholtz)
+  # Velocity shear that rolls up into vortices.
+  # ==========================================================================
+  - name: "shear_layer_example"
+    type: "shear_layer"
+    y_center: 3.14                  # Location of shear
+    thickness: 0.3                  # Transition thickness
+    velocity_jump: 2.0              # Velocity difference across layer
+    perturbation_amplitude: 0.1     # Triggers instability
+
+  # ==========================================================================
+  # 7. VON KARMAN STREET
+  # Alternating wake pattern (classic fluid instability).
+  # ==========================================================================
+  - name: "von_karman_example"
+    type: "von_karman"
+    n_vortices: 8           # Total vortices (split between 2 rows)
+    spacing: 1.2            # Horizontal spacing
+    offset: 2.0             # Vertical separation between rows
+    width: 0.4              # Gaussian width
+    strength: 1.0           # Strength magnitude
+
+  # ==========================================================================
+  # 8. RANDOM SOUP
+  # Multiple vortices at random positions. Turbulent-like.
+  # ==========================================================================
+  - name: "random_soup_example"
+    type: "random_soup"
+    n_vortices: 10                  # Number of random vortices
+    strength_range: [-1.0, 1.0]     # Random strength from this range
+    width_range: [0.2, 0.5]         # Random width from this range
+    seed: 42                        # For reproducibility
+
+  # ==========================================================================
+  # 9. PERTURBED FLOW
+  # Uniform flow with random perturbations. Studies transition.
+  # ==========================================================================
+  - name: "perturbed_flow_example"
+    type: "perturbed_flow"
+    u_mean: 0.5                     # Mean horizontal velocity
+    v_mean: 0.0                     # Mean vertical velocity
+    perturbation_amplitude: 0.1     # Perturbation magnitude
+    perturbation_wavelength: 2.0    # Spatial scale of perturbations
+
+  # ==========================================================================
+  # 10. GAUSSIAN VORTEX (Random Sum)
+  # PRIMARY IC FOR META-LEARNING. Sums N random Gaussian vorticity
+  # distributions. Divergence-free by construction.
+  # ==========================================================================
+  - name: "gaussian_vortex_example"
+    type: "gaussian_vortex"
+    n_gaussians: 5                  # Number of Gaussian vorticity components
+    amplitude_range: [-2.0, 2.0]    # Random strength range
+    width_range: [0.2, 0.8]         # Random width range
+    seed: 42                        # For reproducibility
+
+  # ==========================================================================
+  # 11. GAUSSIAN DIRECT
+  # Constructs u and v independently from separate Gaussian sums.
+  # NOT divergence-free initially (pressure projection fixes it).
+  # ==========================================================================
+  - name: "gaussian_direct_example"
+    type: "gaussian_direct"
+    n_gaussians_u: 5                # Gaussians for u component
+    n_gaussians_v: 4                # Gaussians for v component
+    amplitude_range: [-2.0, 2.0]    # Random strength range
+    width_range: [0.3, 0.7]         # Random width range
+    seed: 42
+
+  # ==========================================================================
+  # 12. GAUSSIAN HYBRID
+  # Weighted combination of vorticity-based and direct velocity.
+  # alpha=1, beta=0 -> pure vorticity (like gaussian_vortex)
+  # alpha=0, beta=1 -> pure direct (like gaussian_direct)
+  # ==========================================================================
+  - name: "gaussian_hybrid_example"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5        # Gaussians for vorticity component
+    n_gaussians_u: 3                # Gaussians for direct u
+    n_gaussians_v: 3                # Gaussians for direct v
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 0.7]
+    alpha: 0.7                      # Weight for vorticity component
+    beta: 0.3                       # Weight for direct component
+    seed: 42

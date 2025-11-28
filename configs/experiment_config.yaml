@@ -1,0 +1,87 @@
+# ============================================================================
+# Experiment Config Template - MAML for PDE Discovery
+# ============================================================================
+# Based on experiment_bible.md defaults
+#
+# Usage:
+#   uv run python scripts/train_maml.py --config configs/experiment_config.yaml
+#   uv run python scripts/evaluate.py --config configs/experiment_config.yaml
+#   uv run python scripts/visualize.py --config configs/experiment_config.yaml
+
+# ----------------------------------------------------------------------------
+# Experiment metadata
+# ----------------------------------------------------------------------------
+experiment:
+  name: "maml_ns_v1"          # Output dir: data/models/{name}/
+  seed: 42                    # Random seed for reproducibility
+  device: "cuda"              # "cuda" or "cpu"
+
+# ----------------------------------------------------------------------------
+# Data directories
+# ----------------------------------------------------------------------------
+# Each should contain .npz task files from generate_ns_data.py
+# For proper generalization testing, use SEPARATE directories
+data:
+  meta_train_dir: "data/datasets/meta_train"
+  meta_val_dir: "data/datasets/meta_val"
+  meta_test_dir: "data/datasets/meta_test"
+
+# ----------------------------------------------------------------------------
+# Output (optional)
+# ----------------------------------------------------------------------------
+# If omitted, outputs go to data/models/{experiment.name}/
+# If specified, outputs go to data/models/{base_dir}/{experiment.name}/
+# output:
+#   base_dir: "experiments"
+
+# ----------------------------------------------------------------------------
+# Phase 1: Meta-training
+# ----------------------------------------------------------------------------
+training:
+  # MAML learning rates
+  inner_lr: 0.01              # alpha: task adaptation step size
+  outer_lr: 0.001             # beta: meta-update step size
+
+  # MAML structure
+  inner_steps: 1              # Gradient steps per task in inner loop (1-5)
+  meta_batch_size: 4          # Tasks per outer update (4-8, memory limited)
+
+  # Support/query split
+  k_shot: 100                 # Support set size for inner loop
+  query_size: 1000            # Query set size for meta-gradient (capped)
+
+  # Training loop control
+  max_iterations: 10000       # Max outer loop iterations
+  patience: 50                # Iterations before validation check
+  log_interval: 10            # Print every N iterations
+
+  # Network architecture (from Raissi paper)
+  hidden_dims: [100, 100]     # Hidden layer widths
+  activation: "tanh"          # "tanh" or "relu"
+
+  # FOMAML (first-order approximation)
+  first_order: false          # true = faster but less accurate
+
+# ----------------------------------------------------------------------------
+# Phase 2: Evaluation
+# ----------------------------------------------------------------------------
+evaluation:
+  # Grid of conditions to test
+  k_values: [10, 50, 100, 500, 1000]     # Support set sizes
+  noise_levels: [0.0, 0.01, 0.05, 0.10]  # 0%, 1%, 5%, 10% noise
+
+  # Fine-tuning parameters
+  fine_tune_lr: 0.01          # Learning rate for fine-tuning
+  max_steps: 1000             # Gradient steps during fine-tuning
+
+  # Metrics
+  threshold: 1.0e-6           # L* for convergence detection
+  fixed_steps: [50, 100, 200] # Steps p for loss ratio computation
+
+# ----------------------------------------------------------------------------
+# Phase 3: Visualization
+# ----------------------------------------------------------------------------
+visualization:
+  dpi: 150                    # Figure resolution
+  generate_per_task: true     # Generate per-task figures
+  generate_aggregated: true   # Generate mean +/- std figures
