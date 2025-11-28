@@ -450,6 +450,20 @@ def main():
             # Compute derivatives and format as training data
             training_data = generate_training_samples(velocity_history, times, x_result, y_result)
 
+            # Validate data for silent divergence (solver completed but values exploded)
+            max_magnitude = 1e6
+            diverged_silently = False
+            for key in ['u', 'v', 'u_t', 'v_t']:
+                if key in training_data:
+                    max_val = np.abs(training_data[key]).max()
+                    if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
+                        diverged_silently = True
+                        print(f"\n⚠️  Silent divergence detected: {key} has max magnitude {max_val:.2e}")
+                        break
+
+            if diverged_silently:
+                raise ValueError(f"Silent divergence: max values exceed {max_magnitude:.0e}")
+
             # Save data
             output_file = data_dir / f"{ic_name}.npz"
             np.savez(
@@ -486,22 +500,19 @@ def main():
             print(f"    Reason: IC violated incompressibility too severely for pressure projection")
             print(f"    Details: {str(e)}")
             failed_tasks.append((ic_name, "diverged", str(e)))
+            continue
 
-            # Save failed metadata
-            output_file = data_dir / f"{ic_name}.npz"
-            save_metadata_txt(output_file, ic_config, task_sim_params, None,
-                            success=False, error_msg=f"Diverged: {str(e)}")
+        except ValueError as e:
+            # Catches silent divergence (solver completed but values exploded)
+            print(f"\n⚠️  SKIPPED: {ic_name}")
+            print(f"    Reason: {str(e)}")
+            failed_tasks.append((ic_name, "diverged", str(e)))
             continue
 
         except Exception as e:
             print(f"\n⚠️  SKIPPED: {ic_name}")
             print(f"    Unexpected error: {type(e).__name__}: {str(e)}")
             failed_tasks.append((ic_name, "error", str(e)))
-
-            # Save failed metadata
-            output_file = data_dir / f"{ic_name}.npz"
-            save_metadata_txt(output_file, ic_config, task_sim_params, None,
-                            success=False, error_msg=f"{type(e).__name__}: {str(e)}")
             continue
 
     print(f"\n{'=' * 60}")

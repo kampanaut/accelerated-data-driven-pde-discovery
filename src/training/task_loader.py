@@ -71,8 +71,16 @@ class NavierStokesTask:
         Validate data integrity.
 
         Raises:
-            ValueError: If data has shape mismatches, NaN, or Inf values
+            ValueError: If metadata indicates failure, or data has shape mismatches
         """
+        # Check metadata file for status (authoritative source)
+        txt_path = self.npz_path.with_suffix('.txt')
+        if txt_path.exists():
+            with open(txt_path, 'r') as f:
+                content = f.read()
+            if 'Status: FAILED' in content:
+                raise ValueError(f"Task marked as failed in metadata: {self.npz_path.name}")
+
         # Check shape consistency
         if self.features.shape[0] != self.targets.shape[0]:
             raise ValueError(
@@ -80,25 +88,12 @@ class NavierStokesTask:
                 f"features {self.features.shape} vs targets {self.targets.shape}"
             )
 
-        # Check for invalid values in features
-        if np.any(np.isnan(self.features)):
-            raise ValueError(f"NaN values found in features of {self.npz_path.name}")
-
-        if np.any(np.isinf(self.features)):
-            raise ValueError(f"Inf values found in features of {self.npz_path.name}")
-
-        # Check for invalid values in targets
-        if np.any(np.isnan(self.targets)):
-            raise ValueError(f"NaN values found in targets of {self.npz_path.name}")
-
-        if np.any(np.isinf(self.targets)):
-            raise ValueError(f"Inf values found in targets of {self.npz_path.name}")
-
     def get_support_query_split(
         self,
         K_shot: int,
         query_size: int,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        noise_level: float = 0.0
     ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
         """
         Split task data into support set (D) and query set (D') for MAML.
@@ -112,6 +107,7 @@ class NavierStokesTask:
             K_shot: Support set size (number of samples for inner loop)
             query_size: Query set size (number of samples for meta-gradient)
             seed: Random seed for reproducible splits
+            noise_level: Noise level to use (0.0 = clean data, >0 loads from *_noisy.npz)
 
         Returns:
             support: Tuple of (features[K], targets[K]) for inner loop
@@ -119,25 +115,92 @@ class NavierStokesTask:
 
         Raises:
             ValueError: If K_shot + query_size exceeds task size
+            FileNotFoundError: If noise_level > 0 but noisy file doesn't exist
         """
-        if K_shot + query_size > self.n_samples:
+        # Get features and targets (clean or noisy)
+        if noise_level > 0.0:
+            features, targets = self._load_noisy_data(noise_level)
+        else:
+            features, targets = self.features, self.targets
+
+        n_samples = len(features)
+
+        if K_shot + query_size > n_samples:
             raise ValueError(
                 f"K_shot ({K_shot}) + query_size ({query_size}) = {K_shot + query_size} "
-                f"exceeds task size ({self.n_samples}) for {self.task_name}"
+                f"exceeds task size ({n_samples}) for {self.task_name}"
             )
 
         # Shuffle indices
         rng = np.random.RandomState(seed)
-        indices = rng.permutation(self.n_samples)
+        indices = rng.permutation(n_samples)
 
         # Split into support and query (disjoint sets)
         support_idx = indices[:K_shot]
         query_idx = indices[K_shot:K_shot + query_size]
 
-        support = (self.features[support_idx], self.targets[support_idx])
-        query = (self.features[query_idx], self.targets[query_idx])
+        support = (features[support_idx], targets[support_idx])
+        query = (features[query_idx], targets[query_idx])
 
         return support, query
+
+    def _load_noisy_data(
+        self,
+        noise_level: float
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Load noisy features and targets from *_noisy.npz file.
+
+        Args:
+            noise_level: Noise level to load (e.g., 0.01, 0.05, 0.10)
+
+        Returns:
+            Tuple of (features, targets) arrays with noise applied
+
+        Raises:
+            FileNotFoundError: If noisy file doesn't exist
+            KeyError: If noise level not found in noisy file
+        """
+        noisy_path = self.npz_path.parent / f"{self.npz_path.stem}_noisy.npz"
+
+        if not noisy_path.exists():
+            raise FileNotFoundError(
+                f"Noisy file not found: {noisy_path}. "
+                f"Run scripts/inject_noise.py to create it."
+            )
+
+        noisy_data = np.load(noisy_path, allow_pickle=True)
+        level_key = f"noise_{noise_level:.2f}"
+
+        # Stack features (10 input features)
+        try:
+            features = np.stack([
+                noisy_data[f'{level_key}/u'].flatten(),
+                noisy_data[f'{level_key}/v'].flatten(),
+                noisy_data[f'{level_key}/u_x'].flatten(),
+                noisy_data[f'{level_key}/u_y'].flatten(),
+                noisy_data[f'{level_key}/u_xx'].flatten(),
+                noisy_data[f'{level_key}/u_yy'].flatten(),
+                noisy_data[f'{level_key}/v_x'].flatten(),
+                noisy_data[f'{level_key}/v_y'].flatten(),
+                noisy_data[f'{level_key}/v_xx'].flatten(),
+                noisy_data[f'{level_key}/v_yy'].flatten(),
+            ], axis=1)
+
+            # Stack targets (2 output features)
+            targets = np.stack([
+                noisy_data[f'{level_key}/u_t'].flatten(),
+                noisy_data[f'{level_key}/v_t'].flatten(),
+            ], axis=1)
+        except KeyError as e:
+            available = [k.split('/')[0] for k in noisy_data.keys() if '/' in k]
+            available = sorted(set(available))
+            raise KeyError(
+                f"Noise level '{level_key}' not found in {noisy_path}. "
+                f"Available levels: {available}"
+            ) from e
+
+        return features, targets
 
     def __repr__(self) -> str:
         """String representation of task."""
@@ -178,18 +241,30 @@ class MetaLearningDataLoader:
         self.data_dir = Path(data_dir)
         npz_files = sorted(self.data_dir.glob(task_pattern))
 
+        # Exclude noisy files (they're loaded on-demand by get_support_query_split)
+        npz_files = [f for f in npz_files if not f.stem.endswith('_noisy')]
+
         if len(npz_files) == 0:
             raise ValueError(f"No .npz files found in {data_dir} with pattern '{task_pattern}'")
 
-        # Load all tasks (strict - will crash if any task is corrupted)
+        # Load all tasks, skipping invalid ones
         self.tasks: List[NavierStokesTask] = []
         self.task_names: List[str] = []
+        skipped: List[str] = []
 
         print(f"Loading tasks from {data_dir}...")
         for f in npz_files:
-            task = NavierStokesTask(f)  # Raises ValueError if corrupted
-            self.tasks.append(task)
-            self.task_names.append(f.stem)
+            try:
+                task = NavierStokesTask(f)
+                self.tasks.append(task)
+                self.task_names.append(f.stem)
+            except ValueError as e:
+                skipped.append(f"{f.stem}: {e}")
+
+        if skipped:
+            print(f"\n⚠ Skipped {len(skipped)} invalid tasks:")
+            for msg in skipped:
+                print(f"  {msg}")
 
         print(f"\n✓ Loaded {len(self.tasks)} tasks:")
         for name, task in zip(self.task_names, self.tasks):
