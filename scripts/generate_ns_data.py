@@ -383,8 +383,10 @@ def main():
     print(f"\nInitial conditions: {len(ic_configs)} configurations")
 
     # Create output directory
-    output_dir_name = config.get('output_dir', 'navier_stokes')
-    data_dir = Path(__file__).parent.parent / 'data' / 'datasets' / output_dir_name
+    # Supports both old format (output_dir) and new format (simulation.name + output.base_dir)
+    sim_name = config.get('simulation', {}).get('name') or config.get('output_dir', 'navier_stokes')
+    base_dir = config.get('output', {}).get('base_dir', 'data/datasets')
+    data_dir = Path(__file__).parent.parent / base_dir / sim_name
     data_dir.mkdir(parents=True, exist_ok=True)
     print(f"\nOutput directory: {data_dir}")
 

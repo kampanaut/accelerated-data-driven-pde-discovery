@@ -2,12 +2,13 @@
 # IC Config Template - Copy/paste reference for all initial condition types
 # ============================================================================
 # Usage: uv run python scripts/generate_ns_data.py --config configs/your_config.yaml
-# Output: data/datasets/{output_dir}/
+# Output: data/datasets/{simulation.name}/
 
 # ----------------------------------------------------------------------------
 # Simulation parameters (shared across all ICs)
 # ----------------------------------------------------------------------------
 simulation:
+  name: "my_dataset"                  # Output: {base_dir}/{name}/
   nu: 0.01                            # Viscosity (or [min, max] to sample)
   domain_size: [6.283185, 6.283185]   # 2pi x 2pi
   resolution: [64, 64]                # ny x nx grid
@@ -15,7 +16,13 @@ simulation:
   dt: 0.01                            # Timestep
   save_interval: 0.2                  # Snapshot frequency
 
-output_dir: "my_dataset"
+# ----------------------------------------------------------------------------
+# Output (optional)
+# ----------------------------------------------------------------------------
+# If omitted, outputs go to data/datasets/{simulation.name}/
+# If specified, outputs go to {base_dir}/{simulation.name}/
+# output:
+#   base_dir: "data/datasets"
 
 # ----------------------------------------------------------------------------
 # Initial conditions - all 12 types with their fields
