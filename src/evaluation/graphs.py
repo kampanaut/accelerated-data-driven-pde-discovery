@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 from src.evaluation.metrics import steps_to_plateau
 
@@ -194,6 +195,8 @@ def plot_speedup_heatmap(
     std_values: Optional[np.ndarray] = None,
     maml_losses: Optional[np.ndarray] = None,
     baseline_losses: Optional[np.ndarray] = None,
+    inf_counts: Optional[np.ndarray] = None,
+    n_total: Optional[int] = None,
 ) -> plt.Figure:
     """
     Graph 3: Speedup heatmap (K × Noise).
@@ -212,6 +215,8 @@ def plot_speedup_heatmap(
         std_values: Optional std array for annotations (aggregated mode)
         maml_losses: Optional 2D array of MAML's loss at plateau per cell
         baseline_losses: Optional 2D array of baseline's loss at plateau per cell
+        inf_counts: Optional 2D array of inf counts per cell (aggregated mode)
+        n_total: Total number of tasks aggregated (for showing inf ratio)
 
     Returns:
         matplotlib Figure object
@@ -239,6 +244,7 @@ def plot_speedup_heatmap(
 
     # Check if we have loss values to display
     show_losses = maml_losses is not None and baseline_losses is not None
+    has_inf_counts = inf_counts is not None
 
     # Annotate cells with values
     for i in range(len(noise_levels)):
@@ -248,15 +254,39 @@ def plot_speedup_heatmap(
                 color = 'gray'
             else:
                 value = speedups[i, j]
-                if std_values is not None:
+                n_inf = int(inf_counts[i, j]) if has_inf_counts else 0
+
+                # Aggregated mode with some inf values
+                if has_inf_counts and n_inf > 0:
+                    # Draw turquoise background
+                    rect = Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                      facecolor='#00CED1', edgecolor='none')
+                    ax.add_patch(rect)
+                    # Show inf count + finite stats if available
+                    if not np.isnan(value) and std_values is not None:
+                        text = f'∞ ({n_inf}/{n_total})\nμ={value:.2f}x ±{std_values[i, j]:.2f}'
+                    else:
+                        text = f'∞ ({n_inf}/{n_total})'
+                    color = 'white'
+                # Single-task mode with inf value
+                elif np.isinf(value):
+                    # Draw turquoise background for inf cells
+                    rect = Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                      facecolor='#00CED1', edgecolor='none')
+                    ax.add_patch(rect)
+                    text = '∞'
+                    color = 'white'
+                elif std_values is not None:
                     text = f'{value:.2f}x\n±{std_values[i, j]:.2f}'
+                    color = 'black' if 0.8 < value < 2.0 else 'white'
                 elif show_losses:
                     m_loss = maml_losses[i, j]
                     b_loss = baseline_losses[i, j]
                     text = f'{value:.2f}x\n({m_loss:.1e} / {b_loss:.1e})'
+                    color = 'black' if 0.8 < value < 2.0 else 'white'
                 else:
                     text = f'{value:.2f}x'
-                color = 'black' if 0.8 < value < 2.0 else 'white'
+                    color = 'black' if 0.8 < value < 2.0 else 'white'
             ax.text(j, i, text, ha='center', va='center', color=color, fontsize=8)
 
     ax.set_title(title)
@@ -280,6 +310,8 @@ def plot_loss_ratio_heatmap(
     figsize: Tuple[int, int] = (10, 6),
     dpi: int = 150,
     std_values: Optional[np.ndarray] = None,
+    inf_counts: Optional[np.ndarray] = None,
+    n_total: Optional[int] = None,
 ) -> plt.Figure:
     """
     Graph 4: Loss ratio heatmap (K × Noise) at fixed step p.
@@ -296,6 +328,8 @@ def plot_loss_ratio_heatmap(
         figsize: Figure size in inches
         dpi: Resolution for saved figure
         std_values: Optional std array for annotations (aggregated mode)
+        inf_counts: Optional 2D array of inf counts per cell (aggregated mode)
+        n_total: Total number of tasks aggregated (for showing inf ratio)
 
     Returns:
         matplotlib Figure object
@@ -318,6 +352,8 @@ def plot_loss_ratio_heatmap(
     ax.set_xlabel('K (support set size)')
     ax.set_ylabel('Noise Level')
 
+    has_inf_counts = inf_counts is not None
+
     for i in range(len(noise_levels)):
         for j in range(len(k_values)):
             if mask[i, j]:
@@ -325,11 +361,34 @@ def plot_loss_ratio_heatmap(
                 color = 'gray'
             else:
                 value = ratios[i, j]
-                if std_values is not None:
+                n_inf = int(inf_counts[i, j]) if has_inf_counts else 0
+
+                # Aggregated mode with some inf values
+                if has_inf_counts and n_inf > 0:
+                    # Draw turquoise background
+                    rect = Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                      facecolor='#00CED1', edgecolor='none')
+                    ax.add_patch(rect)
+                    # Show inf count + finite stats if available
+                    if not np.isnan(value) and std_values is not None:
+                        text = f'∞ ({n_inf}/{n_total})\nμ={value:.5f} ±{std_values[i, j]:.5f}'
+                    else:
+                        text = f'∞ ({n_inf}/{n_total})'
+                    color = 'white'
+                # Single-task mode with inf value
+                elif np.isinf(value):
+                    # Draw turquoise background for inf cells
+                    rect = Rectangle((j - 0.5, i - 0.5), 1, 1,
+                                      facecolor='#00CED1', edgecolor='none')
+                    ax.add_patch(rect)
+                    text = '∞'
+                    color = 'white'
+                elif std_values is not None:
                     text = f'{value:.5f}\n±{std_values[i, j]:.5f}'
+                    color = 'black' if 0.4 < value < 1.6 else 'white'
                 else:
                     text = f'{value:.5f}'
-                color = 'black' if 0.4 < value < 1.6 else 'white'
+                    color = 'black' if 0.4 < value < 1.6 else 'white'
             ax.text(j, i, text, ha='center', va='center', color=color, fontsize=9)
 
     ax.set_title(title)

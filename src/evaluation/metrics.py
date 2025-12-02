@@ -53,22 +53,22 @@ def steps_to_lowest(losses: List[float]) -> int:
 
 def steps_to_plateau(
     losses: List[float],
-    deriv_threshold: float = 1e-7,
+    deriv_threshold: float = 1e-3,
 ) -> int:
     """
-    Find step where the longest plateau begins.
+    Find step where the longest plateau begins using relative derivative.
 
     Algorithm:
-    1. Compute derivatives (loss[i+1] - loss[i])
-    2. Find steps where |derivative| < threshold (flat regions)
+    1. Compute relative derivatives: (loss[i+1] - loss[i]) / loss[i]
+    2. Find steps where |relative derivative| < threshold (flat regions)
     3. Group flat steps by adjacency into contiguous runs
     4. Select the longest run as the plateau
     5. Return the start of that plateau
 
     Args:
         losses: Loss values at each gradient step
-        deriv_threshold: Maximum |derivative| to consider "flat"
-                         (the capacity for plateau detection)
+        deriv_threshold: Maximum |relative derivative| to consider "flat"
+                         (e.g., 1e-3 means <0.1% change per step)
 
     Returns:
         Step index where longest plateau begins, or steps_to_lowest if no plateau
@@ -76,11 +76,17 @@ def steps_to_plateau(
     if len(losses) < 2:
         return 0
 
-    # 1. Compute derivatives
-    derivs = np.diff(losses)
+    losses_arr = np.array(losses)
 
-    # 2. Find flat step indices where |derivative| < threshold
-    flat_indices = np.where(np.abs(derivs) < deriv_threshold)[0]
+    # 1. Compute relative derivatives: (loss[i+1] - loss[i]) / loss[i]
+    # Use loss[i] (current step) as denominator for normalization
+    derivs = np.diff(losses_arr)
+    # Avoid division by zero - use small epsilon for near-zero losses
+    denominators = np.maximum(np.abs(losses_arr[:-1]), 1e-12)
+    relative_derivs = derivs / denominators
+
+    # 2. Find flat step indices where |relative derivative| < threshold
+    flat_indices = np.where(np.abs(relative_derivs) < deriv_threshold)[0]
 
     if len(flat_indices) == 0:
         # No plateau detected - fall back to minimum

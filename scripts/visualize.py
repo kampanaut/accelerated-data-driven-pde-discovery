@@ -404,8 +404,12 @@ def generate_aggregated_figures(
         baseline_loss_stack.append(baseline_losses)
 
     speedup_stack = np.array(speedup_stack)
-    speedup_mean = np.nanmean(speedup_stack, axis=0)
-    speedup_std = np.nanstd(speedup_stack, axis=0)
+
+    # Count infs and compute stats on finite values only
+    inf_counts = np.sum(np.isinf(speedup_stack), axis=0)
+    speedup_stack_clean = np.where(np.isinf(speedup_stack), np.nan, speedup_stack)
+    speedup_mean = np.nanmean(speedup_stack_clean, axis=0)
+    speedup_std = np.nanstd(speedup_stack_clean, axis=0)
 
     # For aggregated, show mean of losses
     maml_loss_mean = np.nanmean(np.array(maml_loss_stack), axis=0)
@@ -419,6 +423,8 @@ def generate_aggregated_figures(
         save_path=agg_dir / "speedup_heatmap.png",
         dpi=dpi,
         std_values=speedup_std,
+        inf_counts=inf_counts,
+        n_total=n_tasks,
     )
     plt.close(fig)
 
@@ -441,8 +447,12 @@ def generate_aggregated_figures(
             ratio_stack.append(ratios)
 
         ratio_stack = np.array(ratio_stack)
-        ratio_mean = np.nanmean(ratio_stack, axis=0)
-        ratio_std = np.nanstd(ratio_stack, axis=0)
+
+        # Count infs and compute stats on finite values only
+        ratio_inf_counts = np.sum(np.isinf(ratio_stack), axis=0)
+        ratio_stack_clean = np.where(np.isinf(ratio_stack), np.nan, ratio_stack)
+        ratio_mean = np.nanmean(ratio_stack_clean, axis=0)
+        ratio_std = np.nanstd(ratio_stack_clean, axis=0)
 
         fig = plot_loss_ratio_heatmap(
             ratios=ratio_mean,
@@ -453,6 +463,8 @@ def generate_aggregated_figures(
             save_path=agg_dir / f"loss_ratio_heatmap_step{p}.png",
             dpi=dpi,
             std_values=ratio_std,
+            inf_counts=ratio_inf_counts,
+            n_total=n_tasks,
         )
         plt.close(fig)
 
