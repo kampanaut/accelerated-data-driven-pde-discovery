@@ -33,7 +33,8 @@ def plot_convergence(
     maml_min_step: Optional[int] = None,
     baseline_min_step: Optional[int] = None,
     min_step_std: Optional[Tuple[float, float]] = None,
-    deriv_threshold: float = 1e-7
+    deriv_threshold: float = 1e-7,
+    k_shot: Optional[int] = None,
 ) -> plt.Figure:
     """
     Graph 5: Convergence plot (Loss vs Steps).
@@ -52,6 +53,7 @@ def plot_convergence(
         maml_min_step: Step where MAML hits minimum (for marker)
         baseline_min_step: Step where baseline hits minimum (for marker)
         min_step_std: Tuple of (maml_step_std, baseline_step_std) for vertical bands
+        k_shot: Number of support samples (for y-axis label)
 
     Returns:
         matplotlib Figure object
@@ -109,7 +111,8 @@ def plot_convergence(
                    color='red', alpha=0.1)
 
     ax.set_xlabel('Gradient Steps')
-    ax.set_ylabel('MSE Loss')
+    ylabel = f'MSE Loss (K={k_shot})' if k_shot is not None else 'MSE Loss'
+    ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.legend(loc='upper right', fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -133,6 +136,12 @@ def plot_train_holdout_convergence(
     save_path: Optional[Path] = None,
     figsize: Tuple[int, int] = (10, 6),
     dpi: int = 150,
+    k_shot: Optional[int] = None,
+    holdout_size: Optional[int] = None,
+    maml_train_std: Optional[List[float]] = None,
+    maml_holdout_std: Optional[List[float]] = None,
+    baseline_train_std: Optional[List[float]] = None,
+    baseline_holdout_std: Optional[List[float]] = None,
 ) -> plt.Figure:
     """
     Graph: Train vs Holdout convergence comparison.
@@ -140,25 +149,50 @@ def plot_train_holdout_convergence(
     Shows generalization gap - if train << holdout, the model is overfitting.
 
     Args:
-        maml_train: MAML training loss curve
-        maml_holdout: MAML holdout loss curve
-        baseline_train: Baseline training loss curve
-        baseline_holdout: Baseline holdout loss curve
+        maml_train: MAML training loss curve (or mean if aggregated)
+        maml_holdout: MAML holdout loss curve (or mean if aggregated)
+        baseline_train: Baseline training loss curve (or mean if aggregated)
+        baseline_holdout: Baseline holdout loss curve (or mean if aggregated)
         title: Plot title
         save_path: Path to save figure
         figsize: Figure size in inches
         dpi: Resolution for saved figure
+        k_shot: Number of support samples (for labels)
+        holdout_size: Number of holdout samples (for labels)
+        maml_train_std: Std for MAML train losses (aggregated mode)
+        maml_holdout_std: Std for MAML holdout losses (aggregated mode)
+        baseline_train_std: Std for baseline train losses (aggregated mode)
+        baseline_holdout_std: Std for baseline holdout losses (aggregated mode)
 
     Returns:
         matplotlib Figure object
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=True)
 
+    maml_train = np.array(maml_train)
+    maml_holdout = np.array(maml_holdout)
+    baseline_train = np.array(baseline_train)
+    baseline_holdout = np.array(baseline_holdout)
     steps = np.arange(len(maml_train))
 
+    # Build legend labels with sample sizes
+    train_label = f'Train (K={k_shot})' if k_shot is not None else 'Train'
+    holdout_label = f'Holdout (n={holdout_size})' if holdout_size is not None else 'Holdout'
+
     # MAML subplot
-    ax1.semilogy(steps, maml_train, 'b-', label='Train', linewidth=2)
-    ax1.semilogy(steps, maml_holdout, 'b--', label='Holdout', linewidth=2, alpha=0.7)
+    ax1.semilogy(steps, maml_train, 'b-', label=train_label, linewidth=2)
+    ax1.semilogy(steps, maml_holdout, 'b--', label=holdout_label, linewidth=2, alpha=0.7)
+
+    # Add std bands for MAML (aggregated mode)
+    if maml_train_std is not None:
+        maml_train_std = np.array(maml_train_std)
+        ax1.fill_between(steps, maml_train - maml_train_std, maml_train + maml_train_std,
+                         color='blue', alpha=0.2)
+    if maml_holdout_std is not None:
+        maml_holdout_std = np.array(maml_holdout_std)
+        ax1.fill_between(steps, maml_holdout - maml_holdout_std, maml_holdout + maml_holdout_std,
+                         color='blue', alpha=0.1)
+
     ax1.set_xlabel('Gradient Steps')
     ax1.set_ylabel('MSE Loss')
     ax1.set_title('MAML (θ*)')
@@ -166,8 +200,19 @@ def plot_train_holdout_convergence(
     ax1.grid(True, alpha=0.3)
 
     # Baseline subplot
-    ax2.semilogy(steps, baseline_train, 'r-', label='Train', linewidth=2)
-    ax2.semilogy(steps, baseline_holdout, 'r--', label='Holdout', linewidth=2, alpha=0.7)
+    ax2.semilogy(steps, baseline_train, 'r-', label=train_label, linewidth=2)
+    ax2.semilogy(steps, baseline_holdout, 'r--', label=holdout_label, linewidth=2, alpha=0.7)
+
+    # Add std bands for baseline (aggregated mode)
+    if baseline_train_std is not None:
+        baseline_train_std = np.array(baseline_train_std)
+        ax2.fill_between(steps, baseline_train - baseline_train_std, baseline_train + baseline_train_std,
+                         color='red', alpha=0.2)
+    if baseline_holdout_std is not None:
+        baseline_holdout_std = np.array(baseline_holdout_std)
+        ax2.fill_between(steps, baseline_holdout - baseline_holdout_std, baseline_holdout + baseline_holdout_std,
+                         color='red', alpha=0.1)
+
     ax2.set_xlabel('Gradient Steps')
     ax2.set_title('Baseline (θ₀)')
     ax2.legend()

@@ -179,7 +179,8 @@ def generate_per_task_figures(
     fixed_steps: List[int],
     output_dir: Path,
     dpi: int,
-    deriv_threshold: float = 1e-7
+    deriv_threshold: float = 1e-7,
+    holdout_size: int = 1000,
 ) -> None:
     """Generate all per-task figures."""
 
@@ -212,7 +213,8 @@ def generate_per_task_figures(
                     title=f"{task_name}: K={k}, noise={noise:.0%}",
                     save_path=task_dir / f"convergence_k{k}_noise{noise:.2f}.png",
                     dpi=dpi,
-                    deriv_threshold=deriv_threshold
+                    deriv_threshold=deriv_threshold,
+                    k_shot=k,
                 )
                 plt.close(fig)
 
@@ -228,6 +230,8 @@ def generate_per_task_figures(
                         title=f"{task_name}: K={k}, noise={noise:.0%} (Train vs Holdout)",
                         save_path=task_dir / f"train_holdout_k{k}_noise{noise:.2f}.png",
                         dpi=dpi,
+                        k_shot=k,
+                        holdout_size=holdout_size,
                     )
                     plt.close(fig)
 
@@ -362,6 +366,7 @@ def generate_aggregated_figures(
     output_dir: Path,
     dpi: int,
     deriv_threshold: float = 1e-7,
+    holdout_size: int = 1000,
 ) -> None:
     """Generate aggregated figures (mean ± std across tasks)."""
 
@@ -520,9 +525,64 @@ def generate_aggregated_figures(
                 maml_min_step=maml_mean_step,
                 baseline_min_step=baseline_mean_step,
                 min_step_std=(maml_step_std, baseline_step_std),
-                deriv_threshold=deriv_threshold
+                deriv_threshold=deriv_threshold,
+                k_shot=k,
             )
             plt.close(fig)
+
+            # Aggregated train-holdout convergence (if holdout data available)
+            maml_train_curves = []
+            maml_holdout_curves = []
+            baseline_train_curves = []
+            baseline_holdout_curves = []
+
+            for task_name in task_names:
+                task_data = results['tasks'][task_name]['results'].get(combo_key, {})
+                mt = task_data.get('maml_losses')
+                mh = task_data.get('maml_holdout_losses')
+                bt = task_data.get('baseline_losses')
+                bh = task_data.get('baseline_holdout_losses')
+
+                if mt is not None and mh is not None and bt is not None and bh is not None:
+                    maml_train_curves.append(mt)
+                    maml_holdout_curves.append(mh)
+                    baseline_train_curves.append(bt)
+                    baseline_holdout_curves.append(bh)
+
+            if len(maml_train_curves) > 0:
+                # Truncate to min length
+                min_len = min(
+                    min(len(c) for c in maml_train_curves),
+                    min(len(c) for c in maml_holdout_curves),
+                    min(len(c) for c in baseline_train_curves),
+                    min(len(c) for c in baseline_holdout_curves),
+                )
+                maml_train_curves = [c[:min_len] for c in maml_train_curves]
+                maml_holdout_curves = [c[:min_len] for c in maml_holdout_curves]
+                baseline_train_curves = [c[:min_len] for c in baseline_train_curves]
+                baseline_holdout_curves = [c[:min_len] for c in baseline_holdout_curves]
+
+                mt_arr = np.array(maml_train_curves)
+                mh_arr = np.array(maml_holdout_curves)
+                bt_arr = np.array(baseline_train_curves)
+                bh_arr = np.array(baseline_holdout_curves)
+
+                fig = plot_train_holdout_convergence(
+                    maml_train=np.mean(mt_arr, axis=0).tolist(),
+                    maml_holdout=np.mean(mh_arr, axis=0).tolist(),
+                    baseline_train=np.mean(bt_arr, axis=0).tolist(),
+                    baseline_holdout=np.mean(bh_arr, axis=0).tolist(),
+                    title=f"Aggregated Train vs Holdout: K={k}, noise={noise:.0%} (n={len(maml_train_curves)} tasks)",
+                    save_path=agg_dir / f"train_holdout_k{k}_noise{noise:.2f}.png",
+                    dpi=dpi,
+                    k_shot=k,
+                    holdout_size=holdout_size,
+                    maml_train_std=np.std(mt_arr, axis=0).tolist(),
+                    maml_holdout_std=np.std(mh_arr, axis=0).tolist(),
+                    baseline_train_std=np.std(bt_arr, axis=0).tolist(),
+                    baseline_holdout_std=np.std(bh_arr, axis=0).tolist(),
+                )
+                plt.close(fig)
 
     # -------------------------------------------------------------------------
     # Aggregate noise robustness curves
@@ -712,6 +772,7 @@ def main():
         noise_levels = results['config'].get('noise_levels', eval_cfg.get('noise_levels', [0.0, 0.01, 0.05, 0.10]))
         fixed_steps = results['config'].get('fixed_steps', eval_cfg.get('fixed_steps', [50, 100, 200]))
         deriv_threshold = eval_cfg.get('deriv_threshold', 1e-7)
+        holdout_size = results['config'].get('holdout_size', eval_cfg.get('holdout_size', 1000))
 
         # Format mode label for titles
         if mode_name == "noisy_targets":
@@ -744,6 +805,7 @@ def main():
                 output_dir=output_dir,
                 dpi=dpi,
                 deriv_threshold=deriv_threshold,
+                holdout_size=holdout_size,
             )
             print()
 
@@ -760,6 +822,7 @@ def main():
                 output_dir=output_dir,
                 dpi=dpi,
                 deriv_threshold=deriv_threshold,
+                holdout_size=holdout_size,
             )
             print()
 
