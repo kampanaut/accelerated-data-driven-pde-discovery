@@ -7,7 +7,7 @@ This module wraps PhiFlow's incompressible fluid simulation to solve
 
 import numpy as np
 from typing import Tuple, List
-from phi.flow import *
+from phi.jax.flow import *
 
 
 def solve_navier_stokes(

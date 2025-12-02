@@ -1,0 +1,232 @@
+simulation:
+  name: "ic_val-1"                  # Output: {base_dir}/{name}/
+  nu: [0.01, 0.025]                            # Viscosity (or [min, max] to sample)
+  domain_size: [6.283185, 6.283185]   # 2pi x 2pi
+  resolution: [128, 128]                # ny x nx grid
+  t_end: 7.0                         # Simulation end time
+  dt: 0.001                            # Timestep
+  save_interval: 0.2                  # Snapshot frequency
+
+initial_conditions:
+  # ==========================================================================
+  # gv (gaussian_vortex) - 5 tasks, seeds 61-65, n_gaussians 5-10
+  # ==========================================================================
+  - name: "gv_n5_s61_061"
+    type: "gaussian_vortex"
+    n_gaussians: 5
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 1.5]
+    seed: 61
+
+  - name: "gv_n7_s62_062"
+    type: "gaussian_vortex"
+    n_gaussians: 7
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 1.5]
+    seed: 62
+
+  - name: "gv_n8_s63_063"
+    type: "gaussian_vortex"
+    n_gaussians: 8
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 1.5]
+    seed: 63
+
+  - name: "gv_n9_s64_064"
+    type: "gaussian_vortex"
+    n_gaussians: 9
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 1.5]
+    seed: 64
+
+  - name: "gv_n10_s65_065"
+    type: "gaussian_vortex"
+    n_gaussians: 10
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 1.5]
+    seed: 65
+
+  # ==========================================================================
+  # gd (gaussian_direct) - 5 tasks, seeds 66-70, n_total 6-12
+  # ==========================================================================
+  - name: "gd_n6_s66_066"
+    type: "gaussian_direct"
+    n_gaussians_u: 3
+    n_gaussians_v: 3
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.3, 1.2]
+    seed: 66
+
+  - name: "gd_n8_s67_067"
+    type: "gaussian_direct"
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.3, 1.2]
+    seed: 67
+
+  - name: "gd_n9_s68_068"
+    type: "gaussian_direct"
+    n_gaussians_u: 5
+    n_gaussians_v: 4
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.3, 1.2]
+    seed: 68
+
+  - name: "gd_n11_s69_069"
+    type: "gaussian_direct"
+    n_gaussians_u: 6
+    n_gaussians_v: 5
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.3, 1.2]
+    seed: 69
+
+  - name: "gd_n12_s70_070"
+    type: "gaussian_direct"
+    n_gaussians_u: 6
+    n_gaussians_v: 6
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.3, 1.2]
+    seed: 70
+
+  # ==========================================================================
+  # gh (gaussian_hybrid) - 6 tasks, seeds 71-76, n_gaussians_vorticity 5-10
+  # ==========================================================================
+  - name: "gh_n5_s71_071"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 5
+    n_gaussians_u: 3
+    n_gaussians_v: 3
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 1.2]
+    alpha: 0.7
+    beta: 0.3
+    seed: 71
+
+  - name: "gh_n6_s72_072"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 6
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 1.2]
+    alpha: 0.6
+    beta: 0.4
+    seed: 72
+
+  - name: "gh_n7_s73_073"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 7
+    n_gaussians_u: 4
+    n_gaussians_v: 4
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 1.2]
+    alpha: 0.6
+    beta: 0.4
+    seed: 73
+
+  - name: "gh_n8_s74_074"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 8
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 1.2]
+    alpha: 0.5
+    beta: 0.5
+    seed: 74
+
+  - name: "gh_n9_s75_075"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 9
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 1.2]
+    alpha: 0.5
+    beta: 0.5
+    seed: 75
+
+  - name: "gh_n10_s76_076"
+    type: "gaussian_hybrid"
+    n_gaussians_vorticity: 10
+    n_gaussians_u: 5
+    n_gaussians_v: 5
+    amplitude_range: [-1.5, 1.5]
+    width_range: [0.3, 1.2]
+    alpha: 0.5
+    beta: 0.5
+    seed: 76
+
+  # ==========================================================================
+  # rs (random_soup) - 5 tasks, seeds 77-81, n_vortices 8-15
+  # ==========================================================================
+  - name: "rs_n8_s77_077"
+    type: "random_soup"
+    n_vortices: 8
+    strength_range: [-1.5, 1.5]
+    width_range: [0.2, 0.8]
+    seed: 77
+
+  - name: "rs_n10_s78_078"
+    type: "random_soup"
+    n_vortices: 10
+    strength_range: [-1.5, 1.5]
+    width_range: [0.2, 0.8]
+    seed: 78
+
+  - name: "rs_n12_s79_079"
+    type: "random_soup"
+    n_vortices: 12
+    strength_range: [-1.5, 1.5]
+    width_range: [0.2, 0.8]
+    seed: 79
+
+  - name: "rs_n13_s80_080"
+    type: "random_soup"
+    n_vortices: 13
+    strength_range: [-1.5, 1.5]
+    width_range: [0.2, 0.8]
+    seed: 80
+
+  - name: "rs_n15_s81_081"
+    type: "random_soup"
+    n_vortices: 15
+    strength_range: [-1.5, 1.5]
+    width_range: [0.2, 0.8]
+    seed: 81
+
+  # ==========================================================================
+  # pf (perturbed_flow) - 4 tasks, seeds 82-85, wavelength 1.0-3.0
+  # ==========================================================================
+  - name: "pf_w1.0_s82_082"
+    type: "perturbed_flow"
+    u_mean: 0.5
+    v_mean: 0.0
+    perturbation_amplitude: 0.15
+    perturbation_wavelength: 1.0
+    seed: 82
+
+  - name: "pf_w1.5_s83_083"
+    type: "perturbed_flow"
+    u_mean: 0.5
+    v_mean: 0.0
+    perturbation_amplitude: 0.15
+    perturbation_wavelength: 1.5
+    seed: 83
+
+  - name: "pf_w2.0_s84_084"
+    type: "perturbed_flow"
+    u_mean: 0.5
+    v_mean: 0.0
+    perturbation_amplitude: 0.15
+    perturbation_wavelength: 2.0
+    seed: 84
+
+  - name: "pf_w3.0_s85_085"
+    type: "perturbed_flow"
+    u_mean: 0.5
+    v_mean: 0.0
+    perturbation_amplitude: 0.15
+    perturbation_wavelength: 3.0
+    seed: 85

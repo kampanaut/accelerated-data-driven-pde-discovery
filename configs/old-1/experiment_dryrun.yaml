@@ -1,0 +1,43 @@
+# DRY RUN config - uses same directory for all splits (just for testing pipeline)
+# For real experiments, use separate meta_train/meta_val/meta_test directories
+
+experiment:
+  name: "dryrun"
+  seed: 42
+  device: "cpu"  # Use CPU for quick test
+
+data:
+  # All pointing to same dir for dry run
+  meta_train_dir: "data/datasets/comprehensive_validation"
+  meta_val_dir: "data/datasets/comprehensive_validation"
+  meta_test_dir: "data/datasets/comprehensive_validation"
+
+output:
+  base_dir: "experiments"
+
+training:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  inner_steps: 1
+  meta_batch_size: 2      # Small batch for quick test
+  k_shot: 50              # Small K for speed
+  query_size: 100         # Small query for speed
+  max_iterations: 5       # Just 5 iterations for dry run
+  patience: 3
+  log_interval: 1
+  hidden_dims: [32, 32]   # Smaller network for speed
+  activation: "tanh"
+  first_order: true       # FOMAML for speed
+
+evaluation:
+  k_values: [10, 50]      # Just 2 K values
+  noise_levels: [0.0]     # No noise (avoid needing noisy files)
+  fine_tune_lr: 0.01
+  max_steps: 20           # Just 20 steps
+  threshold: 1.0e-6
+  fixed_steps: [5, 10]
+
+visualization:
+  dpi: 100
+  generate_per_task: true
+  generate_aggregated: true

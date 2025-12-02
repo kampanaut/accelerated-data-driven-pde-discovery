@@ -1,0 +1,44 @@
+# DRY RUN config - uses same directory for all splits (just for testing pipeline)
+# For real experiments, use separate meta_train/meta_val/meta_test directories
+
+experiment:
+  name: "maml-2"
+  seed: 42
+  device: "cuda"  # Use CPU for quick test
+
+data:
+  # All pointing to same dir for dry run
+  meta_train_dir: "data/datasets/ic_train-1"
+  meta_val_dir: "data/datasets/ic_val-1"
+  meta_test_dir: "data/datasets/ic_test-1"
+
+# output:
+#   base_dir: "experiments"
+
+training:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  inner_steps: 5
+  meta_batch_size: 30       # Small batch for quick test
+  k_shot: 100              # Small K for speed
+  query_size: 1000         # Small query for speed
+  max_iterations: 1000       # Just 5 iterations for dry run
+  patience: 60
+  log_interval: 1
+  hidden_dims: [100, 100]   # Smaller network for speed
+  activation: "tanh"
+  first_order: false # FOMAML for speed
+
+evaluation:
+  k_values: [10, 50, 100, 500, 1000]     # Support set sizes
+  noise_levels: [0.0, 0.01, 0.05, 0.10]  # 0%, 1%, 5%, 10% noise
+  fine_tune_lr: 0.001
+  max_steps: 500 # Just 20 steps
+  deriv_threshold: 1.0e-8
+  fixed_steps: [50, 100, 150, 200, 250, 300, 350, 400, 450, 500]
+  holdout_size: 1500
+
+visualization:
+  dpi: 300
+  generate_per_task: true
+  generate_aggregated: true

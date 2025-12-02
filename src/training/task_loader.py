@@ -93,7 +93,8 @@ class NavierStokesTask:
         K_shot: int,
         query_size: int,
         seed: Optional[int] = None,
-        noise_level: float = 0.0
+        noise_level: float = 0.0,
+        clean_targets: bool = False
     ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
         """
         Split task data into support set (D) and query set (D') for MAML.
@@ -108,6 +109,7 @@ class NavierStokesTask:
             query_size: Query set size (number of samples for meta-gradient)
             seed: Random seed for reproducible splits
             noise_level: Noise level to use (0.0 = clean data, >0 loads from *_noisy.npz)
+            clean_targets: If True and noise_level > 0, use noisy features but clean targets
 
         Returns:
             support: Tuple of (features[K], targets[K]) for inner loop
@@ -119,7 +121,7 @@ class NavierStokesTask:
         """
         # Get features and targets (clean or noisy)
         if noise_level > 0.0:
-            features, targets = self._load_noisy_data(noise_level)
+            features, targets = self._load_noisy_data(noise_level, clean_targets)
         else:
             features, targets = self.features, self.targets
 
@@ -146,16 +148,18 @@ class NavierStokesTask:
 
     def _load_noisy_data(
         self,
-        noise_level: float
+        noise_level: float,
+        clean_targets: bool = False
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Load noisy features and targets from *_noisy.npz file.
+        Load noisy features and optionally clean targets.
 
         Args:
             noise_level: Noise level to load (e.g., 0.01, 0.05, 0.10)
+            clean_targets: If True, load targets from clean data instead of noisy
 
         Returns:
-            Tuple of (features, targets) arrays with noise applied
+            Tuple of (features, targets) arrays
 
         Raises:
             FileNotFoundError: If noisy file doesn't exist
@@ -172,7 +176,7 @@ class NavierStokesTask:
         noisy_data = np.load(noisy_path, allow_pickle=True)
         level_key = f"noise_{noise_level:.2f}"
 
-        # Stack features (10 input features)
+        # Stack features (10 input features) - always noisy
         try:
             features = np.stack([
                 noisy_data[f'{level_key}/u'].flatten(),
@@ -186,12 +190,6 @@ class NavierStokesTask:
                 noisy_data[f'{level_key}/v_xx'].flatten(),
                 noisy_data[f'{level_key}/v_yy'].flatten(),
             ], axis=1)
-
-            # Stack targets (2 output features)
-            targets = np.stack([
-                noisy_data[f'{level_key}/u_t'].flatten(),
-                noisy_data[f'{level_key}/v_t'].flatten(),
-            ], axis=1)
         except KeyError as e:
             available = [k.split('/')[0] for k in noisy_data.keys() if '/' in k]
             available = sorted(set(available))
@@ -199,6 +197,17 @@ class NavierStokesTask:
                 f"Noise level '{level_key}' not found in {noisy_path}. "
                 f"Available levels: {available}"
             ) from e
+
+        # Stack targets - clean or noisy depending on flag
+        if clean_targets:
+            # Use clean targets from original file
+            targets = self.targets
+        else:
+            # Use noisy targets
+            targets = np.stack([
+                noisy_data[f'{level_key}/u_t'].flatten(),
+                noisy_data[f'{level_key}/v_t'].flatten(),
+            ], axis=1)
 
         return features, targets
 

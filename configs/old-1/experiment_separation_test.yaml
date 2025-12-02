@@ -1,0 +1,47 @@
+# Config designed to produce visible MAML vs baseline separation
+# Uses aggressive learning rates and enough iterations to move θ* away from θ₀
+
+experiment:
+  name: "separation_test"
+  seed: 42
+  device: "cpu"
+
+data:
+  meta_train_dir: "data/datasets/comprehensive_validation"
+  meta_val_dir: "data/datasets/comprehensive_validation"
+  meta_test_dir: "data/datasets/comprehensive_validation"
+
+output:
+  base_dir: "experiments"
+
+training:
+  # Aggressive LRs to move θ* quickly
+  inner_lr: 0.1         # 10x normal - fast inner adaptation
+  outer_lr: 0.01        # 10x normal - fast meta-update
+  inner_steps: 3        # More inner steps = stronger adaptation signal
+  meta_batch_size: 4
+  k_shot: 100
+  query_size: 500
+
+  # Enough iterations to actually learn something
+  max_iterations: 100   # Should take ~2-3 minutes
+  patience: 30
+  log_interval: 10
+
+  # Small network for speed
+  hidden_dims: [64, 64]
+  activation: "tanh"
+  first_order: true     # FOMAML for speed
+
+evaluation:
+  k_values: [50, 200]
+  noise_levels: [0.0, 0.01, 0.05]
+  fine_tune_lr: 0.01
+  max_steps: 100        # More steps to see convergence
+  threshold: 1.0e-6
+  fixed_steps: [20, 50]
+
+visualization:
+  dpi: 100
+  generate_per_task: false   # Skip per-task to save time
+  generate_aggregated: true

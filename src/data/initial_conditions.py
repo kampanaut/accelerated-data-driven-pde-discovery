@@ -17,7 +17,7 @@ def gaussian_hill_ic(
     strength: float,
     x: np.ndarray,
     y: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate velocity field from a single Gaussian vorticity "hill".
 
@@ -38,9 +38,10 @@ def gaussian_hill_ic(
         y: 1D array of y-coordinates
 
     Returns:
-        Tuple of (u, v) where:
+        Tuple of (u, v, params) where:
         - u: x-component of velocity, shape (ny, nx)
         - v: y-component of velocity, shape (ny, nx)
+        - params: Dict with center, width, strength
     """
     # Create 2D coordinate grid
     X, Y = np.meshgrid(x, y)
@@ -61,7 +62,13 @@ def gaussian_hill_ic(
     u = -np.gradient(psi, dy, axis=0)  # u = -∂ψ/∂y
     v = np.gradient(psi, dx, axis=1)    # v = ∂ψ/∂x
 
-    return u, v
+    params = {
+        'center': center,
+        'width': width,
+        'strength': strength
+    }
+
+    return u, v, params
 
 
 def solve_poisson_2d(
@@ -200,7 +207,7 @@ def multi_vortex_ic(
     vortex_params: list,
     x: np.ndarray,
     y: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate velocity field from multiple Gaussian vortices.
 
@@ -214,7 +221,10 @@ def multi_vortex_ic(
         x, y: Coordinate arrays
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, vortex_params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - vortex_params: List of dicts with actual parameters used
     """
     # Initialize total vorticity as zero
     X, Y = np.meshgrid(x, y)
@@ -239,14 +249,14 @@ def multi_vortex_ic(
     u = -np.gradient(psi, dy, axis=0)
     v = np.gradient(psi, dx, axis=1)
 
-    return u, v
+    return u, v, vortex_params
 
 
 def taylor_green_vortex(
     x: np.ndarray,
     y: np.ndarray,
     amplitude: float = 1.0
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate Taylor-Green vortex initial condition.
 
@@ -259,14 +269,21 @@ def taylor_green_vortex(
         amplitude: Velocity amplitude
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - params: Dict with amplitude
     """
     X, Y = np.meshgrid(x, y)
 
     u = -amplitude * np.sin(X) * np.cos(Y)
     v = amplitude * np.cos(X) * np.sin(Y)
 
-    return u, v
+    params = {
+        'amplitude': amplitude
+    }
+
+    return u, v, params
 
 
 def shear_layer_ic(
@@ -276,7 +293,7 @@ def shear_layer_ic(
     perturbation_amplitude: float,
     x: np.ndarray,
     y: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate shear layer initial condition (Kelvin-Helmholtz setup).
 
@@ -293,7 +310,10 @@ def shear_layer_ic(
         x, y: Coordinate arrays
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - params: Dict with y_center, thickness, velocity_jump, perturbation_amplitude
     """
     X, Y = np.meshgrid(x, y)
 
@@ -306,7 +326,14 @@ def shear_layer_ic(
     u = u_base
     v = v_pert
 
-    return u, v
+    params = {
+        'y_center': y_center,
+        'thickness': thickness,
+        'velocity_jump': velocity_jump,
+        'perturbation_amplitude': perturbation_amplitude
+    }
+
+    return u, v, params
 
 
 def lamb_oseen_vortex_ic(
@@ -315,7 +342,7 @@ def lamb_oseen_vortex_ic(
     circulation: float,
     x: np.ndarray,
     y: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate Lamb-Oseen vortex (smooth vortex with finite core).
 
@@ -331,7 +358,10 @@ def lamb_oseen_vortex_ic(
         x, y: Coordinate arrays
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - params: Dict with center, core_radius, circulation
     """
     X, Y = np.meshgrid(x, y)
 
@@ -351,7 +381,13 @@ def lamb_oseen_vortex_ic(
     u = -v_theta * (dy_grid / r)
     v = v_theta * (dx_grid / r)
 
-    return u, v
+    params = {
+        'center': center,
+        'core_radius': core_radius,
+        'circulation': circulation
+    }
+
+    return u, v, params
 
 
 def dipole_vortex_ic(
@@ -361,7 +397,7 @@ def dipole_vortex_ic(
     strength: float,
     x: np.ndarray,
     y: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate dipole (vortex pair) - two counter-rotating vortices.
 
@@ -376,7 +412,10 @@ def dipole_vortex_ic(
         x, y: Coordinate arrays
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, vortex_params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - vortex_params: List of dicts with actual vortex parameters
     """
     # Two vortices: one at center - separation/2, one at center + separation/2
     vortex_params = [
@@ -401,8 +440,9 @@ def perturbed_uniform_flow_ic(
     perturbation_amplitude: float,
     perturbation_wavelength: float,
     x: np.ndarray,
-    y: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+    y: np.ndarray,
+    seed: int = None
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate uniform flow with small random perturbations.
 
@@ -414,14 +454,18 @@ def perturbed_uniform_flow_ic(
         perturbation_amplitude: RMS amplitude of perturbations
         perturbation_wavelength: Dominant wavelength of perturbations
         x, y: Coordinate arrays
+        seed: Random seed for reproducibility (None = truly random)
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - params: Dict with 'modes' list containing phase/wavenumber info
     """
     X, Y = np.meshgrid(x, y)
 
     # Random Fourier modes
-    rng = np.random.RandomState(42)  # Fixed seed for reproducibility
+    rng = np.random.RandomState(seed)
 
     k_pert = 2 * np.pi / perturbation_wavelength
 
@@ -430,6 +474,7 @@ def perturbed_uniform_flow_ic(
     u_pert = np.zeros_like(X)
     v_pert = np.zeros_like(Y)
 
+    modes = []
     for i in range(n_modes):
         phase_u = rng.uniform(0, 2 * np.pi)
         phase_v = rng.uniform(0, 2 * np.pi)
@@ -439,6 +484,13 @@ def perturbed_uniform_flow_ic(
         u_pert += np.sin(kx * X + ky * Y + phase_u)
         v_pert += np.sin(kx * X + ky * Y + phase_v)
 
+        modes.append({
+            'kx': kx,
+            'ky': ky,
+            'phase_u': phase_u,
+            'phase_v': phase_v
+        })
+
     # Normalize perturbations
     u_pert = perturbation_amplitude * u_pert / np.sqrt(n_modes)
     v_pert = perturbation_amplitude * v_pert / np.sqrt(n_modes)
@@ -446,7 +498,15 @@ def perturbed_uniform_flow_ic(
     u = u_mean + u_pert
     v = v_mean + v_pert
 
-    return u, v
+    params = {
+        'u_mean': u_mean,
+        'v_mean': v_mean,
+        'perturbation_amplitude': perturbation_amplitude,
+        'perturbation_wavelength': perturbation_wavelength,
+        'modes': modes
+    }
+
+    return u, v, params
 
 
 def random_vortex_soup_ic(
@@ -456,7 +516,7 @@ def random_vortex_soup_ic(
     x: np.ndarray,
     y: np.ndarray,
     seed: int = None
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate random collection of vortices (turbulent-like initial state).
 
@@ -471,7 +531,10 @@ def random_vortex_soup_ic(
         seed: Random seed for reproducibility
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, vortex_params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - vortex_params: List of dicts with actual parameters used
     """
     rng = np.random.RandomState(seed)
 
@@ -502,7 +565,7 @@ def gaussian_vortex_ic(
     x: np.ndarray,
     y: np.ndarray,
     seed: int = None
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate velocity field from sum of random Gaussian vorticity distributions.
 
@@ -527,14 +590,15 @@ def gaussian_vortex_ic(
         seed: Random seed for reproducibility (None = truly random)
 
     Returns:
-        Tuple of (u, v) where:
+        Tuple of (u, v, vortex_params) where:
         - u: x-component of velocity, shape (ny, nx)
         - v: y-component of velocity, shape (ny, nx)
+        - vortex_params: List of dicts with actual parameters used
 
     Example:
         >>> x = np.linspace(0, 2*np.pi, 64)
         >>> y = np.linspace(0, 2*np.pi, 64)
-        >>> u, v = gaussian_vortex_ic(
+        >>> u, v, params = gaussian_vortex_ic(
         ...     n_gaussians=5,
         ...     amplitude_range=(-2.0, 2.0),
         ...     width_range=(0.2, 0.8),
@@ -574,7 +638,7 @@ def gaussian_direct_ic(
     x: np.ndarray,
     y: np.ndarray,
     seed: int = None
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate velocity field by directly constructing u and v from independent Gaussian sums.
 
@@ -595,14 +659,15 @@ def gaussian_direct_ic(
         seed: Random seed for reproducibility (None = truly random)
 
     Returns:
-        Tuple of (u, v) where:
+        Tuple of (u, v, params) where:
         - u: x-component of velocity, shape (ny, nx)
         - v: y-component of velocity, shape (ny, nx)
+        - params: Dict with 'u_gaussians' and 'v_gaussians' lists
 
     Example:
         >>> x = np.linspace(0, 2*np.pi, 64)
         >>> y = np.linspace(0, 2*np.pi, 64)
-        >>> u, v = gaussian_direct_ic(
+        >>> u, v, params = gaussian_direct_ic(
         ...     n_gaussians_u=5,
         ...     n_gaussians_v=3,
         ...     amplitude_range=(-2.0, 2.0),
@@ -624,6 +689,10 @@ def gaussian_direct_ic(
     u = np.zeros_like(X)
     v = np.zeros_like(Y)
 
+    # Track generated parameters
+    u_gaussians = []
+    v_gaussians = []
+
     # Build u component from independent Gaussians
     for _ in range(n_gaussians_u):
         center_x = rng.uniform(domain_x[0], domain_x[1])
@@ -633,6 +702,12 @@ def gaussian_direct_ic(
 
         r_squared = (X - center_x)**2 + (Y - center_y)**2
         u += amplitude * np.exp(-r_squared / (2 * width**2))
+
+        u_gaussians.append({
+            'center': (center_x, center_y),
+            'width': width,
+            'amplitude': amplitude
+        })
 
     # Build v component from different independent Gaussians
     for _ in range(n_gaussians_v):
@@ -644,7 +719,18 @@ def gaussian_direct_ic(
         r_squared = (X - center_x)**2 + (Y - center_y)**2
         v += amplitude * np.exp(-r_squared / (2 * width**2))
 
-    return u, v
+        v_gaussians.append({
+            'center': (center_x, center_y),
+            'width': width,
+            'amplitude': amplitude
+        })
+
+    params = {
+        'u_gaussians': u_gaussians,
+        'v_gaussians': v_gaussians
+    }
+
+    return u, v, params
 
 
 def gaussian_hybrid_ic(
@@ -658,7 +744,7 @@ def gaussian_hybrid_ic(
     x: np.ndarray,
     y: np.ndarray,
     seed: int = None
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate hybrid velocity field combining vorticity-based and direct construction.
 
@@ -685,25 +771,26 @@ def gaussian_hybrid_ic(
         seed: Random seed for reproducibility (None = truly random)
 
     Returns:
-        Tuple of (u, v) where:
+        Tuple of (u, v, params) where:
         - u: x-component of velocity, shape (ny, nx)
         - v: y-component of velocity, shape (ny, nx)
+        - params: Dict with 'vorticity_gaussians', 'direct_params', 'alpha', 'beta'
 
     Examples:
         Pure vorticity (swirling only):
-        >>> u, v = gaussian_hybrid_ic(..., alpha=1.0, beta=0.0, ...)
+        >>> u, v, p = gaussian_hybrid_ic(..., alpha=1.0, beta=0.0, ...)
 
         Equal contribution:
-        >>> u, v = gaussian_hybrid_ic(..., alpha=1.0, beta=1.0, ...)
+        >>> u, v, p = gaussian_hybrid_ic(..., alpha=1.0, beta=1.0, ...)
 
         Mostly vorticity with direct perturbations:
-        >>> u, v = gaussian_hybrid_ic(..., alpha=0.7, beta=0.3, ...)
+        >>> u, v, p = gaussian_hybrid_ic(..., alpha=0.7, beta=0.3, ...)
 
         Inverted vorticity:
-        >>> u, v = gaussian_hybrid_ic(..., alpha=-1.0, beta=1.0, ...)
+        >>> u, v, p = gaussian_hybrid_ic(..., alpha=-1.0, beta=1.0, ...)
     """
     # Generate vorticity-based component (swirling, divergence-free)
-    u_vort, v_vort = gaussian_vortex_ic(
+    u_vort, v_vort, vorticity_params = gaussian_vortex_ic(
         n_gaussians=n_gaussians_vorticity,
         amplitude_range=amplitude_range,
         width_range=width_range,
@@ -714,7 +801,7 @@ def gaussian_hybrid_ic(
     # Generate direct component (arbitrary directions, not divergence-free)
     # Use seed offset to ensure decorrelation when seed is specified
     seed_direct = (seed + 1000) if seed is not None else None
-    u_direct, v_direct = gaussian_direct_ic(
+    u_direct, v_direct, direct_params = gaussian_direct_ic(
         n_gaussians_u=n_gaussians_u,
         n_gaussians_v=n_gaussians_v,
         amplitude_range=amplitude_range,
@@ -727,7 +814,14 @@ def gaussian_hybrid_ic(
     u = alpha * u_vort + beta * u_direct
     v = alpha * v_vort + beta * v_direct
 
-    return u, v
+    params = {
+        'vorticity_gaussians': vorticity_params,
+        'direct_params': direct_params,
+        'alpha': alpha,
+        'beta': beta
+    }
+
+    return u, v, params
 
 
 def von_karman_street_ic(
@@ -738,7 +832,7 @@ def von_karman_street_ic(
     strength: float,
     x: np.ndarray,
     y: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate Von Kármán vortex street (alternating wake pattern).
 
@@ -754,7 +848,10 @@ def von_karman_street_ic(
         x, y: Coordinate arrays
 
     Returns:
-        Tuple of (u, v) velocity components
+        Tuple of (u, v, vortex_params) where:
+        - u: x-component of velocity, shape (ny, nx)
+        - v: y-component of velocity, shape (ny, nx)
+        - vortex_params: List of dicts with actual vortex parameters
     """
     domain_x = x[-1] - x[0]
     domain_y = y[-1] - y[0]

@@ -1,0 +1,79 @@
+# Experiment configuration for MAML PDE discovery
+#
+# This config is used by all three scripts:
+#   - scripts/train_maml.py   (meta-training)
+#   - scripts/evaluate.py     (evaluation grid)
+#   - scripts/visualize.py    (graph generation)
+
+experiment:
+  name: "maml_ns_v1"
+  seed: 42
+  device: "cuda"  # or "cpu"
+
+# Data directories (relative to project root)
+data:
+  meta_train_dir: "data/datasets/meta_train"
+  meta_val_dir: "data/datasets/meta_val"
+  meta_test_dir: "data/datasets/meta_test"
+
+# Output directory structure:
+#   experiments/{experiment.name}/
+#     checkpoints/
+#       initial_model.pt  (theta_0)
+#       best_model.pt     (theta_*)
+#     training/
+#       history.json
+#       config.yaml
+#     evaluation/
+#       results.json
+#     figures/
+#       per_task/{task}/...
+#       aggregated/...
+output:
+  base_dir: "experiments"
+
+# Phase 1: Meta-training configuration
+training:
+  # MAML hyperparameters (from experiment_bible.md)
+  inner_lr: 0.01        # alpha: inner loop learning rate
+  outer_lr: 0.001       # beta: outer loop learning rate
+  inner_steps: 1        # gradient steps per task in inner loop
+  meta_batch_size: 4    # tasks per outer update (4-8 recommended)
+
+  # Support/query split for meta-training
+  k_shot: 100           # support set size for inner loop
+  query_size: 1000      # query set size for meta-gradient
+
+  # Training loop
+  max_iterations: 10000
+  patience: 50          # iterations before validation check
+  log_interval: 10
+
+  # Network architecture
+  hidden_dims: [100, 100]
+  activation: "tanh"
+
+  # First-order approximation (faster, no second derivatives)
+  first_order: false
+
+# Phase 2: Evaluation configuration
+evaluation:
+  # Grid of conditions to test
+  k_values: [10, 50, 100, 500, 1000]
+  noise_levels: [0.0, 0.01, 0.05, 0.10]
+
+  # Fine-tuning parameters
+  fine_tune_lr: 0.01
+  max_steps: 1000
+
+  # Metrics
+  threshold: 1.0e-6     # L* for convergence detection
+  fixed_steps: [50, 100, 200]  # steps p for loss ratio computation
+
+# Phase 3: Visualization configuration
+visualization:
+  dpi: 150
+  figsize_convergence: [8, 6]
+  figsize_heatmap: [10, 6]
+  generate_per_task: true
+  generate_aggregated: true
