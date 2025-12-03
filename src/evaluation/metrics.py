@@ -176,7 +176,7 @@ class SpeedupResult:
 def speedup_ratio_dynamic(
     maml_losses: List[float],
     baseline_losses: List[float],
-    deriv_threshold: float = 1e-7,
+    deriv_threshold: float = 1e-3,
 ) -> SpeedupResult:
     """
     Compute speedup ratio using plateau detection as the primary metric.
@@ -247,7 +247,7 @@ def compute_comparison_metrics(
     maml_losses: List[float],
     baseline_losses: List[float],
     fixed_steps: List[int] = None,
-    deriv_threshold: float = 1e-7,
+    deriv_threshold: float = 1e-3,
     maml_holdout_losses: List[float] = None,
     baseline_holdout_losses: List[float] = None,
 ) -> ComparisonMetrics:

@@ -175,6 +175,9 @@ def plot_train_holdout_convergence(
     baseline_holdout = np.array(baseline_holdout)
     steps = np.arange(len(maml_train))
 
+    # Compute overall minimum holdout loss for reference line
+    min_holdout_loss = min(maml_holdout.min(), baseline_holdout.min())
+
     # Build legend labels with sample sizes
     train_label = f'Train (K={k_shot})' if k_shot is not None else 'Train'
     holdout_label = f'Holdout (n={holdout_size})' if holdout_size is not None else 'Holdout'
@@ -217,6 +220,17 @@ def plot_train_holdout_convergence(
     ax2.set_title('Baseline (θ₀)')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
+
+    # Draw thin horizontal line at overall minimum holdout loss (spans both subplots)
+    min_line_color = 'gray'
+    min_line_alpha = 0.7
+    min_linewidth = 0.8
+    ax1.axhline(y=min_holdout_loss, color=min_line_color, linewidth=min_linewidth, alpha=min_line_alpha)
+    ax2.axhline(y=min_holdout_loss, color=min_line_color, linewidth=min_linewidth, alpha=min_line_alpha)
+    ax2.annotate(f'min: {min_holdout_loss:.2e}',
+                 xy=(steps[-1], min_holdout_loss),
+                 fontsize=7, color=min_line_color, alpha=min_line_alpha,
+                 va='bottom', ha='right')
 
     fig.suptitle(title)
     plt.tight_layout()

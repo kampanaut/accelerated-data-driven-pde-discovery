@@ -33,7 +33,7 @@ evaluation:
   k_values: [10, 50, 100, 500, 1000]     # Support set sizes
   noise_levels: [0.0, 0.01, 0.05, 0.10]  # 0%, 1%, 5%, 10% noise
   fine_tune_lr: 0.001
-  max_steps: 500 # Just 20 steps
+  max_steps: 1000 # Just 20 steps
   deriv_threshold: 0.0005   # Relative threshold: <0.1% change per step = plateau
   fixed_steps: [50, 100, 150, 200, 250, 300, 350, 400, 450, 500]
   holdout_size: 1500
