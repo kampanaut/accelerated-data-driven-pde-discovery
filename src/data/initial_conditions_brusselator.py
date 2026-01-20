@@ -214,7 +214,7 @@ def localized_perturbation_ic(
     mask = r < patch_radius
 
     # Add perturbations only inside the patch
-    n_perturbed = np.sum(mask)
+    n_perturbed = int(np.sum(mask))
     A[mask] += perturbation_amplitude * A_star * (2 * rng.random(n_perturbed) - 1)
     B[mask] += perturbation_amplitude * B_star * (2 * rng.random(n_perturbed) - 1)
 
@@ -231,6 +231,184 @@ def localized_perturbation_ic(
         'perturbation_amplitude': perturbation_amplitude,
         'patch_center': patch_center,
         'patch_radius': patch_radius,
+        'seed': seed
+    }
+
+    return A, B, params
+
+
+def multi_patch_perturbation_ic(
+    k1: float,
+    k2: float,
+    perturbation_amplitude: float,
+    n_patches: int,
+    patch_radius: float,
+    x: np.ndarray,
+    y: np.ndarray,
+    seed: Optional[int] = None
+) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    Multiple localized perturbation patches at random locations.
+
+    Analogous to multi_vortex in NS: tests how patterns nucleate from
+    multiple spatially separated seeds and interact as they grow.
+
+    Args:
+        k1, k2: Reaction parameters
+        perturbation_amplitude: Amplitude inside each patch
+        n_patches: Number of circular patches to place
+        patch_radius: Radius of each patch
+        x, y: Coordinate arrays
+        seed: Random seed
+
+    Returns:
+        (A, B, params_dict)
+    """
+    rng = np.random.default_rng(seed)
+
+    # Steady state values
+    A_star = k1
+    B_star = k2 / k1
+
+    # Create meshgrid
+    X, Y = np.meshgrid(x, y)
+    ny, nx = X.shape
+    Lx, Ly = x[-1] - x[0], y[-1] - y[0]
+
+    # Start at exact steady state
+    A = np.full((ny, nx), A_star)
+    B = np.full((ny, nx), B_star)
+
+    # Generate random patch centers (avoid edges)
+    margin = patch_radius * 1.5
+    patch_centers = []
+
+    for _ in range(n_patches):
+        cx = rng.uniform(x[0] + margin, x[-1] - margin)
+        cy = rng.uniform(y[0] + margin, y[-1] - margin)
+        patch_centers.append((cx, cy))
+
+    # Apply perturbations in each patch
+    for cx, cy in patch_centers:
+        r = np.sqrt((X - cx)**2 + (Y - cy)**2)
+        mask = r < patch_radius
+
+        n_perturbed = int(np.sum(mask))
+        A[mask] += perturbation_amplitude * A_star * (2 * rng.random(n_perturbed) - 1)
+        B[mask] += perturbation_amplitude * B_star * (2 * rng.random(n_perturbed) - 1)
+
+    # Ensure non-negative
+    A = np.maximum(A, 1e-6)
+    B = np.maximum(B, 1e-6)
+
+    params = {
+        'type': 'multi_patch_perturbation',
+        'k1': k1,
+        'k2': k2,
+        'A_star': A_star,
+        'B_star': B_star,
+        'perturbation_amplitude': perturbation_amplitude,
+        'n_patches': n_patches,
+        'patch_radius': patch_radius,
+        'patch_centers': patch_centers,
+        'seed': seed
+    }
+
+    return A, B, params
+
+
+def gradient_perturbation_ic(
+    k1: float,
+    k2: float,
+    gradient_amplitude: float,
+    n_modes: int,
+    x: np.ndarray,
+    y: np.ndarray,
+    seed: Optional[int] = None
+) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """
+    Sinusoidal gradient perturbations on steady state.
+
+    Unlike random noise ICs, this creates structured spatial variation
+    with specific wavelengths. Tests whether the network can handle
+    ICs that may bias toward certain pattern modes.
+
+    The perturbation is a sum of random sinusoidal modes:
+        δA = Σ a_i * sin(k_xi * x + k_yi * y + φ_i)
+
+    Args:
+        k1, k2: Reaction parameters
+        gradient_amplitude: Amplitude of gradient perturbation (fraction of steady state)
+        n_modes: Number of sinusoidal modes to superimpose
+        x, y: Coordinate arrays
+        seed: Random seed
+
+    Returns:
+        (A, B, params_dict)
+    """
+    rng = np.random.default_rng(seed)
+
+    # Steady state values
+    A_star = k1
+    B_star = k2 / k1
+
+    # Create meshgrid
+    X, Y = np.meshgrid(x, y)
+    ny, nx = X.shape
+    Lx, Ly = x[-1] - x[0], y[-1] - y[0]
+
+    # Initialize perturbations
+    delta_A = np.zeros((ny, nx))
+    delta_B = np.zeros((ny, nx))
+
+    # Generate random modes
+    modes = []
+    for _ in range(n_modes):
+        # Random wavenumbers (1-4 wavelengths across domain)
+        n_waves_x = rng.integers(1, 5)
+        n_waves_y = rng.integers(1, 5)
+        kx = 2 * np.pi * n_waves_x / Lx
+        ky = 2 * np.pi * n_waves_y / Ly
+
+        # Random phases and amplitudes
+        phase_A = rng.uniform(0, 2 * np.pi)
+        phase_B = rng.uniform(0, 2 * np.pi)
+        amp_A = rng.uniform(0.5, 1.5)  # Relative amplitude variation
+        amp_B = rng.uniform(0.5, 1.5)
+
+        delta_A += amp_A * np.sin(kx * X + ky * Y + phase_A)
+        delta_B += amp_B * np.sin(kx * X + ky * Y + phase_B)
+
+        modes.append({
+            'n_waves_x': int(n_waves_x),
+            'n_waves_y': int(n_waves_y),
+            'phase_A': phase_A,
+            'phase_B': phase_B,
+            'amp_A': amp_A,
+            'amp_B': amp_B
+        })
+
+    # Normalize and scale
+    delta_A = delta_A / n_modes * gradient_amplitude * A_star
+    delta_B = delta_B / n_modes * gradient_amplitude * B_star
+
+    # Apply to steady state
+    A = A_star + delta_A
+    B = B_star + delta_B
+
+    # Ensure non-negative
+    A = np.maximum(A, 1e-6)
+    B = np.maximum(B, 1e-6)
+
+    params = {
+        'type': 'gradient_perturbation',
+        'k1': k1,
+        'k2': k2,
+        'A_star': A_star,
+        'B_star': B_star,
+        'gradient_amplitude': gradient_amplitude,
+        'n_modes': n_modes,
+        'modes': modes,
         'seed': seed
     }
 
@@ -288,6 +466,34 @@ def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tupl
             perturbation_amplitude=ic_config.get('perturbation_amplitude', 0.10),
             patch_center=tuple(ic_config.get('patch_center', default_center)),
             patch_radius=ic_config.get('patch_radius', default_radius),
+            x=x,
+            y=y,
+            seed=seed
+        )
+
+    elif ic_type == 'multi_patch_perturbation':
+        # Default to 3 patches distributed across domain
+        Lx, Ly = x[-1], y[-1]
+        n_patches = ic_config.get('n_patches', 3)
+        default_radius = min(Lx, Ly) / 8
+
+        return multi_patch_perturbation_ic(
+            k1=k1,
+            k2=k2,
+            perturbation_amplitude=ic_config.get('perturbation_amplitude', 0.10),
+            n_patches=n_patches,
+            patch_radius=ic_config.get('patch_radius', default_radius),
+            x=x,
+            y=y,
+            seed=seed
+        )
+
+    elif ic_type == 'gradient_perturbation':
+        return gradient_perturbation_ic(
+            k1=k1,
+            k2=k2,
+            gradient_amplitude=ic_config.get('gradient_amplitude', 0.15),
+            n_modes=ic_config.get('n_modes', 2),
             x=x,
             y=y,
             seed=seed

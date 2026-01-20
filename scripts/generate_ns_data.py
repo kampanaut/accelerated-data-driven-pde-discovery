@@ -9,14 +9,26 @@ This script:
 5. Saves data and visualizations
 
 Usage:
-    python scripts/generate_ns_data.py --config configs/gaussian_sweep.yaml
+    python scripts/generate_ns_data.py --config configs/ic_train.yaml
+    python scripts/generate_ns_data.py --config configs/ic_train.yaml --gpu --workers 8
 """
 
-import numpy as np
 import sys
+import os
+from pathlib import Path
+
+# Default to CPU for stability (PhiFlow iterative solvers diverge more on GPU)
+# Use --gpu to opt into GPU execution
+if '--gpu' in sys.argv:
+    sys.argv.remove('--gpu')
+    # Clear JAX_PLATFORMS to let JAX auto-detect GPU
+    os.environ.pop('JAX_PLATFORMS', None)
+else:
+    os.environ['JAX_PLATFORMS'] = 'cpu'
+
+import numpy as np
 import argparse
 import yaml
-from pathlib import Path
 from datetime import datetime
 
 # Add src to path
@@ -378,11 +390,132 @@ def _write_generated_params(f, params, indent=2):
         f.write(f"{prefix}{params}\n")
 
 
+def process_single_ic(args_tuple):
+    """
+    Worker function for multiprocessing Pool.
+
+    Processes a single IC configuration, including retry logic for divergence.
+
+    Args:
+        args_tuple: (ic_config, simulation_params, data_dir, ic_idx, total_count, x, y)
+
+    Returns:
+        (status, ic_name, error_msg, retry_count)
+        status: 'success', 'skipped', or 'failed'
+    """
+    ic_config, simulation_params, data_dir, ic_idx, total_count, x, y = args_tuple
+
+    ic_name = ic_config.get('name', f'ic_{ic_idx}')
+
+    # Check if already generated
+    output_file = Path(data_dir) / f"{ic_name}.npz"
+    if output_file.exists():
+        return ('skipped', ic_name, None, 0)
+
+    # Check for task-specific viscosity override
+    raw_nu = ic_config.get('nu', simulation_params['nu'])
+
+    if isinstance(raw_nu, list):
+        if len(raw_nu) != 2:
+            return ('failed', ic_name, f"nu as list must have 2 elements, got {len(raw_nu)}", 0)
+        rng = np.random.default_rng(ic_config.get('seed'))
+        task_nu = rng.uniform(raw_nu[0], raw_nu[1])
+    else:
+        task_nu = raw_nu
+
+    task_sim_params = simulation_params.copy()
+    task_sim_params['nu'] = task_nu
+
+    # Retry loop for divergence
+    max_retries = 800
+    base_seed = ic_config.get('seed', None)
+
+    for attempt in range(max_retries):
+        ic_config_attempt = ic_config.copy()
+        if base_seed is not None:
+            ic_config_attempt['seed'] = base_seed + attempt * 1000
+
+        try:
+            # Create initial condition
+            u_init, v_init, generated_params = create_ic_from_config(ic_config_attempt, x, y)
+
+            # Wrap IC for solver
+            ic_params_for_solver = {
+                'type': 'custom',
+                'u_init': u_init,
+                'v_init': v_init,
+            }
+
+            # Solve Navier-Stokes
+            results = solve_navier_stokes_with_params(ic_params_for_solver, task_sim_params)
+
+            velocity_history = results['velocity_history']
+            times = results['times']
+            x_result = results['x']
+            y_result = results['y']
+
+            # Compute derivatives and format as training data
+            training_data = generate_training_samples(velocity_history, times, x_result, y_result)
+
+            # Validate data for silent divergence
+            max_magnitude = 1e6
+            for key in ['u', 'v', 'u_t', 'v_t']:
+                if key in training_data:
+                    max_val = np.abs(training_data[key]).max()
+                    if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
+                        raise ValueError(f"Silent divergence: {key} has max magnitude {max_val:.2e}")
+
+            # Save data
+            ic_config_to_save = ic_config.copy()
+            ic_config_to_save['seed_used'] = ic_config_attempt.get('seed')
+            ic_config_to_save['retry_attempt'] = attempt
+
+            np.savez(
+                output_file,
+                **training_data,
+                ic_config=ic_config_to_save,
+                simulation_params=task_sim_params,
+                nu_used=task_nu,
+                x=x_result,
+                y=y_result,
+            )
+
+            # Save metadata
+            save_metadata_txt(output_file, ic_config_to_save, task_sim_params, training_data, generated_params, success=True)
+
+            # Generate visualization
+            vis_file = Path(data_dir) / f"{ic_name}_evolution.png"
+            dx = x_result[1] - x_result[0]
+            dy = y_result[1] - y_result[0]
+            save_flow_evolution(velocity_history, times, x_result, y_result, dx, dy, str(vis_file), n_snapshots=4)
+
+            return ('success', ic_name, None, attempt)
+
+        except Diverged:
+            if attempt < max_retries - 1:
+                continue
+            return ('failed', ic_name, f"Diverged after {max_retries} attempts", max_retries)
+
+        except ValueError as e:
+            if "divergence" in str(e).lower() and attempt < max_retries - 1:
+                continue
+            if attempt >= max_retries - 1:
+                return ('failed', ic_name, str(e), max_retries)
+            continue
+
+        except Exception as e:
+            return ('failed', ic_name, f"{type(e).__name__}: {str(e)}", attempt)
+
+    return ('failed', ic_name, f"Exhausted {max_retries} retries", max_retries)
+
+
 def main():
     """Main data generation workflow."""
     parser = argparse.ArgumentParser(description='Generate Navier-Stokes training data')
     parser.add_argument('--config', type=str, required=True,
                         help='Path to YAML configuration file')
+    parser.add_argument('--workers', type=int, default=1,
+                        help='Number of parallel workers (default: 1 = serial)')
     args = parser.parse_args()
 
     # Load configuration
@@ -431,161 +564,192 @@ def main():
     x = np.linspace(0, domain_size[0], resolution[1])
     y = np.linspace(0, domain_size[1], resolution[0])
 
-    # Track success/failure
-    successful = 0
-    failed_tasks = []
+    # Build work items for parallel processing
+    work_items = [
+        (ic_config, simulation_params, str(data_dir), ic_idx, len(ic_configs), x, y)
+        for ic_idx, ic_config in enumerate(ic_configs)
+    ]
 
-    # Process each IC
-    skipped_existing = 0
-    for ic_idx, ic_config in enumerate(ic_configs):
-        ic_name = ic_config.get('name', f'ic_{ic_idx}')
+    # Process ICs (parallel or serial)
+    if args.workers > 1:
+        # Parallel execution with compact progress output
+        # Use 'spawn' context to avoid JAX fork() deadlock
+        import multiprocessing
+        ctx = multiprocessing.get_context('spawn')
 
-        # Check if already generated
-        output_file = data_dir / f"{ic_name}.npz"
-        if output_file.exists():
-            print(f"[{ic_idx + 1}/{len(ic_configs)}] {ic_name}: already exists, skipping")
-            skipped_existing += 1
-            successful += 1  # Count as successful since it exists
-            continue
+        print(f"\nUsing {args.workers} parallel workers")
 
-        print(f"\n{'-' * 60}")
-        print(f"IC {ic_idx + 1}/{len(ic_configs)}: {ic_name} ({ic_config['type']})")
-        print(f"{'-' * 60}")
+        results = []
+        with ctx.Pool(args.workers) as pool:
+            for result in pool.imap_unordered(process_single_ic, work_items):
+                status, name, error, retries = result
+                results.append(result)
 
-        # Check for task-specific viscosity override
-        # nu can be a fixed value or a [min, max] range for uniform sampling
-        raw_nu = ic_config.get('nu', simulation_params['nu'])
+                # Progress reporting
+                done = len(results)
+                if status == 'success':
+                    retry_info = f" (after {retries} retries)" if retries > 0 else ""
+                    print(f"[{done}/{len(ic_configs)}] {name}: ✓ SUCCESS{retry_info}")
+                elif status == 'skipped':
+                    print(f"[{done}/{len(ic_configs)}] {name}: ⊘ SKIPPED (exists)")
+                else:
+                    print(f"[{done}/{len(ic_configs)}] {name}: ✗ FAILED - {error}")
 
-        if isinstance(raw_nu, list):
-            if len(raw_nu) != 2:
-                raise ValueError(
-                    f"Task '{ic_name}': nu as list must have exactly 2 elements [min, max], "
-                    f"got {len(raw_nu)} elements: {raw_nu}"
-                )
-            # Sample nu uniformly from range, using task seed for reproducibility
-            rng = np.random.default_rng(ic_config.get('seed'))
-            task_nu = rng.uniform(raw_nu[0], raw_nu[1])
-            print(f"Sampled ν = {task_nu:.6f} from range {raw_nu}")
-        else:
-            task_nu = raw_nu
-            print(f"Using ν = {task_nu:.6f}")
+        # Tally results
+        successful = sum(1 for r in results if r[0] in ('success', 'skipped'))
+        skipped_existing = sum(1 for r in results if r[0] == 'skipped')
+        failed_tasks = [(r[1], r[2]) for r in results if r[0] == 'failed']
 
-        # Create task-specific simulation params
-        task_sim_params = simulation_params.copy()
-        task_sim_params['nu'] = task_nu
+    else:
+        # Serial execution with original verbose output
+        successful = 0
+        failed_tasks = []
+        skipped_existing = 0
 
-        # Retry loop for divergence
-        max_retries = 800
-        base_seed = ic_config.get('seed', None)
+        for ic_idx, ic_config in enumerate(ic_configs):
+            ic_name = ic_config.get('name', f'ic_{ic_idx}')
 
-        for attempt in range(max_retries):
-            # Modify seed for retry attempts
-            ic_config_attempt = ic_config.copy()
-            if base_seed is not None:
-                ic_config_attempt['seed'] = base_seed + attempt * 1000
-                if attempt > 0:
-                    print(f"  Retry {attempt}/{max_retries-1} with seed {ic_config_attempt['seed']}")
-
-            try:
-                # Create initial condition
-                u_init, v_init, generated_params = create_ic_from_config(ic_config_attempt, x, y)
-
-                # Wrap IC for solver
-                ic_params_for_solver = {
-                    'type': 'custom',
-                    'u_init': u_init,
-                    'v_init': v_init,
-                }
-
-                # Solve Navier-Stokes with task-specific parameters
-                results = solve_navier_stokes_with_params(ic_params_for_solver, task_sim_params)
-
-                # Extract results
-                velocity_history = results['velocity_history']
-                times = results['times']
-                x_result = results['x']
-                y_result = results['y']
-
-                # Compute derivatives and format as training data
-                training_data = generate_training_samples(velocity_history, times, x_result, y_result)
-
-                # Validate data for silent divergence (solver completed but values exploded)
-                max_magnitude = 1e6
-                diverged_silently = False
-                for key in ['u', 'v', 'u_t', 'v_t']:
-                    if key in training_data:
-                        max_val = np.abs(training_data[key]).max()
-                        if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
-                            diverged_silently = True
-                            print(f"\n⚠️  Silent divergence detected: {key} has max magnitude {max_val:.2e}")
-                            break
-
-                if diverged_silently:
-                    raise ValueError(f"Silent divergence: max values exceed {max_magnitude:.0e}")
-
-                # Save data (use original ic_config but note actual seed used)
-                output_file = data_dir / f"{ic_name}.npz"
-                ic_config_to_save = ic_config.copy()
-                ic_config_to_save['seed_used'] = ic_config_attempt.get('seed')
-                ic_config_to_save['retry_attempt'] = attempt
-
-                np.savez(
-                    output_file,
-                    **training_data,
-                    ic_config=ic_config_to_save,
-                    simulation_params=task_sim_params,
-                    nu_used=task_nu,
-                    x=x_result,
-                    y=y_result,
-                )
-                print(f"\nSaved training data to {output_file}")
-                if attempt > 0:
-                    print(f"  (succeeded after {attempt} retries, final seed: {ic_config_attempt.get('seed')})")
-
-                # Save metadata
-                save_metadata_txt(output_file, ic_config_to_save, task_sim_params, training_data, generated_params, success=True)
-
-                # Generate visualization
-                vis_file = data_dir / f"{ic_name}_evolution.png"
-                dx = x_result[1] - x_result[0]
-                dy = y_result[1] - y_result[0]
-                save_flow_evolution(velocity_history, times, x_result, y_result, dx, dy, str(vis_file), n_snapshots=4)
-
-                # Print sample data
-                print(f"\nSample data point (first sample):")
-                print(f"  u={training_data['u'][0]:.4f}, v={training_data['v'][0]:.4f}")
-                print(f"  u_x={training_data['u_x'][0]:.4f}, u_y={training_data['u_y'][0]:.4f}")
-                print(f"  u_t={training_data['u_t'][0]:.4f}, v_t={training_data['v_t'][0]:.4f}")
-                print(f"  t={training_data['t'][0]:.4f}, x={training_data['x_coord'][0]:.4f}, y={training_data['y_coord'][0]:.4f}")
-
+            # Check if already generated
+            output_file = data_dir / f"{ic_name}.npz"
+            if output_file.exists():
+                print(f"[{ic_idx + 1}/{len(ic_configs)}] {ic_name}: already exists, skipping")
+                skipped_existing += 1
                 successful += 1
-                break  # Success, exit retry loop
+                continue
 
-            except Diverged as e:
-                if attempt < max_retries - 1:
-                    print(f"  ⚠️  Diverged, will retry...")
+            print(f"\n{'-' * 60}")
+            print(f"IC {ic_idx + 1}/{len(ic_configs)}: {ic_name} ({ic_config['type']})")
+            print(f"{'-' * 60}")
+
+            # Check for task-specific viscosity override
+            raw_nu = ic_config.get('nu', simulation_params['nu'])
+
+            if isinstance(raw_nu, list):
+                if len(raw_nu) != 2:
+                    raise ValueError(
+                        f"Task '{ic_name}': nu as list must have exactly 2 elements [min, max], "
+                        f"got {len(raw_nu)} elements: {raw_nu}"
+                    )
+                rng = np.random.default_rng(ic_config.get('seed'))
+                task_nu = rng.uniform(raw_nu[0], raw_nu[1])
+                print(f"Sampled ν = {task_nu:.6f} from range {raw_nu}")
+            else:
+                task_nu = raw_nu
+                print(f"Using ν = {task_nu:.6f}")
+
+            task_sim_params = simulation_params.copy()
+            task_sim_params['nu'] = task_nu
+
+            # Retry loop for divergence
+            max_retries = 800
+            base_seed = ic_config.get('seed', None)
+
+            for attempt in range(max_retries):
+                ic_config_attempt = ic_config.copy()
+                if base_seed is not None:
+                    ic_config_attempt['seed'] = base_seed + attempt * 1000
+                    if attempt > 0:
+                        print(f"  Retry {attempt}/{max_retries-1} with seed {ic_config_attempt['seed']}")
+
+                try:
+                    # Create initial condition
+                    u_init, v_init, generated_params = create_ic_from_config(ic_config_attempt, x, y)
+
+                    ic_params_for_solver = {
+                        'type': 'custom',
+                        'u_init': u_init,
+                        'v_init': v_init,
+                    }
+
+                    # Solve Navier-Stokes
+                    results = solve_navier_stokes_with_params(ic_params_for_solver, task_sim_params)
+
+                    velocity_history = results['velocity_history']
+                    times = results['times']
+                    x_result = results['x']
+                    y_result = results['y']
+
+                    # Compute derivatives and format as training data
+                    training_data = generate_training_samples(velocity_history, times, x_result, y_result)
+
+                    # Validate data for silent divergence
+                    max_magnitude = 1e6
+                    diverged_silently = False
+                    for key in ['u', 'v', 'u_t', 'v_t']:
+                        if key in training_data:
+                            max_val = np.abs(training_data[key]).max()
+                            if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
+                                diverged_silently = True
+                                print(f"\n⚠️  Silent divergence detected: {key} has max magnitude {max_val:.2e}")
+                                break
+
+                    if diverged_silently:
+                        raise ValueError(f"Silent divergence: max values exceed {max_magnitude:.0e}")
+
+                    # Save data
+                    ic_config_to_save = ic_config.copy()
+                    ic_config_to_save['seed_used'] = ic_config_attempt.get('seed')
+                    ic_config_to_save['retry_attempt'] = attempt
+
+                    np.savez(
+                        output_file,
+                        **training_data,
+                        ic_config=ic_config_to_save,
+                        simulation_params=task_sim_params,
+                        nu_used=task_nu,
+                        x=x_result,
+                        y=y_result,
+                    )
+                    print(f"\nSaved training data to {output_file}")
+                    if attempt > 0:
+                        print(f"  (succeeded after {attempt} retries, final seed: {ic_config_attempt.get('seed')})")
+
+                    # Save metadata
+                    save_metadata_txt(output_file, ic_config_to_save, task_sim_params, training_data, generated_params, success=True)
+
+                    # Generate visualization
+                    vis_file = data_dir / f"{ic_name}_evolution.png"
+                    dx = x_result[1] - x_result[0]
+                    dy = y_result[1] - y_result[0]
+                    save_flow_evolution(velocity_history, times, x_result, y_result, dx, dy, str(vis_file), n_snapshots=4)
+
+                    # Print sample data
+                    print(f"\nSample data point (first sample):")
+                    print(f"  u={training_data['u'][0]:.4f}, v={training_data['v'][0]:.4f}")
+                    print(f"  u_x={training_data['u_x'][0]:.4f}, u_y={training_data['u_y'][0]:.4f}")
+                    print(f"  u_t={training_data['u_t'][0]:.4f}, v_t={training_data['v_t'][0]:.4f}")
+                    print(f"  t={training_data['t'][0]:.4f}, x={training_data['x_coord'][0]:.4f}, y={training_data['y_coord'][0]:.4f}")
+
+                    successful += 1
+                    break  # Success, exit retry loop
+
+                except Diverged as e:
+                    if attempt < max_retries - 1:
+                        print(f"  ⚠️  Diverged, will retry...")
+                        continue
+                    print(f"\n⚠️  SKIPPED: {ic_name}")
+                    print(f"    Reason: IC violated incompressibility too severely for pressure projection")
+                    print(f"    Details: {str(e)}")
+                    print(f"    (failed all {max_retries} attempts)")
+                    failed_tasks.append((ic_name, str(e)))
+
+                except ValueError as e:
+                    if "divergence" in str(e).lower() and attempt < max_retries - 1:
+                        print(f"  ⚠️  {str(e)}, will retry...")
+                        continue
+                    if attempt >= max_retries - 1:
+                        print(f"\n⚠️  SKIPPED: {ic_name}")
+                        print(f"    Reason: {str(e)}")
+                        print(f"    (failed all {max_retries} attempts)")
+                        failed_tasks.append((ic_name, str(e)))
+                        break
                     continue
-                print(f"\n⚠️  SKIPPED: {ic_name}")
-                print(f"    Reason: IC violated incompressibility too severely for pressure projection")
-                print(f"    Details: {str(e)}")
-                print(f"    (failed all {max_retries} attempts)")
-                failed_tasks.append((ic_name, "diverged", str(e)))
 
-            except ValueError as e:
-                if attempt < max_retries - 1:
-                    print(f"  ⚠️  {str(e)}, will retry...")
-                    continue
-                print(f"\n⚠️  SKIPPED: {ic_name}")
-                print(f"    Reason: {str(e)}")
-                print(f"    (failed all {max_retries} attempts)")
-                failed_tasks.append((ic_name, "diverged", str(e)))
-
-            except Exception as e:
-                # Don't retry unexpected errors
-                print(f"\n⚠️  SKIPPED: {ic_name}")
-                print(f"    Unexpected error: {type(e).__name__}: {str(e)}")
-                failed_tasks.append((ic_name, "error", str(e)))
-                break
+                except Exception as e:
+                    print(f"\n⚠️  SKIPPED: {ic_name}")
+                    print(f"    Unexpected error: {type(e).__name__}: {str(e)}")
+                    failed_tasks.append((ic_name, str(e)))
+                    break
 
     print(f"\n{'=' * 60}")
     print("Data generation complete!")
@@ -598,10 +762,8 @@ def main():
 
     if failed_tasks:
         print(f"\n⚠️  Failed tasks:")
-        for name, reason, details in failed_tasks:
-            print(f"    - {name}: {reason}")
-            if reason == "diverged":
-                print(f"      (IC violated incompressibility too severely)")
+        for name, error in failed_tasks:
+            print(f"    - {name}: {error}")
 
     if successful > 0:
         print(f"\nEach successful dataset contains:")
