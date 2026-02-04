@@ -7,6 +7,11 @@ Graph types from experiment_bible.md:
 - Graph 3: Speedup heatmap (K × Noise grid)
 - Graph 4: Loss ratio heatmap (K × Noise grid)
 - Graph 5: Convergence plot (loss vs steps)
+- Graph 6: Train-holdout convergence (train vs holdout loss)
+- Graph 7: Jacobian histogram (coefficient distribution)
+- Graph 8: Coefficient error heatmap (K × Noise grid)
+- Graph 9: Coefficient vs K (recovery vs sample size)
+- Graph 10: Coefficient vs Noise (recovery vs noise level)
 
 Each function supports both single-task and aggregated (mean ± std) modes.
 """
@@ -586,6 +591,321 @@ def plot_sample_efficiency(
 
     # Log scale x-axis often useful for K values
     ax.set_xscale('log')
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
+
+    return fig
+
+
+# =============================================================================
+# Jacobian / Coefficient Recovery Graphs (Graph 7-10)
+# =============================================================================
+
+def plot_jacobian_histogram(
+    maml_coeff_1: np.ndarray,
+    maml_coeff_2: np.ndarray,
+    baseline_coeff_1: np.ndarray,
+    baseline_coeff_2: np.ndarray,
+    coeff_true: float,
+    title: str,
+    coeff_name: str = 'nu',
+    coeff_1_label: str = 'u-eq',
+    coeff_2_label: str = 'v-eq',
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (14, 5),
+    dpi: int = 150,
+) -> plt.Figure:
+    """
+    Graph 7: Jacobian Distribution Histogram.
+
+    Side-by-side histograms showing the distribution of learned diffusion
+    coefficients compared to true value. Overlays estimates from u-equation
+    and v-equation to reveal if they learned different coefficients.
+
+    Args:
+        maml_coeff_1: MAML coefficient from first equation (nu_u or D_u)
+        maml_coeff_2: MAML coefficient from second equation (nu_v or D_v)
+        baseline_coeff_1: Baseline coefficient from first equation
+        baseline_coeff_2: Baseline coefficient from second equation
+        coeff_true: True coefficient value
+        title: Plot title
+        coeff_name: Coefficient name ('nu', 'D_u', or 'D_v') for axis labels
+        coeff_1_label: Label for first equation (default 'u-eq')
+        coeff_2_label: Label for second equation (default 'v-eq')
+        save_path: Path to save figure
+        figsize: Figure size
+        dpi: Resolution
+
+    Returns:
+        matplotlib Figure object
+    """
+    # Symbol map for display
+    symbol = {'nu': 'ν', 'D_u': 'D_u', 'D_v': 'D_v'}.get(coeff_name, coeff_name)
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    fig.suptitle(f"{title}\nTrue {symbol} = {coeff_true:.6f}", fontsize=12)
+
+    # Compute stats for each
+    maml_1_mean, maml_1_std = np.mean(maml_coeff_1), np.std(maml_coeff_1)
+    maml_2_mean, maml_2_std = np.mean(maml_coeff_2), np.std(maml_coeff_2)
+    baseline_1_mean, baseline_1_std = np.mean(baseline_coeff_1), np.std(baseline_coeff_1)
+    baseline_2_mean, baseline_2_std = np.mean(baseline_coeff_2), np.std(baseline_coeff_2)
+
+    # Compute shared bin edges for fair comparison
+    all_maml = np.concatenate([maml_coeff_1, maml_coeff_2])
+    all_baseline = np.concatenate([baseline_coeff_1, baseline_coeff_2])
+    maml_bins = np.linspace(np.min(all_maml), np.max(all_maml), 51)
+    baseline_bins = np.linspace(np.min(all_baseline), np.max(all_baseline), 51)
+
+    # MAML histogram - overlay both equations
+    ax = axes[0]
+    ax.hist(maml_coeff_1, bins=maml_bins, alpha=0.6, color='blue', edgecolor='darkblue',
+            label=f'{coeff_1_label}: μ={maml_1_mean:.4f}, σ={maml_1_std:.4f}')
+    ax.hist(maml_coeff_2, bins=maml_bins, alpha=0.6, color='cyan', edgecolor='darkcyan',
+            label=f'{coeff_2_label}: μ={maml_2_mean:.4f}, σ={maml_2_std:.4f}')
+    ax.axvline(coeff_true, color='red', linestyle='--', linewidth=2, label=f'True {symbol} = {coeff_true:.4f}')
+    ax.axvline(maml_1_mean, color='blue', linestyle='-', linewidth=1.5, alpha=0.8)
+    ax.axvline(maml_2_mean, color='darkcyan', linestyle='-', linewidth=1.5, alpha=0.8)
+    maml_overall_mean = (maml_1_mean + maml_2_mean) / 2
+    ax.axvline(maml_overall_mean, color='black', linestyle='--', linewidth=2, alpha=0.9,
+               label=f'combined: μ={maml_overall_mean:.4f}')
+    ax.set_xlabel(f'{symbol} Jacobian entries')
+    ax.set_ylabel('Count')
+    ax.set_title(f'MAML (θ*)')
+    ax.legend(fontsize=8)
+
+    # Baseline histogram - overlay both equations
+    ax = axes[1]
+    ax.hist(baseline_coeff_1, bins=baseline_bins, alpha=0.6, color='orange', edgecolor='darkorange',
+            label=f'{coeff_1_label}: μ={baseline_1_mean:.4f}, σ={baseline_1_std:.4f}')
+    ax.hist(baseline_coeff_2, bins=baseline_bins, alpha=0.6, color='yellow', edgecolor='gold',
+            label=f'{coeff_2_label}: μ={baseline_2_mean:.4f}, σ={baseline_2_std:.4f}')
+    ax.axvline(coeff_true, color='red', linestyle='--', linewidth=2, label=f'True {symbol} = {coeff_true:.4f}')
+    ax.axvline(baseline_1_mean, color='darkorange', linestyle='-', linewidth=1.5, alpha=0.8)
+    ax.axvline(baseline_2_mean, color='gold', linestyle='-', linewidth=1.5, alpha=0.8)
+    baseline_overall_mean = (baseline_1_mean + baseline_2_mean) / 2
+    ax.axvline(baseline_overall_mean, color='black', linestyle='--', linewidth=2, alpha=0.9,
+               label=f'combined: μ={baseline_overall_mean:.4f}')
+    ax.set_xlabel(f'{symbol} Jacobian entries')
+    ax.set_ylabel('Count')
+    ax.set_title(f'Baseline (θ₀)')
+    ax.legend(fontsize=8)
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
+
+    return fig
+
+
+def plot_coefficient_heatmap(
+    k_values: List[int],
+    noise_levels: List[float],
+    maml_errors: np.ndarray,
+    baseline_errors: np.ndarray,
+    title: str,
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (14, 5),
+    dpi: int = 150,
+    maml_std: Optional[np.ndarray] = None,
+    baseline_std: Optional[np.ndarray] = None,
+) -> plt.Figure:
+    """
+    Graph 8: Coefficient Error Heatmap.
+
+    K x Noise grid showing coefficient recovery error (%) for both methods.
+
+    Args:
+        k_values: List of K values
+        noise_levels: List of noise levels
+        maml_errors: MAML coefficient errors (%), shape (len(noise), len(k))
+        baseline_errors: Baseline coefficient errors (%), same shape
+        title: Plot title
+        save_path: Path to save figure
+        figsize: Figure size
+        dpi: Resolution
+        maml_std: Standard deviation of MAML errors (aggregated mode)
+        baseline_std: Standard deviation of baseline errors (aggregated mode)
+
+    Returns:
+        matplotlib Figure object
+    """
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    fig.suptitle(title, fontsize=12)
+
+    # Format noise levels as percentages
+    noise_labels = [f'{n*100:.0f}%' for n in noise_levels]
+    k_labels = [str(k) for k in k_values]
+
+    for ax, errors, std, method, cmap in [
+        (axes[0], maml_errors, maml_std, 'MAML (θ*)', 'Blues'),
+        (axes[1], baseline_errors, baseline_std, 'Baseline (θ₀)', 'Oranges'),
+    ]:
+        im = ax.imshow(errors, cmap=cmap, aspect='auto')
+
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Coefficient Error (%)')
+
+        # Set ticks
+        ax.set_xticks(range(len(k_values)))
+        ax.set_xticklabels(k_labels)
+        ax.set_yticks(range(len(noise_levels)))
+        ax.set_yticklabels(noise_labels)
+
+        ax.set_xlabel('K (support set size)')
+        ax.set_ylabel('Noise level')
+        ax.set_title(method)
+
+        # Add text annotations
+        for i in range(len(noise_levels)):
+            for j in range(len(k_values)):
+                val = errors[i, j]
+                if std is not None:
+                    text = f'{val:.1f}%\n±{std[i, j]:.1f}'
+                else:
+                    text = f'{val:.1f}%'
+                ax.text(j, i, text, ha='center', va='center', fontsize=8)
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
+
+    return fig
+
+
+def plot_coefficient_vs_k(
+    k_values: List[int],
+    maml_errors: List[float],
+    baseline_errors: List[float],
+    title: str,
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (8, 6),
+    dpi: int = 150,
+    maml_std: Optional[List[float]] = None,
+    baseline_std: Optional[List[float]] = None,
+) -> plt.Figure:
+    """
+    Graph 9: Coefficient Recovery vs K.
+
+    Shows how coefficient recovery error changes with support set size.
+
+    Args:
+        k_values: List of K values
+        maml_errors: MAML coefficient errors (%) for each K
+        baseline_errors: Baseline coefficient errors (%) for each K
+        title: Plot title
+        save_path: Path to save figure
+        figsize: Figure size
+        dpi: Resolution
+        maml_std: Standard deviation for MAML (aggregated mode)
+        baseline_std: Standard deviation for baseline (aggregated mode)
+
+    Returns:
+        matplotlib Figure object
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Plot MAML
+    ax.plot(k_values, maml_errors, 'b-o', label='MAML (θ*)', linewidth=2, markersize=8)
+    if maml_std is not None:
+        maml_errors_arr = np.array(maml_errors)
+        maml_std_arr = np.array(maml_std)
+        ax.fill_between(k_values, maml_errors_arr - maml_std_arr, maml_errors_arr + maml_std_arr,
+                        color='blue', alpha=0.2)
+
+    # Plot baseline
+    ax.plot(k_values, baseline_errors, 'r-s', label='Baseline (θ₀)', linewidth=2, markersize=8)
+    if baseline_std is not None:
+        baseline_errors_arr = np.array(baseline_errors)
+        baseline_std_arr = np.array(baseline_std)
+        ax.fill_between(k_values, baseline_errors_arr - baseline_std_arr, baseline_errors_arr + baseline_std_arr,
+                        color='red', alpha=0.2)
+
+    ax.set_xlabel('K (support set size)')
+    ax.set_ylabel('Coefficient Error (%)')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_xscale('log')
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
+
+    return fig
+
+
+def plot_coefficient_vs_noise(
+    noise_levels: List[float],
+    maml_errors: List[float],
+    baseline_errors: List[float],
+    title: str,
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (8, 6),
+    dpi: int = 150,
+    maml_std: Optional[List[float]] = None,
+    baseline_std: Optional[List[float]] = None,
+) -> plt.Figure:
+    """
+    Graph 10: Coefficient Recovery vs Noise.
+
+    Shows how coefficient recovery error changes with noise level.
+
+    Args:
+        noise_levels: List of noise levels (0.0, 0.01, 0.05, 0.10)
+        maml_errors: MAML coefficient errors (%) for each noise level
+        baseline_errors: Baseline coefficient errors (%) for each noise level
+        title: Plot title
+        save_path: Path to save figure
+        figsize: Figure size
+        dpi: Resolution
+        maml_std: Standard deviation for MAML (aggregated mode)
+        baseline_std: Standard deviation for baseline (aggregated mode)
+
+    Returns:
+        matplotlib Figure object
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Convert noise to percentage for x-axis
+    noise_pct = [n * 100 for n in noise_levels]
+
+    # Plot MAML
+    ax.plot(noise_pct, maml_errors, 'b-o', label='MAML (θ*)', linewidth=2, markersize=8)
+    if maml_std is not None:
+        maml_errors_arr = np.array(maml_errors)
+        maml_std_arr = np.array(maml_std)
+        ax.fill_between(noise_pct, maml_errors_arr - maml_std_arr, maml_errors_arr + maml_std_arr,
+                        color='blue', alpha=0.2)
+
+    # Plot baseline
+    ax.plot(noise_pct, baseline_errors, 'r-s', label='Baseline (θ₀)', linewidth=2, markersize=8)
+    if baseline_std is not None:
+        baseline_errors_arr = np.array(baseline_errors)
+        baseline_std_arr = np.array(baseline_std)
+        ax.fill_between(noise_pct, baseline_errors_arr - baseline_std_arr, baseline_errors_arr + baseline_std_arr,
+                        color='red', alpha=0.2)
+
+    ax.set_xlabel('Noise Level (%)')
+    ax.set_ylabel('Coefficient Error (%)')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
 

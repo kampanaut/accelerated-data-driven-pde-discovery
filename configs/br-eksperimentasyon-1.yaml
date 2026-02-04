@@ -1,0 +1,41 @@
+# Brusselator MAML experiment - using partial dataset (39/60 tasks)
+# Split: 30 train / 6 val / 7 test
+
+experiment:
+  name: "br-maml-1"
+  pde_type: br
+  seed: 42
+  device: "cuda"
+
+data:
+  meta_train_dir: "data/datasets/br_train-1"
+  meta_val_dir: "data/datasets/br_val-1"
+  meta_test_dir: "data/datasets/br_test-1"
+
+training:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  inner_steps: 5
+  meta_batch_size: 20
+  k_shot: 100
+  query_size: 1000
+  max_iterations: 1000
+  patience: 60
+  log_interval: 1
+  hidden_dims: [100, 100]
+  activation: "tanh"
+  first_order: false
+
+evaluation:
+  k_values: [10, 50, 100, 500, 1000]
+  noise_levels: [0.0, 0.01, 0.05, 0.10]
+  fine_tune_lr: 0.001
+  max_steps: 1000
+  deriv_threshold: 0.0005
+  fixed_steps: [50, 100, 150, 200, 250, 300, 350, 400, 450, 500]
+  holdout_size: 1500
+
+visualization:
+  dpi: 300
+  generate_per_task: true
+  generate_aggregated: true

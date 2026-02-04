@@ -32,7 +32,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
-from src.training.task_loader import MetaLearningDataLoader, NavierStokesTask
+from src.training.task_loader import MetaLearningDataLoader, PDETask, NavierStokesTask, BrusselatorTask
+from src.evaluation.jacobian import analyze_jacobian_ns, analyze_jacobian_br
 
 
 def load_config(config_path: Path) -> dict:
@@ -142,7 +143,7 @@ def fine_tune(
 
 
 def evaluate_task(
-    task: NavierStokesTask,
+    task: PDETask,
     theta_star: PDEOperatorNetwork,
     theta_0: PDEOperatorNetwork,
     k_values: List[int],
@@ -153,6 +154,7 @@ def evaluate_task(
     seed: int,
     clean_targets: bool = False,
     holdout_size: int = 1000,
+    pde_type: str = 'ns',
 ) -> Dict[str, Any]:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -175,7 +177,7 @@ def evaluate_task(
     """
     task_result = {
         'task_name': task.task_name,
-        'nu': task.nu,
+        'coefficients': task.diffusion_coeffs,  # {'nu': X} for NS, {'D_u': X, 'D_v': Y} for BR
         'ic_type': task.ic_config.get('type', 'unknown'),
         'n_samples': task.n_samples,
     }
@@ -230,6 +232,38 @@ def evaluate_task(
                 curves[f"{combo_key}/baseline_train_losses"] = np.array(baseline_result['train_losses'])
                 curves[f"{combo_key}/baseline_holdout_losses"] = np.array(baseline_result['holdout_losses'])
 
+                # Jacobian analysis for coefficient recovery (uses task.diffusion_coeffs property)
+                coeffs = task.diffusion_coeffs
+                if pde_type == 'ns':
+                    maml_jacobian = analyze_jacobian_ns(
+                        maml_model, holdout_features, coeffs['nu'], device=device
+                    )
+                    baseline_jacobian = analyze_jacobian_ns(
+                        baseline_model, holdout_features, coeffs['nu'], device=device
+                    )
+                elif pde_type == 'br':
+                    maml_jacobian = analyze_jacobian_br(
+                        maml_model, holdout_features, D_u_true=coeffs['D_u'], D_v_true=coeffs['D_v'], device=device
+                    )
+                    baseline_jacobian = analyze_jacobian_br(
+                        baseline_model, holdout_features, D_u_true=coeffs['D_u'], D_v_true=coeffs['D_v'], device=device
+                    )
+                else:
+                    raise ValueError(f"Unknown pde_type: {pde_type}. Use 'ns' or 'br'.")
+
+                # Store Jacobian distributions in curves
+                for key, val in maml_jacobian.to_npz_dict(f"{combo_key}/maml").items():
+                    curves[key] = val
+                for key, val in baseline_jacobian.to_npz_dict(f"{combo_key}/baseline").items():
+                    curves[key] = val
+
+                # Store coefficient recovery summary in task_result
+                coeff_key = f"coefficient_recovery_{combo_key}"
+                task_result[coeff_key] = {
+                    'maml': maml_jacobian.to_dict(),
+                    'baseline': baseline_jacobian.to_dict(),
+                }
+
                 maml_train_final = maml_result['train_losses'][-1]
                 maml_holdout_final = maml_result['holdout_losses'][-1]
                 baseline_train_final = baseline_result['train_losses'][-1]
@@ -239,6 +273,12 @@ def evaluate_task(
                 flag = " !!!" if maml_holdout_final > baseline_holdout_final else ""
                 print(f"MAML(train={maml_train_final:.2e}, holdout={maml_holdout_final:.2e}) "
                       f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag}")
+
+                # Track if ANY combo has MAML worse for this task (for directory naming)
+                if 'any_maml_worse' not in task_result:
+                    task_result['any_maml_worse'] = False
+                if maml_holdout_final > baseline_holdout_final:
+                    task_result['any_maml_worse'] = True
 
             except FileNotFoundError as e:
                 # Noisy file doesn't exist for this task
@@ -295,12 +335,14 @@ def main():
     # =========================================================================
     seed = config['experiment'].get('seed', 42)
     device = config['experiment'].get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
+    pde_type = config['experiment'].get('pde_type', 'ns')  # 'ns' or 'br'
 
     torch.manual_seed(seed)
     np.random.seed(seed)
 
     print(f"Device: {device}")
     print(f"Seed: {seed}")
+    print(f"PDE type: {pde_type}")
     print()
 
     # =========================================================================
@@ -350,8 +392,12 @@ def main():
     test_dir = Path(config['data']['meta_test_dir'])
     if not test_dir.exists():
         raise FileNotFoundError(f"Meta-test directory not found: {test_dir}")
+    
+    if not (pde_type == "br" or pde_type == "nr"):
+        raise ValueError("Invalid value for pde_type, must be 'br' or 'ns'")
 
-    test_loader = MetaLearningDataLoader(test_dir)
+    task_class = BrusselatorTask if pde_type == 'br' else NavierStokesTask
+    test_loader = MetaLearningDataLoader(test_dir, task_class=task_class)
     print()
     print(f"Meta-test tasks: {len(test_loader)}")
     print()
@@ -381,7 +427,7 @@ def main():
     # =========================================================================
     target_modes = [
         ("noisy_targets", False),   # Noisy features + noisy targets
-        ("clean_targets", True),    # Noisy features + clean targets
+        # ("clean_targets", True),    # Noisy features + clean targets
     ]
 
     for mode_name, clean_targets in target_modes:
@@ -432,6 +478,7 @@ def main():
                 seed=seed + task_idx * 10000,
                 clean_targets=clean_targets,
                 holdout_size=holdout_size,
+                pde_type=pde_type,
             )
 
             # Save task metadata to results dict

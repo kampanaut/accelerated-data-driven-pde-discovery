@@ -1,0 +1,88 @@
+# Brusselator Test Configuration
+# 30 tasks total:
+#   - 15 in-distribution (sanity check, similar to train/val)
+#   - 15 out-of-distribution (transfer test)
+#
+# OOD categories:
+#   - k2 = 6.75 (near threshold, hexagonal spots regime)
+#   - k2 = 8.0 (far from threshold, strong stripes)
+#   - D_A = 1.0 or 4.0 (different diffusion ratios, alters pattern wavelength)
+
+simulation:
+  name: "br_test-1"
+
+  D_A: 2.0
+  D_B: 16.0
+  k1: 4.5
+  k2: 7.0
+
+  domain_size: [50.0, 50.0]
+  resolution: [64, 64]
+
+  t_end: 200.0
+  dt: 0.01
+  save_interval: 2.0
+
+output:
+  base_dir: "data/datasets"
+
+initial_conditions:
+  # ==========================================
+  # IN-DISTRIBUTION (15 tasks)
+  # Same param ranges as train/val
+  # ==========================================
+
+  # perturbed_uniform - 5 tasks
+  - {name: "br_test_pu_k68_001", type: "perturbed_uniform", k2: 6.8, perturbation_amplitude: 0.05, seed: 40001}
+  - {name: "br_test_pu_k70_001", type: "perturbed_uniform", k2: 7.0, perturbation_amplitude: 0.05, seed: 40002}
+  - {name: "br_test_pu_k72_001", type: "perturbed_uniform", k2: 7.2, perturbation_amplitude: 0.05, seed: 40003}
+  - {name: "br_test_pu_k74_001", type: "perturbed_uniform", k2: 7.4, perturbation_amplitude: 0.05, seed: 40004}
+  - {name: "br_test_pu_k76_001", type: "perturbed_uniform", k2: 7.6, perturbation_amplitude: 0.05, seed: 40005}
+
+  # random_smooth - 5 tasks
+  - {name: "br_test_rs_k69_001", type: "random_smooth", k2: 6.9, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 41001}
+  - {name: "br_test_rs_k71_001", type: "random_smooth", k2: 7.1, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 41002}
+  - {name: "br_test_rs_k73_001", type: "random_smooth", k2: 7.3, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 41003}
+  - {name: "br_test_rs_k75_001", type: "random_smooth", k2: 7.5, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 41004}
+  - {name: "br_test_rs_k77_001", type: "random_smooth", k2: 7.7, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 41005}
+
+  # localized_perturbation - 5 tasks
+  - {name: "br_test_lp_k68_001", type: "localized_perturbation", k2: 6.8, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 42001}
+  - {name: "br_test_lp_k70_001", type: "localized_perturbation", k2: 7.0, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 42002}
+  - {name: "br_test_lp_k72_001", type: "localized_perturbation", k2: 7.2, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 42003}
+  - {name: "br_test_lp_k74_001", type: "localized_perturbation", k2: 7.4, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 42004}
+  - {name: "br_test_lp_k76_001", type: "localized_perturbation", k2: 7.6, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 42005}
+
+  # ==========================================
+  # OUT-OF-DISTRIBUTION (15 tasks)
+  # ==========================================
+
+  # --- Near threshold (k2 = 6.75, hexagonal spots) - 3 tasks ---
+  - {name: "br_ood_hex_pu_001", type: "perturbed_uniform", k2: 6.75, perturbation_amplitude: 0.05, seed: 50001}
+  - {name: "br_ood_hex_rs_001", type: "random_smooth", k2: 6.75, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 50002}
+  - {name: "br_ood_hex_lp_001", type: "localized_perturbation", k2: 6.75, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 50003}
+
+  # --- Far from threshold (k2 = 8.0, strong stripes) - 3 tasks ---
+  - {name: "br_ood_stripe_pu_001", type: "perturbed_uniform", k2: 8.0, perturbation_amplitude: 0.05, seed: 51001}
+  - {name: "br_ood_stripe_rs_001", type: "random_smooth", k2: 8.0, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 51002}
+  - {name: "br_ood_stripe_lp_001", type: "localized_perturbation", k2: 8.0, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 51003}
+
+  # --- Low diffusion ratio (D_A = 1.0, D_B = 16, ratio = 0.0625) - 3 tasks ---
+  # Turing threshold shifts: k2_c = (1 + 4.5 * sqrt(1/16))^2 ≈ 3.5
+  # Using k2 = 7.0 (well above new threshold)
+  - {name: "br_ood_lowD_pu_001", type: "perturbed_uniform", k2: 7.0, D_A: 1.0, perturbation_amplitude: 0.05, seed: 52001}
+  - {name: "br_ood_lowD_rs_001", type: "random_smooth", k2: 7.0, D_A: 1.0, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 52002}
+  - {name: "br_ood_lowD_lp_001", type: "localized_perturbation", k2: 7.0, D_A: 1.0, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 52003}
+
+  # --- High diffusion ratio (D_A = 4.0, D_B = 16, ratio = 0.25) - 3 tasks ---
+  # Turing threshold shifts: k2_c = (1 + 4.5 * sqrt(4/16))^2 ≈ 12.25
+  # Using k2 = 13.0 (above new threshold, patterns should still form)
+  - {name: "br_ood_highD_pu_001", type: "perturbed_uniform", k2: 13.0, D_A: 4.0, perturbation_amplitude: 0.05, seed: 53001}
+  - {name: "br_ood_highD_rs_001", type: "random_smooth", k2: 13.0, D_A: 4.0, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 53002}
+  - {name: "br_ood_highD_lp_001", type: "localized_perturbation", k2: 13.0, D_A: 4.0, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 53003}
+
+  # --- Extreme near-threshold (k2 = 6.72, barely unstable) - 3 tasks ---
+  # Very slow pattern formation, tests if network can still learn dynamics
+  - {name: "br_ood_edge_pu_001", type: "perturbed_uniform", k2: 6.72, perturbation_amplitude: 0.05, seed: 54001}
+  - {name: "br_ood_edge_rs_001", type: "random_smooth", k2: 6.72, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 54002}
+  - {name: "br_ood_edge_lp_001", type: "localized_perturbation", k2: 6.72, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 54003}

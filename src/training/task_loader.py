@@ -1,23 +1,24 @@
 """
-Task data loaders for MAML-based meta-learning on Navier-Stokes PDEs.
+Task data loaders for MAML-based meta-learning on PDEs.
 
 Loads pre-computed derivative data from .npz files and provides support/query
-splits for meta-learning.
+splits for meta-learning. Supports both Navier-Stokes and Brusselator PDEs.
 """
 
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Type
 import numpy as np
 
 
-class NavierStokesTask:
+class PDETask(ABC):
     """
-    Single meta-learning task representing one Navier-Stokes initial condition.
+    Abstract base class for PDE discovery tasks.
 
     Each task contains:
     - Features: (u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy)
     - Targets: (u_t, v_t)
-    - Metadata: IC configuration, viscosity, etc.
+    - Metadata: IC configuration, diffusion coefficients, etc.
 
     The task provides support/query splits for MAML:
     - Support set (D): K samples for inner loop adaptation
@@ -37,7 +38,7 @@ class NavierStokesTask:
         self.npz_path = Path(npz_path)
         data = np.load(npz_path, allow_pickle=True)
 
-        # Stack features (10 input features)
+        # Common feature loading (same 10 inputs for both PDEs)
         self.features = np.stack([
             data['u'].flatten(),
             data['v'].flatten(),
@@ -51,20 +52,32 @@ class NavierStokesTask:
             data['v_yy'].flatten(),
         ], axis=1)  # Shape: (N_samples, 10)
 
-        # Stack targets (2 output features)
+        # Common target loading (same 2 outputs for both PDEs)
         self.targets = np.stack([
             data['u_t'].flatten(),
             data['v_t'].flatten(),
         ], axis=1)  # Shape: (N_samples, 2)
 
-        # Extract metadata
+        # Common metadata
         self.ic_config = data['ic_config'].item() if 'ic_config' in data else {}
-        self.nu = float(data['nu_used']) if 'nu_used' in data else None
+        self.simulation_params = data['simulation_params'].item() if 'simulation_params' in data else {}
         self.n_samples = len(self.features)
         self.task_name = self.npz_path.stem
 
-        # Strict validation - fail loudly on corrupted data
+        # Subclass-specific parameter extraction
+        self._extract_pde_params(data)
         self._validate()
+
+    @abstractmethod
+    def _extract_pde_params(self, data) -> None:
+        """Extract PDE-specific coefficients from data."""
+        pass
+
+    @property
+    @abstractmethod
+    def diffusion_coeffs(self) -> dict:
+        """Return diffusion coefficients as dict. Keys: 'nu' (NS) or 'D_u', 'D_v' (BR)."""
+        pass
 
     def _validate(self):
         """
@@ -214,18 +227,61 @@ class NavierStokesTask:
     def __repr__(self) -> str:
         """String representation of task."""
         return (
-            f"NavierStokesTask(\n"
+            f"{self.__class__.__name__}(\n"
             f"  name='{self.task_name}',\n"
             f"  samples={self.n_samples:,},\n"
-            f"  nu={self.nu:.6f if self.nu else 'unknown'},\n"
+            f"  diffusion_coeffs={self.diffusion_coeffs},\n"
             f"  ic_type='{self.ic_config.get('type', 'unknown')}'\n"
             f")"
         )
 
 
+class NavierStokesTask(PDETask):
+    """
+    Navier-Stokes PDE task.
+
+    Diffusion coefficient: nu (kinematic viscosity)
+    """
+
+    def _extract_pde_params(self, data) -> None:
+        """Extract viscosity from data."""
+        self.nu = float(data['nu_used']) if 'nu_used' in data else None
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        """Return viscosity as diffusion coefficient."""
+        return {'nu': self.nu}
+
+
+class BrusselatorTask(PDETask):
+    """
+    Brusselator PDE task.
+
+    Diffusion coefficients: D_u (for species A/u), D_v (for species B/v)
+    Reaction coefficients: k1, k2
+    """
+
+    def _extract_pde_params(self, data) -> None:
+        """Extract diffusion and reaction coefficients from data."""
+        # Brusselator stores coefficients in simulation_params or ic_config
+        self.D_u = self.simulation_params.get('D_A') or self.ic_config.get('D_A_used')
+        self.D_v = self.simulation_params.get('D_B') or self.ic_config.get('D_B_used')
+        self.k1 = self.simulation_params.get('k1')
+        self.k2 = self.simulation_params.get('k2')
+
+        # Convert to float if present
+        self.D_u = float(self.D_u) if self.D_u is not None else None
+        self.D_v = float(self.D_v) if self.D_v is not None else None
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        """Return diffusion coefficients for both species."""
+        return {'D_u': self.D_u, 'D_v': self.D_v}
+
+
 class MetaLearningDataLoader:
     """
-    Manages multiple Navier-Stokes tasks for MAML meta-learning.
+    Manages multiple PDE tasks for MAML meta-learning.
 
     Loads all .npz files from a directory, each representing a different task
     (typically different initial conditions with the same PDE parameters).
@@ -236,18 +292,25 @@ class MetaLearningDataLoader:
     - Splitting tasks into train/test sets
     """
 
-    def __init__(self, data_dir: Path, task_pattern: str = "*.npz"):
+    def __init__(
+        self,
+        data_dir: Path,
+        task_class: Type[PDETask] = NavierStokesTask,
+        task_pattern: str = "*.npz"
+    ):
         """
         Initialize data loader by loading all tasks from directory.
 
         Args:
             data_dir: Directory containing .npz task files
+            task_class: Task class to instantiate (NavierStokesTask or BrusselatorTask)
             task_pattern: Glob pattern for task files (default: "*.npz")
 
         Raises:
             ValueError: If no .npz files found or if any task is corrupted
         """
         self.data_dir = Path(data_dir)
+        self.task_class = task_class
         npz_files = sorted(self.data_dir.glob(task_pattern))
 
         # Exclude noisy files (they're loaded on-demand by get_support_query_split)
@@ -257,14 +320,14 @@ class MetaLearningDataLoader:
             raise ValueError(f"No .npz files found in {data_dir} with pattern '{task_pattern}'")
 
         # Load all tasks, skipping invalid ones
-        self.tasks: List[NavierStokesTask] = []
+        self.tasks: List[PDETask] = []
         self.task_names: List[str] = []
         skipped: List[str] = []
 
         print(f"Loading tasks from {data_dir}...")
         for f in npz_files:
             try:
-                task = NavierStokesTask(f)
+                task = self.task_class(f)
                 self.tasks.append(task)
                 self.task_names.append(f.stem)
             except ValueError as e:
@@ -277,10 +340,11 @@ class MetaLearningDataLoader:
 
         print(f"\n✓ Loaded {len(self.tasks)} tasks:")
         for name, task in zip(self.task_names, self.tasks):
-            nu_str = f"ν={task.nu:.6f}" if task.nu else "ν=unknown"
-            print(f"  {name:30s}  {task.n_samples:>7,} samples  {nu_str}")
+            coeffs = task.diffusion_coeffs
+            coeff_str = ", ".join(f"{k}={v:.6f}" if v else f"{k}=unknown" for k, v in coeffs.items())
+            print(f"  {name:30s}  {task.n_samples:>7,} samples  {coeff_str}")
 
-    def sample_batch(self, n_tasks: int, seed: Optional[int] = None) -> List[NavierStokesTask]:
+    def sample_batch(self, n_tasks: int, seed: Optional[int] = None) -> List[PDETask]:
         """
         Sample random subset of tasks for meta-training batch.
 
@@ -292,7 +356,7 @@ class MetaLearningDataLoader:
             seed: Random seed for reproducibility
 
         Returns:
-            List of n_tasks NavierStokesTask objects
+            List of n_tasks PDETask objects
 
         Raises:
             ValueError: If n_tasks exceeds number of available tasks
@@ -306,7 +370,7 @@ class MetaLearningDataLoader:
         indices = rng.choice(len(self.tasks), size=n_tasks, replace=False)
         return [self.tasks[i] for i in indices]
 
-    def get_task_by_name(self, name: str) -> NavierStokesTask:
+    def get_task_by_name(self, name: str) -> PDETask:
         """
         Get specific task by name for evaluation.
 
@@ -314,7 +378,7 @@ class MetaLearningDataLoader:
             name: Task name (stem of .npz filename)
 
         Returns:
-            NavierStokesTask object
+            PDETask object
 
         Raises:
             ValueError: If task name not found
@@ -331,7 +395,7 @@ class MetaLearningDataLoader:
         self,
         test_ratio: float = 0.2,
         seed: Optional[int] = None
-    ) -> Tuple[List[NavierStokesTask], List[NavierStokesTask]]:
+    ) -> Tuple[List[PDETask], List[PDETask]]:
         """
         Split tasks into train/test sets for meta-learning.
 
@@ -372,6 +436,7 @@ class MetaLearningDataLoader:
         return (
             f"MetaLearningDataLoader(\n"
             f"  data_dir='{self.data_dir}',\n"
+            f"  task_class={self.task_class.__name__},\n"
             f"  num_tasks={len(self.tasks)},\n"
             f"  task_names={self.task_names[:3] + ['...'] if len(self.tasks) > 3 else self.task_names}\n"
             f")"

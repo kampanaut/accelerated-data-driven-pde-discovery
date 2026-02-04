@@ -41,6 +41,11 @@ from src.evaluation.graphs import (
     plot_loss_ratio_heatmap,
     plot_noise_robustness,
     plot_sample_efficiency,
+    # Graph 7-10: Jacobian analysis graphs
+    plot_jacobian_histogram,
+    plot_coefficient_heatmap,
+    plot_coefficient_vs_k,
+    plot_coefficient_vs_noise,
 )
 
 
@@ -101,7 +106,7 @@ def load_results_with_curves(results_path: Path) -> dict:
                 combo_keys = set()
                 for key in task_curves.keys():
                     # Keys are like "k_100_noise_0.01/maml_train_losses"
-                    combo_key = key.rsplit('/', 1)[0]
+                    combo_key = key.rsplit('/')[0]
                     combo_keys.add(combo_key)
 
                 for combo_key in combo_keys:
@@ -110,11 +115,28 @@ def load_results_with_curves(results_path: Path) -> dict:
                         'baseline_losses': task_curves.get(f"{combo_key}/baseline_train_losses"),
                         'maml_holdout_losses': task_curves.get(f"{combo_key}/maml_holdout_losses"),
                         'baseline_holdout_losses': task_curves.get(f"{combo_key}/baseline_holdout_losses"),
+                        # Jacobian data (Graph 7-10) - JVP-based combined estimates
+                        # NS: nu_u, nu_v, (per-point Laplacian coefficient estimates)
+                        'maml_nu_u': task_curves.get(f"{combo_key}/maml/nu_u"),
+                        'maml_nu_v': task_curves.get(f"{combo_key}/maml/nu_v"),
+                        'maml_nu_true': task_curves.get(f"{combo_key}/maml/nu_true"),
+                        'baseline_nu_u': task_curves.get(f"{combo_key}/baseline/nu_u"),
+                        'baseline_nu_v': task_curves.get(f"{combo_key}/baseline/nu_v"),
+                        'baseline_nu_true': task_curves.get(f"{combo_key}/baseline/nu_true"),
+                        # BR: D_u, D_v (per-point diffusion coefficient estimates)
+                        'maml_D_u': task_curves.get(f"{combo_key}/maml/D_u"),
+                        'maml_D_v': task_curves.get(f"{combo_key}/maml/D_v"),
+                        'maml_D_u_true': task_curves.get(f"{combo_key}/maml/D_u_true"),
+                        'maml_D_v_true': task_curves.get(f"{combo_key}/maml/D_v_true"),
+                        'baseline_D_u': task_curves.get(f"{combo_key}/baseline/D_u"),
+                        'baseline_D_v': task_curves.get(f"{combo_key}/baseline/D_v"),
+                        'baseline_D_u_true': task_curves.get(f"{combo_key}/baseline/D_u_true"),
+                        'baseline_D_v_true': task_curves.get(f"{combo_key}/baseline/D_v_true"),
                     }
-                    # Convert to lists for compatibility with existing code
-                    for k, v in task_data['results'][combo_key].items():
-                        if v is not None:
-                            task_data['results'][combo_key][k] = v.tolist()
+                    # Convert loss arrays to lists for compatibility with existing code
+                    # Keep Jacobian/coefficient arrays as numpy for plotting
+                    for k, v in filter(lambda x: "_losses" in x[0], task_data['results'][combo_key].items()):
+                        task_data['results'][combo_key][k] = v.tolist()
 
         # Old format: curves already in 'results' dict (backwards compatibility)
         # Nothing to do - already in correct format
@@ -181,11 +203,26 @@ def generate_per_task_figures(
     dpi: int,
     deriv_threshold: float = 1e-7,
     holdout_size: int = 1000,
+    pde_type: str = 'ns',
 ) -> None:
     """Generate all per-task figures."""
 
+    # Coefficient configuration based on PDE type
+    # Each tuple: (coeff_name, combined_key, recovered_key, true_key)
+    # combined_key: the per-point Laplacian coefficient estimates from JVP
+    if pde_type == 'ns':
+        coeff_configs = [
+            ('nu_u', 'nu_v', 'nu_true'),
+        ]
+    else:  # 'br'
+        coeff_configs = [
+            ('D_u', 'D_v', 'D_u_true'),
+            ('D_v', 'D_u', 'D_v_true'),
+        ]
+
     for task_name, task_data in results['tasks'].items():
-        task_dir = output_dir / 'per_task' / task_name
+        suffix = "_WORSE" if task_data.get('any_maml_worse', False) else ""
+        task_dir = output_dir / 'per_task' / f"{task_name}{suffix}"
         task_dir.mkdir(parents=True, exist_ok=True)
 
         task_metrics = all_metrics.get(task_name, {})
@@ -356,6 +393,210 @@ def generate_per_task_figures(
                     )
                     plt.close(fig)
 
+        # ---------------------------------------------------------------------
+        # Graph 7: Jacobian histogram (one per K × noise)
+        # Uses JVP-based per-equation coefficient estimates (nu_u, nu_v overlaid)
+        # ---------------------------------------------------------------------
+        for k in k_values:
+            for noise in noise_levels:
+                combo_key = f"k_{k}_noise_{noise:.2f}"
+                combo_data = task_results.get(combo_key, {})
+
+                if pde_type == 'ns':
+                    # NS: overlay nu_u and nu_v
+                    coeff_true = combo_data.get('maml_nu_true')
+                    if coeff_true is None:
+                        continue
+
+                    maml_1 = combo_data.get('maml_nu_u')
+                    maml_2 = combo_data.get('maml_nu_v')
+                    baseline_1 = combo_data.get('baseline_nu_u')
+                    baseline_2 = combo_data.get('baseline_nu_v')
+
+                    if any(x is None for x in [maml_1, maml_2, baseline_1, baseline_2]):
+                        continue
+                    if any(len(x) == 0 for x in [maml_1, maml_2, baseline_1, baseline_2]):
+                        continue
+
+                    fig = plot_jacobian_histogram(
+                        maml_coeff_1=maml_1,
+                        maml_coeff_2=maml_2,
+                        baseline_coeff_1=baseline_1,
+                        baseline_coeff_2=baseline_2,
+                        coeff_true=float(coeff_true[0]),
+                        title=f"{task_name}: ν Laplacian Coefficient (K={k}, noise={noise:.0%})",
+                        coeff_name='nu',
+                        coeff_1_label='u-eq (ν_u)',
+                        coeff_2_label='v-eq (ν_v)',
+                        save_path=task_dir / f"jacobian_histogram_nu_k{k}_noise{noise:.2f}.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
+                else:  # Brusselator - separate histograms for D_u and D_v
+                    # D_u histogram
+                    coeff_true_u = combo_data.get('maml_D_u_true')
+                    maml_Du = combo_data.get('maml_D_u')
+                    baseline_Du = combo_data.get('baseline_D_u')
+
+                    if coeff_true_u is not None and maml_Du is not None and baseline_Du is not None:
+                        if len(maml_Du) > 0 and len(baseline_Du) > 0:
+                            # For Brusselator, D_u only comes from u-equation, so duplicate for now
+                            fig = plot_jacobian_histogram(
+                                maml_coeff_1=maml_Du,
+                                maml_coeff_2=maml_Du,  # same (only one source)
+                                baseline_coeff_1=baseline_Du,
+                                baseline_coeff_2=baseline_Du,
+                                coeff_true=float(coeff_true_u[0]),
+                                title=f"{task_name}: D_u Coefficient (K={k}, noise={noise:.0%})",
+                                coeff_name='D_u',
+                                coeff_1_label='u-eq',
+                                coeff_2_label='u-eq',
+                                save_path=task_dir / f"jacobian_histogram_D_u_k{k}_noise{noise:.2f}.png",
+                                dpi=dpi,
+                            )
+                            plt.close(fig)
+
+                    # D_v histogram
+                    coeff_true_v = combo_data.get('maml_D_v_true')
+                    maml_Dv = combo_data.get('maml_D_v')
+                    baseline_Dv = combo_data.get('baseline_D_v')
+
+                    if coeff_true_v is not None and maml_Dv is not None and baseline_Dv is not None:
+                        if len(maml_Dv) > 0 and len(baseline_Dv) > 0:
+                            fig = plot_jacobian_histogram(
+                                maml_coeff_1=maml_Dv,
+                                maml_coeff_2=maml_Dv,
+                                baseline_coeff_1=baseline_Dv,
+                                baseline_coeff_2=baseline_Dv,
+                                coeff_true=float(coeff_true_v[0]),
+                                title=f"{task_name}: D_v Coefficient (K={k}, noise={noise:.0%})",
+                                coeff_name='D_v',
+                                coeff_1_label='v-eq',
+                                coeff_2_label='v-eq',
+                                save_path=task_dir / f"jacobian_histogram_D_v_k{k}_noise{noise:.2f}.png",
+                                dpi=dpi,
+                            )
+                            plt.close(fig)
+
+        # ---------------------------------------------------------------------
+        # Graph 8: Coefficient error heatmap (one per coefficient)
+        # ---------------------------------------------------------------------
+        for coeff_name_main, coeff_name_secondary, true_key in coeff_configs:
+            maml_errors = np.full((len(noise_levels), len(k_values)), np.nan)
+            baseline_errors = np.full((len(noise_levels), len(k_values)), np.nan)
+            has_jacobian_data = False
+
+            for i, noise in enumerate(noise_levels):
+                for j, k in enumerate(k_values):
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
+                    combo_data = task_results.get(combo_key, {})
+
+
+                    maml_recovered = (np.mean(combo_data.get(f'maml_{coeff_name_main}')) + np.mean(combo_data.get(f'maml_{coeff_name_secondary}')))/2
+                    baseline_recovered = (np.mean(combo_data.get(f'baseline_{coeff_name_main}')) + np.mean(combo_data.get(f'baseline_{coeff_name_secondary}')))/2
+                    coeff_true = combo_data.get(f'maml_{true_key}')
+
+                    if maml_recovered is not None and coeff_true is not None:
+                        has_jacobian_data = True
+                        true_val = float(coeff_true[0])
+                        if true_val != 0:
+                            maml_errors[i, j] = abs(float(maml_recovered) - true_val) / true_val * 100
+                    if baseline_recovered is not None and coeff_true is not None:
+                        true_val = float(coeff_true[0])
+                        if true_val != 0:
+                            baseline_errors[i, j] = abs(float(baseline_recovered) - true_val) / true_val * 100
+
+            if has_jacobian_data:
+                fig = plot_coefficient_heatmap(
+                    k_values=k_values,
+                    noise_levels=noise_levels,
+                    maml_errors=maml_errors,
+                    baseline_errors=baseline_errors,
+                    title=f"{task_name}: {coeff_name_main} Recovery Error (%)",
+                    save_path=task_dir / f"coefficient_heatmap_{coeff_name_main}.png",
+                    dpi=dpi,
+                )
+                plt.close(fig)
+
+        # ---------------------------------------------------------------------
+        # Graph 9: Coefficient recovery vs K (one per noise level, per coefficient)
+        # ---------------------------------------------------------------------
+        for coeff_name_main, coeff_name_secondary, true_key in coeff_configs:
+            for noise in noise_levels:
+                maml_err_list = []
+                baseline_err_list = []
+                valid_k = []
+
+                for k in k_values:
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
+                    combo_data = task_results.get(combo_key, {})
+
+                    maml_recovered = (np.mean(combo_data.get(f'maml_{coeff_name_main}')) + np.mean(combo_data.get(f'maml_{coeff_name_secondary}')))/2
+                    baseline_recovered = (np.mean(combo_data.get(f'baseline_{coeff_name_main}')) + np.mean(combo_data.get(f'baseline_{coeff_name_secondary}')))/2
+                    coeff_true = combo_data.get(f'maml_{true_key}')
+
+                    if maml_recovered is None or baseline_recovered is None or coeff_true is None:
+                        continue
+
+                    true_val = float(coeff_true[0])
+                    if true_val == 0:
+                        continue
+
+                    maml_err_list.append(abs(float(maml_recovered) - true_val) / true_val * 100)
+                    baseline_err_list.append(abs(float(baseline_recovered) - true_val) / true_val * 100)
+                    valid_k.append(k)
+
+                if len(valid_k) >= 2:
+                    fig = plot_coefficient_vs_k(
+                        k_values=valid_k,
+                        maml_errors=maml_err_list,
+                        baseline_errors=baseline_err_list,
+                        title=f"{task_name}: {coeff_name_main} Error vs K (noise={noise:.0%})",
+                        save_path=task_dir / f"coefficient_vs_k_{coeff_name_main}_noise{noise:.2f}.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
+        # ---------------------------------------------------------------------
+        # Graph 10: Coefficient recovery vs noise (one per K, per coefficient)
+        # ---------------------------------------------------------------------
+        for coeff_name_main, coeff_name_secondary, true_key in coeff_configs:
+            for k in k_values:
+                maml_err_list = []
+                baseline_err_list = []
+                valid_noise = []
+
+                for noise in noise_levels:
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
+                    combo_data = task_results.get(combo_key, {})
+
+                    maml_recovered = (np.mean(combo_data.get(f'maml_{coeff_name_main}')) + np.mean(combo_data.get(f'maml_{coeff_name_secondary}')))/2
+                    baseline_recovered = (np.mean(combo_data.get(f'baseline_{coeff_name_main}')) + np.mean(combo_data.get(f'baseline_{coeff_name_secondary}')))/2
+                    coeff_true = combo_data.get(f'maml_{true_key}')
+
+                    if maml_recovered is None or baseline_recovered is None or coeff_true is None:
+                        continue
+
+                    true_val = float(coeff_true[0])
+                    if true_val == 0:
+                        continue
+
+                    maml_err_list.append(abs(float(maml_recovered) - true_val) / true_val * 100)
+                    baseline_err_list.append(abs(float(baseline_recovered) - true_val) / true_val * 100)
+                    valid_noise.append(noise)
+
+                if len(valid_noise) >= 2:
+                    fig = plot_coefficient_vs_noise(
+                        noise_levels=valid_noise,
+                        maml_errors=maml_err_list,
+                        baseline_errors=baseline_err_list,
+                        title=f"{task_name}: {coeff_name_main} Error vs Noise (K={k})",
+                        save_path=task_dir / f"coefficient_vs_noise_{coeff_name_main}_k{k}.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
 
 def generate_aggregated_figures(
     results: dict,
@@ -367,8 +608,22 @@ def generate_aggregated_figures(
     dpi: int,
     deriv_threshold: float = 1e-7,
     holdout_size: int = 1000,
+    pde_type: str = 'ns',
 ) -> None:
     """Generate aggregated figures (mean ± std across tasks)."""
+
+    # Coefficient configuration based on PDE type
+    # Each tuple: (coeff_name, combined_key, recovered_key, true_key)
+    # combined_key: the per-point Laplacian coefficient estimates from JVP
+    if pde_type == 'ns':
+        coeff_configs = [
+            ('nu_u', 'nu_v', 'nu_true'),
+        ]
+    else:  # 'br'
+        coeff_configs = [
+            ('D_u', 'D_v', 'D_u_true'),
+            ('D_v', 'D_u', 'D_v_true'),
+        ]
 
     agg_dir = output_dir / 'aggregated'
     agg_dir.mkdir(parents=True, exist_ok=True)
@@ -671,6 +926,279 @@ def generate_aggregated_figures(
             )
             plt.close(fig)
 
+    # -------------------------------------------------------------------------
+    # Aggregate Jacobian histograms (Graph 7) - one per K × noise
+    # Uses JVP-based per-equation coefficient estimates (nu_u, nu_v overlaid)
+    # -------------------------------------------------------------------------
+    for k in k_values:
+        for noise in noise_levels:
+            combo_key = f"k_{k}_noise_{noise:.2f}"
+
+            if pde_type == 'ns':
+                # Collect nu_u and nu_v separately across all tasks
+                maml_1_all, maml_2_all = [], []
+                baseline_1_all, baseline_2_all = [], []
+                coeff_true_val = None
+
+                for task_name in task_names:
+                    task_data = results['tasks'][task_name]['results'].get(combo_key, {})
+
+                    if coeff_true_val is None:
+                        coeff_arr = task_data.get('maml_nu_true')
+                        if coeff_arr is not None:
+                            coeff_true_val = float(coeff_arr[0])
+
+                    m1 = task_data.get('maml_nu_u')
+                    m2 = task_data.get('maml_nu_v')
+                    b1 = task_data.get('baseline_nu_u')
+                    b2 = task_data.get('baseline_nu_v')
+
+                    if m1 is not None:
+                        maml_1_all.extend(m1.flatten())
+                    if m2 is not None:
+                        maml_2_all.extend(m2.flatten())
+                    if b1 is not None:
+                        baseline_1_all.extend(b1.flatten())
+                    if b2 is not None:
+                        baseline_2_all.extend(b2.flatten())
+
+                if all(len(x) > 0 for x in [maml_1_all, maml_2_all, baseline_1_all, baseline_2_all]) and coeff_true_val is not None:
+                    fig = plot_jacobian_histogram(
+                        maml_coeff_1=np.array(maml_1_all),
+                        maml_coeff_2=np.array(maml_2_all),
+                        baseline_coeff_1=np.array(baseline_1_all),
+                        baseline_coeff_2=np.array(baseline_2_all),
+                        coeff_true=coeff_true_val,
+                        title=f"Aggregated ν Laplacian Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_name='nu',
+                        coeff_1_label='u-eq (ν_u)',
+                        coeff_2_label='v-eq (ν_v)',
+                        save_path=agg_dir / f"jacobian_histogram_nu_k{k}_noise{noise:.2f}.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
+            else:  # Brusselator
+                # D_u histogram
+                maml_Du_all, baseline_Du_all = [], []
+                coeff_true_u = None
+
+                for task_name in task_names:
+                    task_data = results['tasks'][task_name]['results'].get(combo_key, {})
+                    if coeff_true_u is None:
+                        arr = task_data.get('maml_D_u_true')
+                        if arr is not None:
+                            coeff_true_u = float(arr[0])
+                    m = task_data.get('maml_D_u')
+                    b = task_data.get('baseline_D_u')
+                    if m is not None:
+                        maml_Du_all.extend(m.flatten())
+                    if b is not None:
+                        baseline_Du_all.extend(b.flatten())
+
+                if len(maml_Du_all) > 0 and len(baseline_Du_all) > 0 and coeff_true_u is not None:
+                    fig = plot_jacobian_histogram(
+                        maml_coeff_1=np.array(maml_Du_all),
+                        maml_coeff_2=np.array(maml_Du_all),
+                        baseline_coeff_1=np.array(baseline_Du_all),
+                        baseline_coeff_2=np.array(baseline_Du_all),
+                        coeff_true=coeff_true_u,
+                        title=f"Aggregated D_u Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_name='D_u',
+                        coeff_1_label='u-eq',
+                        coeff_2_label='u-eq',
+                        save_path=agg_dir / f"jacobian_histogram_D_u_k{k}_noise{noise:.2f}.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
+                # D_v histogram
+                maml_Dv_all, baseline_Dv_all = [], []
+                coeff_true_v = None
+
+                for task_name in task_names:
+                    task_data = results['tasks'][task_name]['results'].get(combo_key, {})
+                    if coeff_true_v is None:
+                        arr = task_data.get('maml_D_v_true')
+                        if arr is not None:
+                            coeff_true_v = float(arr[0])
+                    m = task_data.get('maml_D_v')
+                    b = task_data.get('baseline_D_v')
+                    if m is not None:
+                        maml_Dv_all.extend(m.flatten())
+                    if b is not None:
+                        baseline_Dv_all.extend(b.flatten())
+
+                if len(maml_Dv_all) > 0 and len(baseline_Dv_all) > 0 and coeff_true_v is not None:
+                    fig = plot_jacobian_histogram(
+                        maml_coeff_1=np.array(maml_Dv_all),
+                        maml_coeff_2=np.array(maml_Dv_all),
+                        baseline_coeff_1=np.array(baseline_Dv_all),
+                        baseline_coeff_2=np.array(baseline_Dv_all),
+                        coeff_true=coeff_true_v,
+                        title=f"Aggregated D_v Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_name='D_v',
+                        coeff_1_label='v-eq',
+                        coeff_2_label='v-eq',
+                        save_path=agg_dir / f"jacobian_histogram_D_v_k{k}_noise{noise:.2f}.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
+    # -------------------------------------------------------------------------
+    # Aggregate coefficient error heatmap (Graph 8) - one per coefficient
+    # -------------------------------------------------------------------------
+    for coeff_name_main, coeff_name_secondary, true_key in coeff_configs:
+        maml_error_stack = []
+        baseline_error_stack = []
+        has_jacobian_data = False
+
+        for task_name in task_names:
+            task_results = results['tasks'][task_name]['results']
+            maml_errors = np.full((len(noise_levels), len(k_values)), np.nan)
+            baseline_errors = np.full((len(noise_levels), len(k_values)), np.nan)
+
+            for i, noise in enumerate(noise_levels):
+                for j, k in enumerate(k_values):
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
+                    combo_data = task_results.get(combo_key, {})
+
+                    maml_recovered = (np.mean(combo_data.get(f'maml_{coeff_name_main}')) + np.mean(combo_data.get(f'maml_{coeff_name_secondary}')))/2
+                    baseline_recovered = (np.mean(combo_data.get(f'baseline_{coeff_name_main}')) + np.mean(combo_data.get(f'baseline_{coeff_name_secondary}')))/2
+                    coeff_true = combo_data.get(f'maml_{true_key}')
+
+                    if maml_recovered is not None and coeff_true is not None:
+                        has_jacobian_data = True
+                        true_val = float(coeff_true[0])
+                        if true_val != 0:
+                            maml_errors[i, j] = abs(float(maml_recovered) - true_val) / true_val * 100
+                    if baseline_recovered is not None and coeff_true is not None:
+                        true_val = float(coeff_true[0])
+                        if true_val != 0:
+                            baseline_errors[i, j] = abs(float(baseline_recovered) - true_val) / true_val * 100
+
+            maml_error_stack.append(maml_errors)
+            baseline_error_stack.append(baseline_errors)
+
+        if has_jacobian_data:
+            maml_error_mean = np.nanmean(np.array(maml_error_stack), axis=0)
+            baseline_error_mean = np.nanmean(np.array(baseline_error_stack), axis=0)
+
+            fig = plot_coefficient_heatmap(
+                k_values=k_values,
+                noise_levels=noise_levels,
+                maml_errors=maml_error_mean,
+                baseline_errors=baseline_error_mean,
+                title=f"Aggregated {coeff_name_main} Recovery Error (%, n={n_tasks} tasks)",
+                save_path=agg_dir / f"coefficient_heatmap_{coeff_name_main}.png",
+                dpi=dpi,
+            )
+            plt.close(fig)
+
+    # -------------------------------------------------------------------------
+    # Aggregate coefficient vs K (Graph 9) - one per noise level × coefficient
+    # -------------------------------------------------------------------------
+    for coeff_name_main, coeff_name_secondary, true_key in coeff_configs:
+        for noise in noise_levels:
+            maml_per_task = []
+            baseline_per_task = []
+
+            for task_name in task_names:
+                task_results = results['tasks'][task_name]['results']
+                maml_row = []
+                baseline_row = []
+
+                for k in k_values:
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
+                    combo_data = task_results.get(combo_key, {})
+
+                    maml_recovered = (np.mean(combo_data.get(f'maml_{coeff_name_main}')) + np.mean(combo_data.get(f'maml_{coeff_name_secondary}')))/2
+                    baseline_recovered = (np.mean(combo_data.get(f'baseline_{coeff_name_main}')) + np.mean(combo_data.get(f'baseline_{coeff_name_secondary}')))/2
+                    coeff_true = combo_data.get(f'maml_{true_key}')
+
+                    if maml_recovered is None or baseline_recovered is None or coeff_true is None:
+                        maml_row.append(np.nan)
+                        baseline_row.append(np.nan)
+                    else:
+                        true_val = float(coeff_true[0])
+                        if true_val == 0:
+                            maml_row.append(np.nan)
+                            baseline_row.append(np.nan)
+                        else:
+                            maml_row.append(abs(float(maml_recovered) - true_val) / true_val * 100)
+                            baseline_row.append(abs(float(baseline_recovered) - true_val) / true_val * 100)
+
+                maml_per_task.append(maml_row)
+                baseline_per_task.append(baseline_row)
+
+            maml_arr = np.array(maml_per_task)
+            baseline_arr = np.array(baseline_per_task)
+
+            if not np.all(np.isnan(maml_arr)):
+                fig = plot_coefficient_vs_k(
+                    k_values=k_values,
+                    maml_errors=np.nanmean(maml_arr, axis=0).tolist(),
+                    baseline_errors=np.nanmean(baseline_arr, axis=0).tolist(),
+                    title=f"Aggregated {coeff_name_main} Error vs K (noise={noise:.0%}, n={n_tasks} tasks)",
+                    save_path=agg_dir / f"coefficient_vs_k_{coeff_name_main}_noise{noise:.2f}.png",
+                    dpi=dpi,
+                    maml_std=np.nanstd(maml_arr, axis=0).tolist(),
+                    baseline_std=np.nanstd(baseline_arr, axis=0).tolist(),
+                )
+                plt.close(fig)
+
+    # -------------------------------------------------------------------------
+    # Aggregate coefficient vs noise (Graph 10) - one per K × coefficient
+    # -------------------------------------------------------------------------
+    for coeff_name_main, coeff_name_secondary, true_key in coeff_configs:
+        for k in k_values:
+            maml_per_task = []
+            baseline_per_task = []
+
+            for task_name in task_names:
+                task_results = results['tasks'][task_name]['results']
+                maml_row = []
+                baseline_row = []
+
+                for noise in noise_levels:
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
+                    combo_data = task_results.get(combo_key, {})
+
+                    maml_recovered = (np.mean(combo_data.get(f'maml_{coeff_name_main}')) + np.mean(combo_data.get(f'maml_{coeff_name_secondary}')))/2
+                    baseline_recovered = (np.mean(combo_data.get(f'baseline_{coeff_name_main}')) + np.mean(combo_data.get(f'baseline_{coeff_name_secondary}')))/2
+                    coeff_true = combo_data.get(f'maml_{true_key}')
+
+                    if maml_recovered is None or baseline_recovered is None or coeff_true is None:
+                        maml_row.append(np.nan)
+                        baseline_row.append(np.nan)
+                    else:
+                        true_val = float(coeff_true[0])
+                        if true_val == 0:
+                            maml_row.append(np.nan)
+                            baseline_row.append(np.nan)
+                        else:
+                            maml_row.append(abs(float(maml_recovered) - true_val) / true_val * 100)
+                            baseline_row.append(abs(float(baseline_recovered) - true_val) / true_val * 100)
+
+                maml_per_task.append(maml_row)
+                baseline_per_task.append(baseline_row)
+
+            maml_arr = np.array(maml_per_task)
+            baseline_arr = np.array(baseline_per_task)
+
+            if not np.all(np.isnan(maml_arr)):
+                fig = plot_coefficient_vs_noise(
+                    noise_levels=noise_levels,
+                    maml_errors=np.nanmean(maml_arr, axis=0).tolist(),
+                    baseline_errors=np.nanmean(baseline_arr, axis=0).tolist(),
+                    title=f"Aggregated {coeff_name_main} Error vs Noise (K={k}, n={n_tasks} tasks)",
+                    save_path=agg_dir / f"coefficient_vs_noise_{coeff_name_main}_k{k}.png",
+                    dpi=dpi,
+                    maml_std=np.nanstd(maml_arr, axis=0).tolist(),
+                    baseline_std=np.nanstd(baseline_arr, axis=0).tolist(),
+                )
+                plt.close(fig)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -723,7 +1251,9 @@ def main():
         target_modes = []
 
         # Check for new structure (separate subdirs)
-        for mode_name in ["noisy_targets", "clean_targets"]:
+        # modes: List[str] = ["noisy_targets", "clean_targets"]
+        modes: List[str] = ["noisy_targets"]
+        for mode_name in modes:
             mode_dir = eval_base_dir / mode_name
             results_path = mode_dir / 'results.json'
             if results_path.exists():
@@ -773,6 +1303,7 @@ def main():
         fixed_steps = results['config'].get('fixed_steps', eval_cfg.get('fixed_steps', [50, 100, 200]))
         deriv_threshold = eval_cfg.get('deriv_threshold', 1e-7)
         holdout_size = results['config'].get('holdout_size', eval_cfg.get('holdout_size', 1000))
+        pde_type = results['config'].get('pde_type', config['experiment'].get('pde_type', 'ns'))
 
         # Format mode label for titles
         if mode_name == "noisy_targets":
@@ -806,6 +1337,7 @@ def main():
                 dpi=dpi,
                 deriv_threshold=deriv_threshold,
                 holdout_size=holdout_size,
+                pde_type=pde_type,
             )
             print()
 
@@ -823,6 +1355,7 @@ def main():
                 dpi=dpi,
                 deriv_threshold=deriv_threshold,
                 holdout_size=holdout_size,
+                pde_type=pde_type,
             )
             print()
 

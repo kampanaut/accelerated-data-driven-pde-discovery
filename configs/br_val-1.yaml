@@ -1,0 +1,52 @@
+# Brusselator Validation Configuration
+# 24 tasks: 3 IC types × 4 k2 values × 2 seeds
+# k2 values interleaved with train: [6.9, 7.1, 7.3, 7.5]
+
+simulation:
+  name: "br_val-1"
+
+  D_A: 2.0
+  D_B: 16.0
+  k1: 4.5
+  k2: 7.0
+
+  domain_size: [50.0, 50.0]
+  resolution: [64, 64]
+
+  t_end: 200.0
+  dt: 0.01
+  save_interval: 2.0
+
+output:
+  base_dir: "data/datasets"
+
+initial_conditions:
+  # ========== perturbed_uniform (pu) - 8 tasks ==========
+  - {name: "br_pu_k69_001", type: "perturbed_uniform", k2: 6.9, perturbation_amplitude: 0.05, seed: 20001}
+  - {name: "br_pu_k69_002", type: "perturbed_uniform", k2: 6.9, perturbation_amplitude: 0.05, seed: 20002}
+  - {name: "br_pu_k71_001", type: "perturbed_uniform", k2: 7.1, perturbation_amplitude: 0.05, seed: 21001}
+  - {name: "br_pu_k71_002", type: "perturbed_uniform", k2: 7.1, perturbation_amplitude: 0.05, seed: 21002}
+  - {name: "br_pu_k73_001", type: "perturbed_uniform", k2: 7.3, perturbation_amplitude: 0.05, seed: 22001}
+  - {name: "br_pu_k73_002", type: "perturbed_uniform", k2: 7.3, perturbation_amplitude: 0.05, seed: 22002}
+  - {name: "br_pu_k75_001", type: "perturbed_uniform", k2: 7.5, perturbation_amplitude: 0.05, seed: 23001}
+  - {name: "br_pu_k75_002", type: "perturbed_uniform", k2: 7.5, perturbation_amplitude: 0.05, seed: 23002}
+
+  # ========== random_smooth (rs) - 8 tasks ==========
+  - {name: "br_rs_k69_001", type: "random_smooth", k2: 6.9, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 24001}
+  - {name: "br_rs_k69_002", type: "random_smooth", k2: 6.9, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 24002}
+  - {name: "br_rs_k71_001", type: "random_smooth", k2: 7.1, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 25001}
+  - {name: "br_rs_k71_002", type: "random_smooth", k2: 7.1, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 25002}
+  - {name: "br_rs_k73_001", type: "random_smooth", k2: 7.3, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 26001}
+  - {name: "br_rs_k73_002", type: "random_smooth", k2: 7.3, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 26002}
+  - {name: "br_rs_k75_001", type: "random_smooth", k2: 7.5, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 27001}
+  - {name: "br_rs_k75_002", type: "random_smooth", k2: 7.5, perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 27002}
+
+  # ========== localized_perturbation (lp) - 8 tasks ==========
+  - {name: "br_lp_k69_001", type: "localized_perturbation", k2: 6.9, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 28001}
+  - {name: "br_lp_k69_002", type: "localized_perturbation", k2: 6.9, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 28002}
+  - {name: "br_lp_k71_001", type: "localized_perturbation", k2: 7.1, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 29001}
+  - {name: "br_lp_k71_002", type: "localized_perturbation", k2: 7.1, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 29002}
+  - {name: "br_lp_k73_001", type: "localized_perturbation", k2: 7.3, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 30001}
+  - {name: "br_lp_k73_002", type: "localized_perturbation", k2: 7.3, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 30002}
+  - {name: "br_lp_k75_001", type: "localized_perturbation", k2: 7.5, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 31001}
+  - {name: "br_lp_k75_002", type: "localized_perturbation", k2: 7.5, perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 31002}

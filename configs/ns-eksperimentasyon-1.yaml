@@ -2,15 +2,14 @@
 # For real experiments, use separate meta_train/meta_val/meta_test directories
 
 experiment:
-  name: "maml-2"
+  name: "ns-maml-2"
   seed: 42
   device: "cuda"  # Use CPU for quick test
 
 data:
-  # All pointing to same dir for dry run
-  meta_train_dir: "data/datasets/ic_train-1"
-  meta_val_dir: "data/datasets/ic_val-1"
-  meta_test_dir: "data/datasets/ic_test-1"
+  meta_train_dir: "data/datasets/ns_train-1"
+  meta_val_dir: "data/datasets/ns_val-1"
+  meta_test_dir: "data/datasets/ns_test-1"
 
 # output:
 #   base_dir: "experiments"

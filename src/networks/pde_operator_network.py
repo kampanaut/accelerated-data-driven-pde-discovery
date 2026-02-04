@@ -51,8 +51,6 @@ class PDEOperatorNetwork(nn.Module):
         Args:
             input_dim: Number of input features
                 - Navier-Stokes (2D): 10 (u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy)
-                - Burgers (1D): 3 (u, u_x, u_xx)
-                - Custom: any integer
             hidden_dims: List of hidden layer widths (e.g., [100, 100])
                 - Default: [100, 100] (2 layers of 100 neurons each)
                 - Pyramid: [128, 64, 32]
