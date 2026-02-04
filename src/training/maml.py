@@ -57,6 +57,11 @@ class MAMLConfig:
     device: str = field(default_factory=lambda: 'cuda' if torch.cuda.is_available() else 'cpu')
     seed: int = 42
 
+    # LR scheduler
+    warmup_iterations: int = 0           # Linear warmup iterations (0 = no warmup)
+    use_scheduler: bool = False          # Use cosine annealing after warmup
+    min_lr: float = 1e-6                 # Minimum LR at end of cosine decay
+
 
 class MAMLTrainer:
     """
@@ -97,6 +102,23 @@ class MAMLTrainer:
             self.model.parameters(),
             lr=config.outer_lr
         )
+
+        # LR scheduler with warmup + cosine annealing
+        self.scheduler = None
+        if config.use_scheduler or config.warmup_iterations > 0:
+            def lr_lambda(iteration: int) -> float:
+                # Linear warmup
+                if iteration < config.warmup_iterations:
+                    return (iteration + 1) / config.warmup_iterations
+                # Cosine annealing after warmup
+                if config.use_scheduler:
+                    import math
+                    progress = (iteration - config.warmup_iterations) / max(1, config.max_outer_iterations - config.warmup_iterations)
+                    cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+                    # Scale between min_lr and outer_lr
+                    return config.min_lr / config.outer_lr + (1 - config.min_lr / config.outer_lr) * cosine_decay
+                return 1.0
+            self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.outer_opt, lr_lambda)
 
         # Training state
         self.iteration = 0
@@ -318,6 +340,10 @@ class MAMLTrainer:
         print(f"  Query size: {self.config.query_size}")
         print(f"  Noise level: {self.config.noise_level}")
         print(f"  FOMAML: {self.config.first_order}")
+        if self.config.warmup_iterations > 0:
+            print(f"  Warmup: {self.config.warmup_iterations} iterations")
+        if self.config.use_scheduler:
+            print(f"  LR scheduler: cosine annealing to {self.config.min_lr}")
         print()
 
         early_stopped: bool = False
@@ -334,6 +360,10 @@ class MAMLTrainer:
             # Meta-update
             train_loss = self.outer_step(tasks)
 
+            # Step LR scheduler
+            if self.scheduler is not None:
+                self.scheduler.step()
+
             # Record history
             history['train_loss'].append(train_loss)
             history['iteration'].append(iteration)
@@ -348,10 +378,11 @@ class MAMLTrainer:
 
             # Logging
             if iteration % log_interval == 0:
-                if self.val_loader: 
-                    print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={patience_counter}")
+                lr_str = f", lr={self.outer_opt.param_groups[0]['lr']:.2e}" if self.scheduler else ""
+                if self.val_loader:
+                    print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={patience_counter}{lr_str}")
                 else:
-                    print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}")
+                    print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}{lr_str}")
 
             # Level 2: Validation check when patience exhausted
             if patience_counter >= self.config.patience and self.val_loader is not None:

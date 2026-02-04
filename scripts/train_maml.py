@@ -28,7 +28,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
-from src.training.task_loader import MetaLearningDataLoader
+from src.training.task_loader import MetaLearningDataLoader, NavierStokesTask, BrusselatorTask
 from src.training.maml import MAMLTrainer, MAMLConfig
 
 
@@ -121,8 +121,17 @@ def main():
     if not val_dir.exists():
         raise FileNotFoundError(f"Meta-val directory not found: {val_dir}")
 
-    train_loader = MetaLearningDataLoader(train_dir)
-    val_loader = MetaLearningDataLoader(val_dir)
+    # Select task class based on PDE type
+    pde_type = config['experiment'].get('pde_type', 'ns')
+    if pde_type == 'br':
+        task_class = BrusselatorTask
+        print(f"PDE type: Brusselator")
+    else:
+        task_class = NavierStokesTask
+        print(f"PDE type: Navier-Stokes")
+
+    train_loader = MetaLearningDataLoader(train_dir, task_class=task_class)
+    val_loader = MetaLearningDataLoader(val_dir, task_class=task_class)
 
     print()
     print(f"Meta-train tasks: {len(train_loader)}")
@@ -194,6 +203,9 @@ def main():
         patience=train_cfg.get('patience', 50),
         log_interval=train_cfg.get('log_interval', 10),
         first_order=train_cfg.get('first_order', False),
+        warmup_iterations=train_cfg.get('warmup_iterations', 0),
+        use_scheduler=train_cfg.get('use_scheduler', False),
+        min_lr=train_cfg.get('min_lr', 1e-6),
         device=device,
         seed=seed,
     )
