@@ -15,11 +15,110 @@ Turing instability requires D_B > D_A and specific parameter relationships.
 """
 
 import numpy as np
-from typing import Tuple, List, Dict
-from phi.jax.flow import *
+from dataclasses import dataclass, asdict
+from typing import Tuple, List, Optional, TypedDict, Any, Union, cast
+
+from phi.field import CenteredGrid
+from phi.geom import Box
+from phi.math import spatial, extrapolation
+from phi.physics import diffuse
+from phiml.math._optimize import Solve
+from phi import math
 
 
-def brusselator_reaction(A: np.ndarray, B: np.ndarray, k1: float, k2: float) -> Tuple[np.ndarray, np.ndarray]:
+# =============================================================================
+# Dataclasses for type-safe configuration
+# =============================================================================
+
+@dataclass
+class BrusselatorSimParams:
+    """Simulation parameters for Brusselator solver."""
+    D_A: float                           # Diffusion coefficient for A
+    D_B: float                           # Diffusion coefficient for B
+    k1: float                            # Reaction rate (A* = k1)
+    k2: float                            # Reaction rate (B* = k2/k1)
+    domain_size: Tuple[float, float]     # (Lx, Ly)
+    resolution: Tuple[int, int]          # (ny, nx)
+    t_end: float                         # Final simulation time
+    dt: float                            # Timestep
+    save_interval: Optional[float] = None  # Snapshot interval (None = every step)
+
+
+@dataclass
+class BrusselatorICBase:
+    """Base class for Brusselator IC parameters."""
+    type: str
+    name: str
+    k1: float
+    k2: float
+    seed: Optional[int] = None
+    # Optional overrides for simulation params
+    D_A: Optional[float] = None
+    D_B: Optional[float] = None
+
+
+@dataclass
+class PerturbedUniformIC(BrusselatorICBase):
+    """Uniform steady state with small random perturbations."""
+    perturbation_amplitude: float = 0.05
+
+
+@dataclass
+class RandomSmoothIC(BrusselatorICBase):
+    """Smooth random field around steady state."""
+    perturbation_amplitude: float = 0.05
+    smoothing_scale: float = 3.0
+
+
+@dataclass
+class LocalizedPerturbationIC(BrusselatorICBase):
+    """Localized random perturbation in a circular patch."""
+    perturbation_amplitude: float = 0.10
+    patch_center: Optional[Tuple[float, float]] = None  # Default: domain center
+    patch_radius: Optional[float] = None                 # Default: L/4
+
+
+@dataclass
+class MultiPatchPerturbationIC(BrusselatorICBase):
+    """Multiple localized perturbation patches at random locations."""
+    perturbation_amplitude: float = 0.10
+    n_patches: int = 3
+    patch_radius: Optional[float] = None                 # Default: L/8
+
+
+@dataclass
+class GradientPerturbationIC(BrusselatorICBase):
+    """Sinusoidal gradient perturbations on steady state."""
+    gradient_amplitude: float = 0.15
+    n_modes: int = 2
+
+
+# Union type for all IC parameter types
+BrusselatorICParams = Union[
+    PerturbedUniformIC,
+    RandomSmoothIC,
+    LocalizedPerturbationIC,
+    MultiPatchPerturbationIC,
+    GradientPerturbationIC,
+]
+
+
+# =============================================================================
+# TypedDict for solver results
+# =============================================================================
+
+class SolverResult(TypedDict):
+    """Result from solve_brusselator_with_params."""
+    concentration_history: List[Tuple[np.ndarray, np.ndarray]]
+    times: np.ndarray
+    x: np.ndarray
+    y: np.ndarray
+    ic_params: dict[str, Any]
+    simulation_params: dict[str, Any]
+    generated_params: dict[str, Any]
+
+
+def brusselator_reaction(A, B, k1: float, k2: float):
     """
     Compute reaction terms for Brusselator.
 
@@ -27,11 +126,11 @@ def brusselator_reaction(A: np.ndarray, B: np.ndarray, k1: float, k2: float) -> 
     R_B = k₂A - A²B
 
     Args:
-        A, B: Concentration fields
+        A, B: Concentration fields (numpy or JAX arrays)
         k1, k2: Reaction rate constants
 
     Returns:
-        (R_A, R_B): Reaction terms for each species
+        (R_A, R_B): Reaction terms for each species (same type as input)
     """
     A_squared_B = A * A * B
     R_A = k1 - (k2 + 1) * A + A_squared_B
@@ -48,7 +147,7 @@ def solve_brusselator(
     domain_size: Tuple[float, float],
     t_end: float,
     dt: float,
-    save_interval: float = None
+    save_interval: Optional[float] = None
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """
     Solve 2D Brusselator reaction-diffusion equations using PhiFlow.
@@ -81,8 +180,8 @@ def solve_brusselator(
     x = np.linspace(0, Lx, nx)
     y = np.linspace(0, Ly, ny)
 
-    # Create domain box
-    domain = Box(x=(0, Lx), y=(0, Ly))
+    # Create domain box (PhiFlow uses **kwargs for dimension names)
+    domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[call-arg]
 
     # Initialize concentration fields as CenteredGrids
     A_field = math.tensor(A_init, spatial('y,x'))
@@ -108,7 +207,7 @@ def solve_brusselator(
     concentration_history.append((np.array(A_data), np.array(B_data)))
     times.append(0.0)
 
-    print(f"Starting Brusselator simulation:")
+    print("Starting Brusselator simulation:")
     print(f"  Domain: {Lx} × {Ly}")
     print(f"  Resolution: {nx} × {ny}")
     print(f"  Diffusion: D_A = {D_A}, D_B = {D_B}")
@@ -125,24 +224,24 @@ def solve_brusselator(
         A = diffuse.implicit(A, D_A, dt, solve=Solve('CG', 1e-5, x0=None))
         B = diffuse.implicit(B, D_B, dt, solve=Solve('CG', 1e-5, x0=None))
 
-        # Step 2: Reaction (explicit Euler on the reaction terms)
-        A_np = np.array(math.reshaped_native(A.values, ['y', 'x']))
-        B_np = np.array(math.reshaped_native(B.values, ['y', 'x']))
+        # Step 2: Reaction (explicit Euler) - stay in PhiFlow tensors, no CPU transfer
+        A_val = A.values
+        B_val = B.values
 
-        R_A, R_B = brusselator_reaction(A_np, B_np, k1, k2)
+        R_A, R_B = brusselator_reaction(A_val, B_val, k1, k2)
 
-        A_np = A_np + dt * R_A
-        B_np = B_np + dt * R_B
+        A_val = A_val + dt * R_A
+        B_val = B_val + dt * R_B
 
-        # Ensure non-negative concentrations (physical constraint)
-        A_np = np.maximum(A_np, 0.0)
-        B_np = np.maximum(B_np, 0.0)
+        # Ensure non-negative concentrations (PhiFlow math, stays on GPU)
+        A_val = math.maximum(A_val, 0.0)
+        B_val = math.maximum(B_val, 0.0)
 
-        # Convert back to PhiFlow grids
-        A = CenteredGrid(math.tensor(A_np, spatial('y,x')), extrapolation.PERIODIC, bounds=domain)
-        B = CenteredGrid(math.tensor(B_np, spatial('y,x')), extrapolation.PERIODIC, bounds=domain)
+        # Wrap back to PhiFlow grids (no data copy, just metadata)
+        A = CenteredGrid(A_val, extrapolation.PERIODIC, bounds=domain)
+        B = CenteredGrid(B_val, extrapolation.PERIODIC, bounds=domain)
 
-        # Save snapshot at specified intervals
+        # Save snapshot at specified intervals (only transfer to CPU here)
         if step % save_every == 0:
             A_data = math.reshaped_native(A.values, ['y', 'x'])
             B_data = math.reshaped_native(B.values, ['y', 'x'])
@@ -150,8 +249,8 @@ def solve_brusselator(
             times.append(t)
 
             if step % (save_every * 10) == 0:  # Progress update
-                A_mean = np.mean(A_np)
-                B_mean = np.mean(B_np)
+                A_mean = float(math.mean(A_val))
+                B_mean = float(math.mean(B_val))
                 print(f"  t = {t:.3f} / {t_end}  |  <A> = {A_mean:.4f}, <B> = {B_mean:.4f}")
 
     print(f"Simulation complete. Saved {len(concentration_history)} snapshots.")
@@ -160,18 +259,18 @@ def solve_brusselator(
 
 
 def solve_brusselator_with_params(
-    ic_params: dict,
-    simulation_params: dict
-) -> dict:
+    ic_params: BrusselatorICParams | dict[str, Any],
+    simulation_params: BrusselatorSimParams | dict[str, Any]
+) -> SolverResult:
     """
     High-level interface: generate IC from parameters and solve Brusselator.
 
     Args:
-        ic_params: Dict with keys:
+        ic_params: Dataclass or dict with keys:
             - 'type': IC type name
             - type-specific parameters
             - OR 'A_init', 'B_init' for custom IC
-        simulation_params: Dict with keys:
+        simulation_params: Dataclass or dict with keys:
             - 'D_A': Diffusion coefficient for A
             - 'D_B': Diffusion coefficient for B
             - 'k1': Reaction rate constant
@@ -190,36 +289,48 @@ def solve_brusselator_with_params(
         - 'ic_params': Copy of IC parameters
         - 'simulation_params': Copy of simulation parameters
     """
-    # Import Brusselator ICs (will be created next)
+    # Import Brusselator ICs
     from src.data.initial_conditions_brusselator import create_brusselator_ic
 
+    # Convert dataclasses to dicts for backward compatibility
+    ic_dict: dict[str, Any]
+    sim_dict: dict[str, Any]
+    if hasattr(ic_params, '__dataclass_fields__'):
+        ic_dict = asdict(cast(BrusselatorICBase, ic_params))
+    else:
+        ic_dict = cast(dict[str, Any], ic_params)
+    if hasattr(simulation_params, '__dataclass_fields__'):
+        sim_dict = asdict(cast(BrusselatorSimParams, simulation_params))
+    else:
+        sim_dict = cast(dict[str, Any], simulation_params)
+
     # Extract parameters
-    ny, nx = simulation_params['resolution']
-    Lx, Ly = simulation_params['domain_size']
+    ny, nx = sim_dict['resolution']
+    Lx, Ly = sim_dict['domain_size']
 
     # Create coordinate arrays
     x = np.linspace(0, Lx, nx)
     y = np.linspace(0, Ly, ny)
 
     # Generate initial condition
-    if ic_params.get('type') == 'custom':
-        A_init = ic_params['A_init']
-        B_init = ic_params['B_init']
+    if ic_dict.get('type') == 'custom':
+        A_init = ic_dict['A_init']
+        B_init = ic_dict['B_init']
         generated_params = {}
     else:
-        A_init, B_init, generated_params = create_brusselator_ic(ic_params, x, y)
+        A_init, B_init, generated_params = create_brusselator_ic(ic_dict, x, y)
 
     # Solve Brusselator
     concentration_history, times, x_out, y_out = solve_brusselator(
         initial_concentration=(A_init, B_init),
-        D_A=simulation_params['D_A'],
-        D_B=simulation_params['D_B'],
-        k1=simulation_params['k1'],
-        k2=simulation_params['k2'],
-        domain_size=simulation_params['domain_size'],
-        t_end=simulation_params['t_end'],
-        dt=simulation_params['dt'],
-        save_interval=simulation_params.get('save_interval')
+        D_A=sim_dict['D_A'],
+        D_B=sim_dict['D_B'],
+        k1=sim_dict['k1'],
+        k2=sim_dict['k2'],
+        domain_size=sim_dict['domain_size'],
+        t_end=sim_dict['t_end'],
+        dt=sim_dict['dt'],
+        save_interval=sim_dict['save_interval']
     )
 
     return {
@@ -227,7 +338,7 @@ def solve_brusselator_with_params(
         'times': times,
         'x': x_out,
         'y': y_out,
-        'ic_params': ic_params.copy(),
-        'simulation_params': simulation_params.copy(),
+        'ic_params': ic_dict.copy(),
+        'simulation_params': sim_dict.copy(),
         'generated_params': generated_params
     }
