@@ -21,9 +21,9 @@ from pathlib import Path
 # Use --gpu to opt into GPU execution
 if '--gpu' in sys.argv:
     sys.argv.remove('--gpu')
-    # Clear JAX_PLATFORMS to let JAX auto-detect GPU
-    os.environ.pop('JAX_PLATFORMS', None)
-else:
+    os.environ['JAX_PLATFORMS'] = 'cuda'
+elif os.environ.get('JAX_PLATFORMS') != 'cuda':
+    # Only default to CPU if parent didn't already set GPU
     os.environ['JAX_PLATFORMS'] = 'cpu'
 
 import numpy as np

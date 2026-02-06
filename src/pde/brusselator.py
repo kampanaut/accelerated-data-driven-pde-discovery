@@ -18,6 +18,7 @@ import numpy as np
 from dataclasses import dataclass, asdict
 from typing import Tuple, List, Optional, TypedDict, Any, Union, cast
 
+from phi.jax.flow import *  # noqa: F401,F403 — activates JAX backend for PhiFlow
 from phi.field import CenteredGrid
 from phi.geom import Box
 from phi.math import spatial, extrapolation
