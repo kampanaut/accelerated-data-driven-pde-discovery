@@ -35,7 +35,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.pde.brusselator import solve_brusselator
-from src.data.derivatives import spatial_derivatives, temporal_derivative
+from src.data.derivatives import spectral_spatial_derivatives as spatial_derivatives
 from src.data.initial_conditions_brusselator import create_brusselator_ic
 
 
@@ -43,7 +43,11 @@ def generate_training_samples(
     concentration_history: list,
     times: np.ndarray,
     x: np.ndarray,
-    y: np.ndarray
+    y: np.ndarray,
+    D_A: float,
+    D_B: float,
+    k1: float,
+    k2: float,
 ) -> dict:
     """
     Convert concentration snapshots to training samples with derivatives.
@@ -55,31 +59,26 @@ def generate_training_samples(
     Features: A, B, A_x, A_y, A_xx, A_yy, B_x, B_y, B_xx, B_yy (10 inputs)
     Targets: A_t, B_t (2 outputs)
 
+    Targets are computed from the PDE RHS using the same spatial derivatives
+    stored as features, NOT from central difference in time. This ensures
+    features and targets are self-consistent. See docs/temporal_derivative_bias.md.
+
     Args:
         concentration_history: List of (A, B) tuples at different times
         times: Time values for each snapshot
         x, y: Coordinate arrays
+        D_A, D_B: Diffusion coefficients
+        k1, k2: Reaction rate constants
 
     Returns:
         Dict containing flattened training data
     """
     dx = x[1] - x[0]
     dy = y[1] - y[0]
-    dt = times[1] - times[0]
 
     print(f"Computing derivatives...")
     print(f"  Grid spacing: dx={dx:.4f}, dy={dy:.4f}")
-    print(f"  Time spacing: dt={dt:.4f}")
-
-    # Separate A and B histories
-    A_history = [conc[0] for conc in concentration_history]
-    B_history = [conc[1] for conc in concentration_history]
-
-    # Compute temporal derivatives (loses first and last timesteps)
-    A_t = temporal_derivative(A_history, dt)
-    B_t = temporal_derivative(B_history, dt)
-
-    print(f"  Temporal derivatives shape: {A_t.shape}")
+    print(f"  Targets: PDE RHS (D_A={D_A:.4f}, D_B={D_B:.4f}, k1={k1:.4f}, k2={k2:.4f})")
 
     # Initialize training data dict
     # Using u/v naming to match NS for network compatibility
@@ -95,26 +94,30 @@ def generate_training_samples(
         'v_y': [],    # B_y (first derivative - "dead" for Brusselator)
         'v_xx': [],   # B_xx (active for Brusselator)
         'v_yy': [],   # B_yy (active for Brusselator)
-        'u_t': [],    # A_t
-        'v_t': [],    # B_t
+        'u_t': [],    # A_t (from PDE RHS)
+        'v_t': [],    # B_t (from PDE RHS)
         't': [],
         'x_coord': [],
         'y_coord': [],
     }
 
-    # Process snapshots with valid time derivatives (indices 1 to n-2)
-    for i in range(len(A_t)):
-        snapshot_idx = i + 1  # Offset due to central difference
-        A = A_history[snapshot_idx]
-        B = B_history[snapshot_idx]
-        t = times[snapshot_idx]
+    # Process all snapshots (no loss of first/last — no temporal central difference)
+    X, Y = np.meshgrid(x, y)
+    x_flat = X.flatten()
+    y_flat = Y.flatten()
+
+    for i, (A, B) in enumerate(concentration_history):
+        t = times[i]
 
         # Spatial derivatives for both fields
         A_x, A_y, A_xx, A_yy = spatial_derivatives(A, dx, dy)
         B_x, B_y, B_xx, B_yy = spatial_derivatives(B, dx, dy)
 
+        # Temporal derivatives from PDE RHS (self-consistent with stored spatial derivatives)
+        A_t = D_A * (A_xx + A_yy) + k1 - (k2 + 1) * A + A**2 * B
+        B_t = D_B * (B_xx + B_yy) + k2 * A - A**2 * B
+
         # Flatten spatial grids and append
-        # Each (x, y) point at this timestep becomes a training sample
         training_data['u'].append(A.flatten())
         training_data['v'].append(B.flatten())
         training_data['u_x'].append(A_x.flatten())
@@ -125,13 +128,10 @@ def generate_training_samples(
         training_data['v_y'].append(B_y.flatten())
         training_data['v_xx'].append(B_xx.flatten())
         training_data['v_yy'].append(B_yy.flatten())
-        training_data['u_t'].append(A_t[i].flatten())
-        training_data['v_t'].append(B_t[i].flatten())
-
-        # Coordinates and time (broadcast to all spatial points)
-        X, Y = np.meshgrid(x, y)
-        training_data['x_coord'].append(X.flatten())
-        training_data['y_coord'].append(Y.flatten())
+        training_data['u_t'].append(A_t.flatten())
+        training_data['v_t'].append(B_t.flatten())
+        training_data['x_coord'].append(x_flat)
+        training_data['y_coord'].append(y_flat)
         training_data['t'].append(np.full(X.size, t))
 
     # Stack all timesteps together
@@ -139,10 +139,48 @@ def generate_training_samples(
         training_data[key] = np.concatenate(training_data[key])
 
     n_samples = len(training_data['u'])
+    n_snapshots = len(concentration_history)
     print(f"  Generated {n_samples:,} training samples")
-    print(f"  ({len(A_t)} timesteps × {A.size} spatial points)")
+    print(f"  ({n_snapshots} timesteps × {A.size} spatial points)")
 
     return training_data
+
+
+def generate_fourier_data(
+    concentration_history: list,
+    times: np.ndarray,
+) -> dict:
+    """
+    Convert concentration snapshots to Fourier coefficient arrays.
+
+    FFTs each snapshot and stacks into (n_snapshots, ny, nx) complex128 arrays.
+    No derivative computation — derivatives are computed on-the-fly during
+    training via wavenumber multiplication.
+
+    Args:
+        concentration_history: List of (A, B) tuples at different times
+        times: Time values for each snapshot
+
+    Returns:
+        Dict with keys: A_hat, B_hat (complex128), times (float64)
+    """
+    n_snapshots = len(concentration_history)
+    ny, nx = concentration_history[0][0].shape
+
+    A_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
+    B_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
+
+    for i, (A, B) in enumerate(concentration_history):
+        A_hat_stack[i] = np.fft.fft2(A)
+        B_hat_stack[i] = np.fft.fft2(B)
+
+    print(f"  FFT'd {n_snapshots} snapshots, shape ({ny}, {nx})")
+
+    return {
+        'A_hat': A_hat_stack,
+        'B_hat': B_hat_stack,
+        'times': times,
+    }
 
 
 def load_config(config_path: Path) -> dict:
@@ -366,12 +404,14 @@ def process_single_ic(args_tuple):
         (status, ic_name, error_msg, retry_count)
         status: 'success', 'skipped', or 'failed'
     """
-    ic_config, simulation_params, data_dir, ic_idx, total_count, x, y = args_tuple
+    *core_args, fourier_mode = args_tuple
+    ic_config, simulation_params, data_dir, ic_idx, total_count, x, y = core_args
 
     ic_name = ic_config.get('name', f'ic_{ic_idx}')
 
     # Check if already generated
-    output_file = Path(data_dir) / f"{ic_name}.npz"
+    suffix = "_fourier" if fourier_mode else ""
+    output_file = Path(data_dir) / f"{ic_name}{suffix}.npz"
     if output_file.exists():
         return ('skipped', ic_name, None, 0)
 
@@ -420,18 +460,14 @@ def process_single_ic(args_tuple):
                 save_interval=task_sim_params.get('save_interval')
             )
 
-            # Compute derivatives and format as training data
-            training_data = generate_training_samples(concentration_history, times, x_result, y_result)
-
-            # Validate data for silent divergence
+            # Validate raw concentrations for divergence
             max_magnitude = 1e6
-            for key in ['u', 'v', 'u_t', 'v_t']:
-                if key in training_data:
-                    max_val = np.abs(training_data[key]).max()
-                    if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
-                        raise ValueError(f"Silent divergence: {key} has max magnitude {max_val:.2e}")
+            last_A, last_B = concentration_history[-1]
+            for label, arr in [('A', last_A), ('B', last_B)]:
+                max_val = np.abs(arr).max()
+                if max_val > max_magnitude or np.any(np.isnan(arr)) or np.any(np.isinf(arr)):
+                    raise ValueError(f"Silent divergence: {label} has max magnitude {max_val:.2e}")
 
-            # Save data
             ic_config_to_save = ic_config.copy()
             ic_config_to_save['k1_used'] = task_sim_params['k1']
             ic_config_to_save['k2_used'] = task_sim_params['k2']
@@ -440,17 +476,39 @@ def process_single_ic(args_tuple):
             ic_config_to_save['seed_used'] = ic_config_attempt.get('seed')
             ic_config_to_save['retry_attempt'] = attempt
 
-            np.savez(
-                output_file,
-                **training_data,
-                ic_config=ic_config_to_save,
-                simulation_params=task_sim_params,
-                x=x_result,
-                y=y_result,
-            )
+            if fourier_mode:
+                fourier_data = generate_fourier_data(concentration_history, times)
+                np.savez(
+                    output_file,
+                    **fourier_data,
+                    ic_config=ic_config_to_save,
+                    simulation_params=task_sim_params,
+                )
+            else:
+                training_data = generate_training_samples(
+                    concentration_history, times, x_result, y_result,
+                    D_A=task_sim_params['D_A'], D_B=task_sim_params['D_B'],
+                    k1=task_sim_params['k1'], k2=task_sim_params['k2'],
+                )
 
-            # Save metadata
-            save_metadata_txt(output_file, ic_config_to_save, task_sim_params, training_data, generated_params, success=True)
+                # Validate training data
+                for key in ['u', 'v', 'u_t', 'v_t']:
+                    if key in training_data:
+                        max_val = np.abs(training_data[key]).max()
+                        if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
+                            raise ValueError(f"Silent divergence: {key} has max magnitude {max_val:.2e}")
+
+                np.savez(
+                    output_file,
+                    **training_data,
+                    ic_config=ic_config_to_save,
+                    simulation_params=task_sim_params,
+                    x=x_result,
+                    y=y_result,
+                )
+
+                # Save metadata
+                save_metadata_txt(output_file, ic_config_to_save, task_sim_params, training_data, generated_params, success=True)
 
             # Generate visualization
             vis_file = Path(data_dir) / f"{ic_name}_evolution.png"
@@ -482,6 +540,8 @@ def main():
                         help='Path to YAML configuration file')
     parser.add_argument('--workers', type=int, default=1,
                         help='Number of parallel workers (default: 1 = serial)')
+    parser.add_argument('--fourier', action='store_true',
+                        help='Save Fourier coefficients instead of grid derivatives')
     args = parser.parse_args()
 
     # Load configuration
@@ -535,7 +595,7 @@ def main():
 
     # Build work items for processing
     work_items = [
-        (ic_config, simulation_params, str(data_dir), ic_idx, len(ic_configs), x, y)
+        (ic_config, simulation_params, str(data_dir), ic_idx, len(ic_configs), x, y, args.fourier)
         for ic_idx, ic_config in enumerate(ic_configs)
     ]
 
@@ -579,7 +639,8 @@ def main():
             ic_name = ic_config.get('name', f'ic_{ic_idx}')
 
             # Check if already generated
-            output_file = data_dir / f"{ic_name}.npz"
+            suffix = "_fourier" if args.fourier else ""
+            output_file = data_dir / f"{ic_name}{suffix}.npz"
             if output_file.exists():
                 print(f"[{ic_idx + 1}/{len(ic_configs)}] {ic_name}: already exists, skipping")
                 skipped_existing += 1
@@ -642,24 +703,14 @@ def main():
                         save_interval=task_sim_params.get('save_interval')
                     )
 
-                    # Compute derivatives and format as training data
-                    training_data = generate_training_samples(concentration_history, times, x_result, y_result)
-
-                    # Validate data for silent divergence
+                    # Validate raw concentrations for divergence
                     max_magnitude = 1e6
-                    diverged_silently = False
-                    for key in ['u', 'v', 'u_t', 'v_t']:
-                        if key in training_data:
-                            max_val = np.abs(training_data[key]).max()
-                            if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
-                                diverged_silently = True
-                                print(f"\n⚠️  Silent divergence detected: {key} has max magnitude {max_val:.2e}")
-                                break
+                    last_A, last_B = concentration_history[-1]
+                    for label, arr in [('A', last_A), ('B', last_B)]:
+                        max_val = np.abs(arr).max()
+                        if max_val > max_magnitude or np.any(np.isnan(arr)) or np.any(np.isinf(arr)):
+                            raise ValueError(f"Silent divergence: {label} has max magnitude {max_val:.2e}")
 
-                    if diverged_silently:
-                        raise ValueError(f"Silent divergence: max values exceed {max_magnitude:.0e}")
-
-                    # Save data
                     ic_config_to_save = ic_config.copy()
                     ic_config_to_save['k1_used'] = task_sim_params['k1']
                     ic_config_to_save['k2_used'] = task_sim_params['k2']
@@ -668,34 +719,57 @@ def main():
                     ic_config_to_save['seed_used'] = ic_config_attempt.get('seed')
                     ic_config_to_save['retry_attempt'] = attempt
 
-                    np.savez(
-                        output_file,
-                        **training_data,
-                        ic_config=ic_config_to_save,
-                        simulation_params=task_sim_params,
-                        x=x_result,
-                        y=y_result,
-                    )
-                    print(f"\nSaved training data to {output_file}")
+                    if args.fourier:
+                        fourier_data = generate_fourier_data(concentration_history, times)
+                        np.savez(
+                            output_file,
+                            **fourier_data,
+                            ic_config=ic_config_to_save,
+                            simulation_params=task_sim_params,
+                        )
+                        print(f"\nSaved Fourier data to {output_file}")
+                    else:
+                        training_data = generate_training_samples(
+                            concentration_history, times, x_result, y_result,
+                            D_A=task_sim_params['D_A'], D_B=task_sim_params['D_B'],
+                            k1=task_sim_params['k1'], k2=task_sim_params['k2'],
+                        )
+
+                        # Validate training data
+                        for key in ['u', 'v', 'u_t', 'v_t']:
+                            if key in training_data:
+                                max_val = np.abs(training_data[key]).max()
+                                if max_val > max_magnitude or np.any(np.isnan(training_data[key])) or np.any(np.isinf(training_data[key])):
+                                    raise ValueError(f"Silent divergence: {key} has max magnitude {max_val:.2e}")
+
+                        np.savez(
+                            output_file,
+                            **training_data,
+                            ic_config=ic_config_to_save,
+                            simulation_params=task_sim_params,
+                            x=x_result,
+                            y=y_result,
+                        )
+                        print(f"\nSaved training data to {output_file}")
+
+                        # Save metadata
+                        save_metadata_txt(output_file, ic_config_to_save, task_sim_params, training_data, generated_params, success=True)
+
+                        # Print sample data
+                        print(f"\nSample data point (first sample):")
+                        print(f"  A={training_data['u'][0]:.4f}, B={training_data['v'][0]:.4f}")
+                        print(f"  A_xx={training_data['u_xx'][0]:.4f}, A_yy={training_data['u_yy'][0]:.4f}")
+                        print(f"  A_t={training_data['u_t'][0]:.4f}, B_t={training_data['v_t'][0]:.4f}")
+                        print(f"  t={training_data['t'][0]:.4f}, x={training_data['x_coord'][0]:.4f}, y={training_data['y_coord'][0]:.4f}")
+
                     if attempt > 0:
                         print(f"  (succeeded after {attempt} retries)")
-
-                    # Save metadata
-                    save_metadata_txt(output_file, ic_config_to_save, task_sim_params, training_data, generated_params, success=True)
 
                     # Generate visualization
                     vis_file = data_dir / f"{ic_name}_evolution.png"
                     save_brusselator_evolution(concentration_history, times, x_result, y_result, str(vis_file), n_snapshots=4)
 
-                    # Print sample data
-                    print(f"\nSample data point (first sample):")
-                    print(f"  A={training_data['u'][0]:.4f}, B={training_data['v'][0]:.4f}")
-                    print(f"  A_xx={training_data['u_xx'][0]:.4f}, A_yy={training_data['u_yy'][0]:.4f}")
-                    print(f"  A_t={training_data['u_t'][0]:.4f}, B_t={training_data['v_t'][0]:.4f}")
-                    print(f"  t={training_data['t'][0]:.4f}, x={training_data['x_coord'][0]:.4f}, y={training_data['y_coord'][0]:.4f}")
-
                     successful += 1
-                    task_succeeded = True
                     break  # Success, exit retry loop
 
                 except ValueError as e:

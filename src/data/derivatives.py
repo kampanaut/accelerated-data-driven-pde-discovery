@@ -40,6 +40,45 @@ def spatial_derivatives(field: np.ndarray, dx: float, dy: float) -> Tuple[np.nda
     return field_x, field_y, field_xx, field_yy
 
 
+def spectral_spatial_derivatives(field: np.ndarray, dx: float, dy: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute first and second spatial derivatives using FFT (spectral method).
+
+    Assumes periodic boundary conditions. Exact to machine precision for
+    band-limited signals (i.e., signals representable on the grid).
+
+    Derivative in Fourier space: multiply coefficients by (i*k)^n
+    - First derivative: i*k * f_hat
+    - Second derivative: -k^2 * f_hat
+
+    Args:
+        field: 2D array of shape (ny, nx) representing a scalar field
+        dx: Grid spacing in x-direction
+        dy: Grid spacing in y-direction
+
+    Returns:
+        Tuple of (field_x, field_y, field_xx, field_yy)
+    """
+    ny, nx = field.shape
+
+    # Wavenumbers (angular)
+    kx = 2 * np.pi * np.fft.fftfreq(nx, d=dx)
+    ky = 2 * np.pi * np.fft.fftfreq(ny, d=dy)
+
+    # 2D FFT
+    f_hat = np.fft.fft2(field)
+
+    # First derivatives
+    field_x = np.real(np.fft.ifft2(1j * kx[np.newaxis, :] * f_hat))
+    field_y = np.real(np.fft.ifft2(1j * ky[:, np.newaxis] * f_hat))
+
+    # Second derivatives
+    field_xx = np.real(np.fft.ifft2(-kx[np.newaxis, :] ** 2 * f_hat))
+    field_yy = np.real(np.fft.ifft2(-ky[:, np.newaxis] ** 2 * f_hat))
+
+    return field_x, field_y, field_xx, field_yy
+
+
 def temporal_derivative(field_history: list, dt: float) -> np.ndarray:
     """
     Compute time derivative from a sequence of snapshots using central differences.

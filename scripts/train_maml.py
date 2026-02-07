@@ -28,7 +28,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
-from src.training.task_loader import MetaLearningDataLoader, NavierStokesTask, BrusselatorTask
+from src.training.task_loader import MetaLearningDataLoader, NavierStokesTask, BrusselatorTask, BrusselatorFourierTask
 from src.training.maml import MAMLTrainer, MAMLConfig
 
 
@@ -121,17 +121,25 @@ def main():
     if not val_dir.exists():
         raise FileNotFoundError(f"Meta-val directory not found: {val_dir}")
 
-    # Select task class based on PDE type
+    # Select task class based on PDE type and data format
     pde_type = config['experiment'].get('pde_type', 'ns')
-    if pde_type == 'br':
+    data_format = config['experiment'].get('data_format', 'grid')
+
+    if pde_type == 'br' and data_format == 'fourier':
+        task_class = BrusselatorFourierTask
+        task_pattern = "*_fourier.npz"
+        print(f"PDE type: Brusselator (Fourier collocation)")
+    elif pde_type == 'br':
         task_class = BrusselatorTask
+        task_pattern = "*.npz"
         print(f"PDE type: Brusselator")
     else:
         task_class = NavierStokesTask
+        task_pattern = "*.npz"
         print(f"PDE type: Navier-Stokes")
 
-    train_loader = MetaLearningDataLoader(train_dir, task_class=task_class)
-    val_loader = MetaLearningDataLoader(val_dir, task_class=task_class)
+    train_loader = MetaLearningDataLoader(train_dir, task_class=task_class, task_pattern=task_pattern, device=device)
+    val_loader = MetaLearningDataLoader(val_dir, task_class=task_class, task_pattern=task_pattern, device=device)
 
     print()
     print(f"Meta-train tasks: {len(train_loader)}")

@@ -217,28 +217,29 @@ def solve_brusselator(
     print(f"  Time: [0, {t_end}] with dt = {dt}")
     print(f"  Total steps: {n_steps}, saving every {save_every} steps")
 
-    # Time integration loop (operator splitting)
+    # Time integration loop (Strang splitting — O(dt²) splitting error)
     for step in range(1, n_steps + 1):
         t = step * dt
 
-        # Step 1: Diffusion (using PhiFlow's implicit diffusion - unconditionally stable)
+        # Step 1: Half-step reaction (explicit Euler, dt/2)
+        A_val = A.values
+        B_val = B.values
+        R_A, R_B = brusselator_reaction(A_val, B_val, k1, k2)
+        A_val = math.maximum(A_val + (dt / 2) * R_A, 0.0)
+        B_val = math.maximum(B_val + (dt / 2) * R_B, 0.0)
+        A = CenteredGrid(A_val, extrapolation.PERIODIC, bounds=domain)
+        B = CenteredGrid(B_val, extrapolation.PERIODIC, bounds=domain)
+
+        # Step 2: Full-step diffusion (implicit, unconditionally stable)
         A = diffuse.implicit(A, D_A, dt, solve=Solve('CG', 1e-5, x0=None))
         B = diffuse.implicit(B, D_B, dt, solve=Solve('CG', 1e-5, x0=None))
 
-        # Step 2: Reaction (explicit Euler) - stay in PhiFlow tensors, no CPU transfer
+        # Step 3: Half-step reaction (explicit Euler, dt/2)
         A_val = A.values
         B_val = B.values
-
         R_A, R_B = brusselator_reaction(A_val, B_val, k1, k2)
-
-        A_val = A_val + dt * R_A
-        B_val = B_val + dt * R_B
-
-        # Ensure non-negative concentrations (PhiFlow math, stays on GPU)
-        A_val = math.maximum(A_val, 0.0)
-        B_val = math.maximum(B_val, 0.0)
-
-        # Wrap back to PhiFlow grids (no data copy, just metadata)
+        A_val = math.maximum(A_val + (dt / 2) * R_A, 0.0)
+        B_val = math.maximum(B_val + (dt / 2) * R_B, 0.0)
         A = CenteredGrid(A_val, extrapolation.PERIODIC, bounds=domain)
         B = CenteredGrid(B_val, extrapolation.PERIODIC, bounds=domain)
 

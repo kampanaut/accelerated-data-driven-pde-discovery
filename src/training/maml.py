@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 import copy
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -151,11 +150,9 @@ class MAMLTrainer:
             noise_level=self.config.noise_level
         )
 
-        # Convert to tensors
-        support_x = torch.tensor(support[0], dtype=torch.float32, device=self.device)
-        support_y = torch.tensor(support[1], dtype=torch.float32, device=self.device)
-        query_x = torch.tensor(query[0], dtype=torch.float32, device=self.device)
-        query_y = torch.tensor(query[1], dtype=torch.float32, device=self.device)
+        # Unpack tensors (already on device from task loader)
+        support_x, support_y = support
+        query_x, query_y = query
 
         # Inner loop optimizer (recreated each task)
         inner_opt = torch.optim.SGD(
@@ -496,8 +493,8 @@ def get_meta_learned_init(
 
 def fine_tune(
     model: nn.Module,
-    features: np.ndarray,
-    targets: np.ndarray,
+    features: torch.Tensor,
+    targets: torch.Tensor,
     lr: float,
     max_steps: int,
     device: str = 'cpu'
@@ -505,12 +502,10 @@ def fine_tune(
     """
     Fine-tune model on given data and return loss curve.
 
-    Used for evaluation: compare convergence of MAML init vs random init.
-
     Args:
         model: Model to fine-tune (will be modified in-place)
-        features: Input features array (N, input_dim)
-        targets: Target outputs array (N, output_dim)
+        features: Input features tensor (N, input_dim) on device
+        targets: Target outputs tensor (N, output_dim) on device
         lr: Learning rate for fine-tuning
         max_steps: Number of gradient steps
         device: Device to run on
@@ -523,8 +518,8 @@ def fine_tune(
 
     opt = torch.optim.SGD(model.parameters(), lr=lr)
 
-    x = torch.tensor(features, dtype=torch.float32, device=device)
-    y = torch.tensor(targets, dtype=torch.float32, device=device)
+    x = features
+    y = targets
 
     losses = []
     for _ in range(max_steps):

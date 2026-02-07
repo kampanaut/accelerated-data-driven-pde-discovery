@@ -32,7 +32,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
-from src.training.task_loader import MetaLearningDataLoader, PDETask, NavierStokesTask, BrusselatorTask
+from src.training.task_loader import MetaLearningDataLoader, PDETask, NavierStokesTask, BrusselatorTask, BrusselatorFourierTask
 from src.evaluation.jacobian import analyze_jacobian_ns, analyze_jacobian_br
 
 
@@ -80,26 +80,26 @@ def load_model_from_checkpoint(checkpoint_path: Path, device: str, model_config:
 
 def fine_tune(
     model: torch.nn.Module,
-    features: np.ndarray,
-    targets: np.ndarray,
+    features: torch.Tensor,
+    targets: torch.Tensor,
     lr: float,
     max_steps: int,
     device: str,
-    holdout_features: np.ndarray = None,
-    holdout_targets: np.ndarray = None,
+    holdout_features: torch.Tensor = None,
+    holdout_targets: torch.Tensor = None,
 ) -> Dict[str, List[float]]:
     """
     Fine-tune model and return train/holdout loss at each step.
 
     Args:
         model: Model to fine-tune (will be modified in-place)
-        features: Training input features (N, 10)
-        targets: Training target outputs (N, 2)
+        features: Training input features tensor (N, 10) on device
+        targets: Training target outputs tensor (N, 2) on device
         lr: Learning rate
         max_steps: Number of gradient steps
         device: Device to run on
-        holdout_features: Holdout input features for generalization eval
-        holdout_targets: Holdout targets for generalization eval
+        holdout_features: Holdout input features tensor for generalization eval
+        holdout_targets: Holdout targets tensor for generalization eval
 
     Returns:
         Dict with 'train_losses' and optionally 'holdout_losses'
@@ -107,13 +107,13 @@ def fine_tune(
     model.train()
     opt = torch.optim.SGD(model.parameters(), lr=lr)
 
-    x = torch.tensor(features, dtype=torch.float32, device=device)
-    y = torch.tensor(targets, dtype=torch.float32, device=device)
+    x = features
+    y = targets
 
     has_holdout = holdout_features is not None and holdout_targets is not None
     if has_holdout:
-        x_holdout = torch.tensor(holdout_features, dtype=torch.float32, device=device)
-        y_holdout = torch.tensor(holdout_targets, dtype=torch.float32, device=device)
+        x_holdout = holdout_features
+        y_holdout = holdout_targets
 
     train_losses = []
     holdout_losses = []
@@ -396,8 +396,19 @@ def main():
     if not (pde_type == "br" or pde_type == "nr"):
         raise ValueError("Invalid value for pde_type, must be 'br' or 'ns'")
 
-    task_class = BrusselatorTask if pde_type == 'br' else NavierStokesTask
-    test_loader = MetaLearningDataLoader(test_dir, task_class=task_class)
+    data_format = config['experiment'].get('data_format', 'grid')
+
+    if pde_type == 'br' and data_format == 'fourier':
+        task_class = BrusselatorFourierTask
+        task_pattern = "*_fourier.npz"
+    elif pde_type == 'br':
+        task_class = BrusselatorTask
+        task_pattern = "*.npz"
+    else:
+        task_class = NavierStokesTask
+        task_pattern = "*.npz"
+
+    test_loader = MetaLearningDataLoader(test_dir, task_class=task_class, task_pattern=task_pattern, device=device)
     print()
     print(f"Meta-test tasks: {len(test_loader)}")
     print()

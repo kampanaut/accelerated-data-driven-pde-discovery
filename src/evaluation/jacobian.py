@@ -286,7 +286,7 @@ def compute_laplacian_jacobian_jvp_br(
 
 def analyze_jacobian_ns(
     model: torch.nn.Module,
-    features: np.ndarray,
+    features: torch.Tensor,
     nu_true: float,
     device: str = "cpu",
     max_samples: Optional[int] = None
@@ -299,7 +299,7 @@ def analyze_jacobian_ns(
 
     Args:
         model: Trained PDE operator network
-        features: Input features of shape (n_samples, 10)
+        features: Input features tensor (n_samples, 10) on device
         nu_true: True viscosity value
         device: Device for computation
         max_samples: Maximum samples to use (None = use all)
@@ -309,13 +309,11 @@ def analyze_jacobian_ns(
     """
     # Subsample if needed
     if max_samples is not None and features.shape[0] > max_samples:
-        idx = np.random.choice(features.shape[0], max_samples, replace=False)
+        idx = torch.randperm(features.shape[0])[:max_samples]
         features = features[idx]
 
-    X = torch.tensor(features, dtype=torch.float32)
-
     # Compute Laplacian coefficients using JVP
-    results = compute_laplacian_jacobian_jvp_ns(model, X, device=device)
+    results = compute_laplacian_jacobian_jvp_ns(model, features, device=device)
 
     return JacobianResultsNS(
         nu_u=results['nu_u'],
@@ -326,7 +324,7 @@ def analyze_jacobian_ns(
 
 def analyze_jacobian_br(
     model: torch.nn.Module,
-    features: np.ndarray,
+    features: torch.Tensor,
     D_u_true: float,
     D_v_true: float,
     device: str = "cpu",
@@ -340,7 +338,7 @@ def analyze_jacobian_br(
 
     Args:
         model: Trained PDE operator network
-        features: Input features of shape (n_samples, 10)
+        features: Input features tensor (n_samples, 10) on device
         D_u_true: True diffusion coefficient for u
         D_v_true: True diffusion coefficient for v
         device: Device for computation
@@ -351,13 +349,11 @@ def analyze_jacobian_br(
     """
     # Subsample if needed
     if max_samples is not None and features.shape[0] > max_samples:
-        idx = np.random.choice(features.shape[0], max_samples, replace=False)
+        idx = torch.randperm(features.shape[0])[:max_samples]
         features = features[idx]
 
-    X = torch.tensor(features, dtype=torch.float32)
-
     # Compute diffusion coefficients using JVP
-    results = compute_laplacian_jacobian_jvp_br(model, X, device=device)
+    results = compute_laplacian_jacobian_jvp_br(model, features, device=device)
 
     return JacobianResultsBR(
         D_u=results['D_u'],

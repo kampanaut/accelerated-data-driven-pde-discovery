@@ -7,8 +7,9 @@ splits for meta-learning. Supports both Navier-Stokes and Brusselator PDEs.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Tuple, List, Optional, Type
+from typing import Tuple, List, Optional, Type, Union
 import numpy as np
+import torch
 
 
 class PDETask(ABC):
@@ -25,21 +26,23 @@ class PDETask(ABC):
     - Query set (D'): Q samples for meta-gradient evaluation
     """
 
-    def __init__(self, npz_path: Path):
+    def __init__(self, npz_path: Path, device: str = "cuda"):
         """
-        Load task from .npz file.
+        Load task from .npz file. Features and targets stored as GPU tensors.
 
         Args:
             npz_path: Path to .npz file with pre-computed derivatives
+            device: Torch device for tensor storage
 
         Raises:
             ValueError: If data is corrupted (NaN/Inf/shape mismatches)
         """
         self.npz_path = Path(npz_path)
+        self.device = device
         data = np.load(npz_path, allow_pickle=True)
 
-        # Common feature loading (same 10 inputs for both PDEs)
-        self.features = np.stack([
+        # Load features → GPU tensors immediately (numpy only at I/O boundary)
+        self.features = torch.tensor(np.stack([
             data['u'].flatten(),
             data['v'].flatten(),
             data['u_x'].flatten(),
@@ -50,18 +53,18 @@ class PDETask(ABC):
             data['v_y'].flatten(),
             data['v_xx'].flatten(),
             data['v_yy'].flatten(),
-        ], axis=1)  # Shape: (N_samples, 10)
+        ], axis=1), dtype=torch.float32, device=device)
 
-        # Common target loading (same 2 outputs for both PDEs)
-        self.targets = np.stack([
+        # Load targets → GPU tensors
+        self.targets = torch.tensor(np.stack([
             data['u_t'].flatten(),
             data['v_t'].flatten(),
-        ], axis=1)  # Shape: (N_samples, 2)
+        ], axis=1), dtype=torch.float32, device=device)
 
         # Common metadata
         self.ic_config = data['ic_config'].item() if 'ic_config' in data else {}
         self.simulation_params = data['simulation_params'].item() if 'simulation_params' in data else {}
-        self.n_samples = len(self.features)
+        self.n_samples = self.features.shape[0]
         self.task_name = self.npz_path.stem
 
         # Subclass-specific parameter extraction
@@ -108,14 +111,11 @@ class PDETask(ABC):
         seed: Optional[int] = None,
         noise_level: float = 0.0,
         clean_targets: bool = False
-    ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
         """
         Split task data into support set (D) and query set (D') for MAML.
 
-        MAML terminology:
-        - Support set (D): K samples used for inner loop adaptation (task training)
-        - Query set (D'): Q samples used for meta-gradient evaluation (task testing)
-        - D and D' must be disjoint (no overlap between support and query)
+        Returns GPU tensors directly — no numpy conversion.
 
         Args:
             K_shot: Support set size (number of samples for inner loop)
@@ -125,12 +125,8 @@ class PDETask(ABC):
             clean_targets: If True and noise_level > 0, use noisy features but clean targets
 
         Returns:
-            support: Tuple of (features[K], targets[K]) for inner loop
-            query: Tuple of (features[Q], targets[Q]) for meta-gradient
-
-        Raises:
-            ValueError: If K_shot + query_size exceeds task size
-            FileNotFoundError: If noise_level > 0 but noisy file doesn't exist
+            support: Tuple of (features[K], targets[K]) tensors on device
+            query: Tuple of (features[Q], targets[Q]) tensors on device
         """
         # Get features and targets (clean or noisy)
         if noise_level > 0.0:
@@ -138,7 +134,7 @@ class PDETask(ABC):
         else:
             features, targets = self.features, self.targets
 
-        n_samples = len(features)
+        n_samples = features.shape[0]
 
         if K_shot + query_size > n_samples:
             raise ValueError(
@@ -146,9 +142,11 @@ class PDETask(ABC):
                 f"exceeds task size ({n_samples}) for {self.task_name}"
             )
 
-        # Shuffle indices
-        rng = np.random.RandomState(seed)
-        indices = rng.permutation(n_samples)
+        # Shuffle with torch RNG on device
+        gen = torch.Generator(device=self.device)
+        if seed is not None:
+            gen.manual_seed(seed)
+        indices = torch.randperm(n_samples, generator=gen, device=self.device)
 
         # Split into support and query (disjoint sets)
         support_idx = indices[:K_shot]
@@ -163,20 +161,10 @@ class PDETask(ABC):
         self,
         noise_level: float,
         clean_targets: bool = False
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Load noisy features and optionally clean targets.
-
-        Args:
-            noise_level: Noise level to load (e.g., 0.01, 0.05, 0.10)
-            clean_targets: If True, load targets from clean data instead of noisy
-
-        Returns:
-            Tuple of (features, targets) arrays
-
-        Raises:
-            FileNotFoundError: If noisy file doesn't exist
-            KeyError: If noise level not found in noisy file
+        Load noisy features and optionally clean targets as GPU tensors.
+        Numpy only at the I/O boundary (np.load), then straight to device.
         """
         noisy_path = self.npz_path.parent / f"{self.npz_path.stem}_noisy.npz"
 
@@ -189,9 +177,8 @@ class PDETask(ABC):
         noisy_data = np.load(noisy_path, allow_pickle=True)
         level_key = f"noise_{noise_level:.2f}"
 
-        # Stack features (10 input features) - always noisy
         try:
-            features = np.stack([
+            features = torch.tensor(np.stack([
                 noisy_data[f'{level_key}/u'].flatten(),
                 noisy_data[f'{level_key}/v'].flatten(),
                 noisy_data[f'{level_key}/u_x'].flatten(),
@@ -202,7 +189,7 @@ class PDETask(ABC):
                 noisy_data[f'{level_key}/v_y'].flatten(),
                 noisy_data[f'{level_key}/v_xx'].flatten(),
                 noisy_data[f'{level_key}/v_yy'].flatten(),
-            ], axis=1)
+            ], axis=1), dtype=torch.float32, device=self.device)
         except KeyError as e:
             available = [k.split('/')[0] for k in noisy_data.keys() if '/' in k]
             available = sorted(set(available))
@@ -211,16 +198,13 @@ class PDETask(ABC):
                 f"Available levels: {available}"
             ) from e
 
-        # Stack targets - clean or noisy depending on flag
         if clean_targets:
-            # Use clean targets from original file
-            targets = self.targets
+            targets = self.targets  # already on device
         else:
-            # Use noisy targets
-            targets = np.stack([
+            targets = torch.tensor(np.stack([
                 noisy_data[f'{level_key}/u_t'].flatten(),
                 noisy_data[f'{level_key}/v_t'].flatten(),
-            ], axis=1)
+            ], axis=1), dtype=torch.float32, device=self.device)
 
         return features, targets
 
@@ -279,6 +263,139 @@ class BrusselatorTask(PDETask):
         return {'D_u': self.D_u, 'D_v': self.D_v}
 
 
+class BrusselatorFourierTask:
+    """
+    Brusselator task using Fourier coefficient representation.
+
+    Instead of pre-computed grid derivatives, stores FFT coefficients and
+    evaluates features at random collocation points on-the-fly on GPU. This gives:
+    - Spectrally exact derivatives (no finite-difference error)
+    - Fresh random points each batch (infinite effective dataset)
+    - Arbitrary evaluation locations (not grid-locked)
+    - GPU-accelerated Fourier synthesis
+
+    Duck-types the PDETask interface for drop-in use with MetaLearningDataLoader
+    and MAMLTrainer.
+    """
+
+    def __init__(self, npz_path: Path, device: str = "cuda"):
+        import torch
+        from src.data.fourier_eval import build_wavenumbers
+
+        self.npz_path = Path(npz_path)
+        self.device = device
+        data = np.load(npz_path, allow_pickle=True)
+
+        # Fourier coefficients → GPU as complex128 tensors
+        self.n_snapshots = data['A_hat'].shape[0]
+        self.ny, self.nx = data['A_hat'].shape[1], data['A_hat'].shape[2]
+        self.A_hat = torch.tensor(data['A_hat'], dtype=torch.complex128, device=device)
+        self.B_hat = torch.tensor(data['B_hat'], dtype=torch.complex128, device=device)
+        self.times = data['times']
+
+        # Metadata
+        self.ic_config = data['ic_config'].item() if 'ic_config' in data else {}
+        self.simulation_params = data['simulation_params'].item() if 'simulation_params' in data else {}
+        self.task_name = self.npz_path.stem
+
+        # PDE parameters
+        self.D_u = float(self.simulation_params.get('D_A') or self.ic_config.get('D_A_used'))
+        self.D_v = float(self.simulation_params.get('D_B') or self.ic_config.get('D_B_used'))
+        self.k1 = float(self.simulation_params.get('k1'))
+        self.k2 = float(self.simulation_params.get('k2'))
+
+        # Domain geometry
+        Lx, Ly = self.simulation_params['domain_size']
+        self.Lx, self.Ly = float(Lx), float(Ly)
+
+        # Precompute wavenumbers on GPU
+        self.kx, self.ky = build_wavenumbers(self.nx, self.ny, self.Lx, self.Ly, device=device)
+
+        # Report n_samples as snapshot_count * grid_size for compatibility
+        self.n_samples = self.n_snapshots * self.ny * self.nx
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        return {'D_u': self.D_u, 'D_v': self.D_v}
+
+    def get_support_query_split(
+        self,
+        K_shot: int,
+        query_size: int,
+        seed: Optional[int] = None,
+        noise_level: float = 0.0,
+        clean_targets: bool = False,
+    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
+        """
+        Generate support/query data at random collocation points.
+        Everything stays on GPU — no numpy, no host transfers.
+        """
+        from src.data.fourier_eval import evaluate_all_features
+
+        n_total = K_shot + query_size
+
+        # Torch RNG on device
+        gen = torch.Generator(device=self.device)
+        if seed is not None:
+            gen.manual_seed(seed)
+
+        # Sample random snapshot indices and spatial coordinates (all on GPU)
+        snap_idx = torch.randint(0, self.n_snapshots, (n_total,), generator=gen, device=self.device)
+        x_pts = torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64) * self.Lx
+        y_pts = torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64) * self.Ly
+
+        # Build phase matrices on GPU
+        E_x = torch.exp(1j * torch.outer(x_pts, self.kx))  # (n_total, nx)
+        E_y = torch.exp(1j * torch.outer(y_pts, self.ky))  # (n_total, ny)
+
+        # Group points by snapshot for efficient evaluation
+        all_features = torch.empty((n_total, 10), dtype=torch.float32, device=self.device)
+        all_targets = torch.empty((n_total, 2), dtype=torch.float32, device=self.device)
+
+        unique_snaps = torch.unique(snap_idx)
+        for si in unique_snaps:
+            mask_idx = torch.where(snap_idx == si)[0]
+            feats, tgts = evaluate_all_features(
+                self.A_hat[si.item()], self.B_hat[si.item()],
+                self.kx, self.ky,
+                E_x[mask_idx], E_y[mask_idx],
+                self.D_u, self.D_v, self.k1, self.k2,
+            )
+            all_features[mask_idx] = feats
+            all_targets[mask_idx] = tgts
+
+        # Inject noise if requested
+        if noise_level > 0.0:
+            feat_std = all_features.std(dim=0, keepdim=True)
+            noise = torch.randn_like(all_features) * (noise_level * feat_std)
+            all_features = all_features + noise
+
+            if not clean_targets:
+                u, v = all_features[:, 0], all_features[:, 1]
+                u_xx, u_yy = all_features[:, 4], all_features[:, 5]
+                v_xx, v_yy = all_features[:, 8], all_features[:, 9]
+                a_sq_b = u ** 2 * v
+                u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + a_sq_b
+                v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - a_sq_b
+                all_targets = torch.stack([u_t, v_t], dim=1)
+
+        support = (all_features[:K_shot], all_targets[:K_shot])
+        query = (all_features[K_shot:], all_targets[K_shot:])
+
+        return support, query
+
+    def __repr__(self) -> str:
+        return (
+            f"BrusselatorFourierTask(\n"
+            f"  name='{self.task_name}',\n"
+            f"  snapshots={self.n_snapshots}, grid=({self.ny}, {self.nx}),\n"
+            f"  diffusion_coeffs={self.diffusion_coeffs},\n"
+            f"  ic_type='{self.ic_config.get('type', 'unknown')}',\n"
+            f"  device='{self.device}'\n"
+            f")"
+        )
+
+
 class MetaLearningDataLoader:
     """
     Manages multiple PDE tasks for MAML meta-learning.
@@ -295,8 +412,9 @@ class MetaLearningDataLoader:
     def __init__(
         self,
         data_dir: Path,
-        task_class: Type[PDETask] = NavierStokesTask,
-        task_pattern: str = "*.npz"
+        task_class: Union[Type[PDETask], Type['BrusselatorFourierTask']] = NavierStokesTask,
+        task_pattern: str = "*.npz",
+        device: str = "cuda",
     ):
         """
         Initialize data loader by loading all tasks from directory.
@@ -305,12 +423,14 @@ class MetaLearningDataLoader:
             data_dir: Directory containing .npz task files
             task_class: Task class to instantiate (NavierStokesTask or BrusselatorTask)
             task_pattern: Glob pattern for task files (default: "*.npz")
+            device: Torch device for tensor storage
 
         Raises:
             ValueError: If no .npz files found or if any task is corrupted
         """
         self.data_dir = Path(data_dir)
         self.task_class = task_class
+        self.device = device
         npz_files = sorted(self.data_dir.glob(task_pattern))
 
         # Exclude noisy files (they're loaded on-demand by get_support_query_split)
@@ -327,7 +447,7 @@ class MetaLearningDataLoader:
         print(f"Loading tasks from {data_dir}...")
         for f in npz_files:
             try:
-                task = self.task_class(f)
+                task = self.task_class(f, device=self.device)
                 self.tasks.append(task)
                 self.task_names.append(f.stem)
             except ValueError as e:
@@ -366,9 +486,11 @@ class MetaLearningDataLoader:
                 f"Cannot sample {n_tasks} tasks from {len(self.tasks)} available tasks"
             )
 
-        rng = np.random.RandomState(seed)
-        indices = rng.choice(len(self.tasks), size=n_tasks, replace=False)
-        return [self.tasks[i] for i in indices]
+        gen = torch.Generator()
+        if seed is not None:
+            gen.manual_seed(seed)
+        indices = torch.randperm(len(self.tasks), generator=gen)[:n_tasks]
+        return [self.tasks[i.item()] for i in indices]
 
     def get_task_by_name(self, name: str) -> PDETask:
         """
@@ -412,14 +534,16 @@ class MetaLearningDataLoader:
         """
         n_test = max(1, int(len(self.tasks) * test_ratio))
 
-        rng = np.random.RandomState(seed)
-        indices = rng.permutation(len(self.tasks))
+        gen = torch.Generator()
+        if seed is not None:
+            gen.manual_seed(seed)
+        indices = torch.randperm(len(self.tasks), generator=gen)
 
         test_idx = indices[:n_test]
         train_idx = indices[n_test:]
 
-        train_tasks = [self.tasks[i] for i in train_idx]
-        test_tasks = [self.tasks[i] for i in test_idx]
+        train_tasks = [self.tasks[i.item()] for i in train_idx]
+        test_tasks = [self.tasks[i.item()] for i in test_idx]
 
         print(f"\nTrain/test split:")
         print(f"  Train tasks: {len(train_tasks)}")

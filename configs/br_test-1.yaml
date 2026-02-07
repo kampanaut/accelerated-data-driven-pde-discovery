@@ -17,11 +17,12 @@ simulation:
   k2: 7.0
 
   domain_size: [50.0, 50.0]
-  resolution: [64, 64]
+  resolution: [128, 128]
 
-  t_end: 200.0
-  dt: 0.01
-  save_interval: 2.0
+  # Time integration
+  t_end: 7.0
+  dt: 0.001
+  save_interval: 0.2
 
 output:
   base_dir: "data/datasets"
