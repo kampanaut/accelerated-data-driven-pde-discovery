@@ -1,0 +1,62 @@
+# Brusselator Test Configuration v2
+# 30 tasks: 6 pu + 6 gp + 6 rs + 6 lp (OOD) + 6 mp (OOD)
+# Same parameter ranges as train/val, plus OOD IC types
+
+simulation:
+  name: "br_test-2"
+
+  D_A: 2.0
+  D_B: 16.0
+  k1: 4.5
+  k2: 7.0
+
+  domain_size: [50.0, 50.0]
+  resolution: [128, 128]
+
+  t_end: 2.0
+  dt: 0.001
+  save_interval: 0.02
+
+output:
+  base_dir: "data/datasets"
+
+initial_conditions:
+  # ========== perturbed_uniform (pu) — 6 tasks ==========
+  - {name: "br2t_pu_001", type: "perturbed_uniform", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, seed: 800001}
+  - {name: "br2t_pu_002", type: "perturbed_uniform", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, seed: 800002}
+  - {name: "br2t_pu_003", type: "perturbed_uniform", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, seed: 800003}
+  - {name: "br2t_pu_004", type: "perturbed_uniform", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, seed: 800004}
+  - {name: "br2t_pu_005", type: "perturbed_uniform", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, seed: 800005}
+  - {name: "br2t_pu_006", type: "perturbed_uniform", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, seed: 800006}
+
+  # ========== gradient_perturbation (gp) — 6 tasks ==========
+  - {name: "br2t_gp_001", type: "gradient_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], gradient_amplitude: 0.15, n_modes: 2, seed: 810001}
+  - {name: "br2t_gp_002", type: "gradient_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], gradient_amplitude: 0.15, n_modes: 3, seed: 810002}
+  - {name: "br2t_gp_003", type: "gradient_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], gradient_amplitude: 0.15, n_modes: 4, seed: 810003}
+  - {name: "br2t_gp_004", type: "gradient_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], gradient_amplitude: 0.15, n_modes: 5, seed: 810004}
+  - {name: "br2t_gp_005", type: "gradient_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], gradient_amplitude: 0.15, n_modes: 2, seed: 810005}
+  - {name: "br2t_gp_006", type: "gradient_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], gradient_amplitude: 0.15, n_modes: 3, seed: 810006}
+
+  # ========== random_smooth (rs) — 6 tasks ==========
+  - {name: "br2t_rs_001", type: "random_smooth", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 820001}
+  - {name: "br2t_rs_002", type: "random_smooth", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 820002}
+  - {name: "br2t_rs_003", type: "random_smooth", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 820003}
+  - {name: "br2t_rs_004", type: "random_smooth", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 820004}
+  - {name: "br2t_rs_005", type: "random_smooth", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 820005}
+  - {name: "br2t_rs_006", type: "random_smooth", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 820006}
+
+  # ========== localized_perturbation (lp) — 6 tasks (OOD) ==========
+  - {name: "br2t_lp_001", type: "localized_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 830001}
+  - {name: "br2t_lp_002", type: "localized_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 830002}
+  - {name: "br2t_lp_003", type: "localized_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 830003}
+  - {name: "br2t_lp_004", type: "localized_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 830004}
+  - {name: "br2t_lp_005", type: "localized_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 830005}
+  - {name: "br2t_lp_006", type: "localized_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 830006}
+
+  # ========== multi_patch_perturbation (mp) — 6 tasks (OOD) ==========
+  - {name: "br2t_mp_001", type: "multi_patch_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 840001}
+  - {name: "br2t_mp_002", type: "multi_patch_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 840002}
+  - {name: "br2t_mp_003", type: "multi_patch_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 840003}
+  - {name: "br2t_mp_004", type: "multi_patch_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 840004}
+  - {name: "br2t_mp_005", type: "multi_patch_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 840005}
+  - {name: "br2t_mp_006", type: "multi_patch_perturbation", D_A: [0.5, 3.0], D_B: [10, 28], k2_delta: [1, 3], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 840006}

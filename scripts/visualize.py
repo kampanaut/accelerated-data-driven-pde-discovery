@@ -132,6 +132,9 @@ def load_results_with_curves(results_path: Path) -> dict:
                         'baseline_D_v': task_curves.get(f"{combo_key}/baseline/D_v"),
                         'baseline_D_u_true': task_curves.get(f"{combo_key}/baseline/D_u_true"),
                         'baseline_D_v_true': task_curves.get(f"{combo_key}/baseline/D_v_true"),
+                        # Per-point prediction errors for overlay plots
+                        'maml_pred_errors': task_curves.get(f"{combo_key}/maml/pred_errors"),
+                        'baseline_pred_errors': task_curves.get(f"{combo_key}/baseline/pred_errors"),
                     }
                     # Convert loss arrays to lists for compatibility with existing code
                     # Keep Jacobian/coefficient arrays as numpy for plotting
@@ -215,9 +218,11 @@ def generate_per_task_figures(
             ('nu_u', 'nu_v', 'nu_true'),
         ]
     else:  # 'br'
+        # Each coefficient has only one JVP estimate (no secondary),
+        # so secondary = primary makes the averaging a no-op.
         coeff_configs = [
-            ('D_u', 'D_v', 'D_u_true'),
-            ('D_v', 'D_u', 'D_v_true'),
+            ('D_u', 'D_u', 'D_u_true'),
+            ('D_v', 'D_v', 'D_v_true'),
         ]
 
     for task_name, task_data in results['tasks'].items():
@@ -402,6 +407,10 @@ def generate_per_task_figures(
                 combo_key = f"k_{k}_noise_{noise:.2f}"
                 combo_data = task_results.get(combo_key, {})
 
+                # Extract prediction errors (shape (n, 2) or None)
+                maml_pe = combo_data.get('maml_pred_errors')
+                baseline_pe = combo_data.get('baseline_pred_errors')
+
                 if pde_type == 'ns':
                     # NS: overlay nu_u and nu_v
                     coeff_true = combo_data.get('maml_nu_true')
@@ -430,6 +439,10 @@ def generate_per_task_figures(
                         coeff_2_label='v-eq (ν_v)',
                         save_path=task_dir / f"jacobian_histogram_nu_k{k}_noise{noise:.2f}.png",
                         dpi=dpi,
+                        maml_pred_errors_1=maml_pe[:, 0] if maml_pe is not None else None,
+                        maml_pred_errors_2=maml_pe[:, 1] if maml_pe is not None else None,
+                        baseline_pred_errors_1=baseline_pe[:, 0] if baseline_pe is not None else None,
+                        baseline_pred_errors_2=baseline_pe[:, 1] if baseline_pe is not None else None,
                     )
                     plt.close(fig)
 
@@ -441,10 +454,9 @@ def generate_per_task_figures(
 
                     if coeff_true_u is not None and maml_Du is not None and baseline_Du is not None:
                         if len(maml_Du) > 0 and len(baseline_Du) > 0:
-                            # For Brusselator, D_u only comes from u-equation, so duplicate for now
                             fig = plot_jacobian_histogram(
                                 maml_coeff_1=maml_Du,
-                                maml_coeff_2=maml_Du,  # same (only one source)
+                                maml_coeff_2=maml_Du,
                                 baseline_coeff_1=baseline_Du,
                                 baseline_coeff_2=baseline_Du,
                                 coeff_true=float(coeff_true_u[0]),
@@ -454,6 +466,10 @@ def generate_per_task_figures(
                                 coeff_2_label='u-eq',
                                 save_path=task_dir / f"jacobian_histogram_D_u_k{k}_noise{noise:.2f}.png",
                                 dpi=dpi,
+                                maml_pred_errors_1=maml_pe[:, 0] if maml_pe is not None else None,
+                                maml_pred_errors_2=maml_pe[:, 0] if maml_pe is not None else None,
+                                baseline_pred_errors_1=baseline_pe[:, 0] if baseline_pe is not None else None,
+                                baseline_pred_errors_2=baseline_pe[:, 0] if baseline_pe is not None else None,
                             )
                             plt.close(fig)
 
@@ -476,6 +492,10 @@ def generate_per_task_figures(
                                 coeff_2_label='v-eq',
                                 save_path=task_dir / f"jacobian_histogram_D_v_k{k}_noise{noise:.2f}.png",
                                 dpi=dpi,
+                                maml_pred_errors_1=maml_pe[:, 1] if maml_pe is not None else None,
+                                maml_pred_errors_2=maml_pe[:, 1] if maml_pe is not None else None,
+                                baseline_pred_errors_1=baseline_pe[:, 1] if baseline_pe is not None else None,
+                                baseline_pred_errors_2=baseline_pe[:, 1] if baseline_pe is not None else None,
                             )
                             plt.close(fig)
 
@@ -621,8 +641,8 @@ def generate_aggregated_figures(
         ]
     else:  # 'br'
         coeff_configs = [
-            ('D_u', 'D_v', 'D_u_true'),
-            ('D_v', 'D_u', 'D_v_true'),
+            ('D_u', 'D_u', 'D_u_true'),
+            ('D_v', 'D_v', 'D_v_true'),
         ]
 
     agg_dir = output_dir / 'aggregated'

@@ -606,6 +606,24 @@ def plot_sample_efficiency(
 # Jacobian / Coefficient Recovery Graphs (Graph 7-10)
 # =============================================================================
 
+def _overlay_pred_errors(ax, coeff_values: np.ndarray, pred_errors: np.ndarray,
+                         bin_edges: np.ndarray, color: str, label: str):
+    """Add a twinx line showing mean |prediction error| per Jacobian bin."""
+    n_bins = len(bin_edges) - 1
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bin_indices = np.clip(np.digitize(coeff_values, bin_edges) - 1, 0, n_bins - 1)
+
+    mean_errors = np.full(n_bins, np.nan)
+    for i in range(n_bins):
+        mask = bin_indices == i
+        if mask.sum() > 0:
+            mean_errors[i] = pred_errors[mask].mean()
+
+    valid = ~np.isnan(mean_errors)
+    ax.plot(bin_centers[valid], mean_errors[valid], '-o', color=color, markersize=2,
+            linewidth=1.2, alpha=0.8, label=label)
+
+
 def plot_jacobian_histogram(
     maml_coeff_1: np.ndarray,
     maml_coeff_2: np.ndarray,
@@ -619,13 +637,20 @@ def plot_jacobian_histogram(
     save_path: Optional[Path] = None,
     figsize: Tuple[int, int] = (14, 5),
     dpi: int = 150,
+    maml_pred_errors_1: Optional[np.ndarray] = None,
+    maml_pred_errors_2: Optional[np.ndarray] = None,
+    baseline_pred_errors_1: Optional[np.ndarray] = None,
+    baseline_pred_errors_2: Optional[np.ndarray] = None,
 ) -> plt.Figure:
     """
-    Graph 7: Jacobian Distribution Histogram.
+    Graph 7: Jacobian Distribution Histogram with prediction error overlay.
 
     Side-by-side histograms showing the distribution of learned diffusion
     coefficients compared to true value. Overlays estimates from u-equation
     and v-equation to reveal if they learned different coefficients.
+
+    When pred_errors are provided, a twinx axis shows mean |prediction error|
+    per Jacobian bin — colored to match their corresponding histogram.
 
     Args:
         maml_coeff_1: MAML coefficient from first equation (nu_u or D_u)
@@ -640,6 +665,10 @@ def plot_jacobian_histogram(
         save_path: Path to save figure
         figsize: Figure size
         dpi: Resolution
+        maml_pred_errors_1: Per-point |pred error| for eq1 (u_t), shape (n,)
+        maml_pred_errors_2: Per-point |pred error| for eq2 (v_t), shape (n,)
+        baseline_pred_errors_1: Per-point |pred error| for eq1, shape (n,)
+        baseline_pred_errors_2: Per-point |pred error| for eq2, shape (n,)
 
     Returns:
         matplotlib Figure object
@@ -677,7 +706,23 @@ def plot_jacobian_histogram(
     ax.set_xlabel(f'{symbol} Jacobian entries')
     ax.set_ylabel('Count')
     ax.set_title(f'MAML (θ*)')
-    ax.legend(fontsize=8)
+
+    # Prediction error overlay on MAML panel
+    if maml_pred_errors_1 is not None:
+        ax2 = ax.twinx()
+        _overlay_pred_errors(ax2, maml_coeff_1, maml_pred_errors_1, maml_bins,
+                             color='darkblue', label=f'|err| {coeff_1_label}')
+        if maml_pred_errors_2 is not None:
+            _overlay_pred_errors(ax2, maml_coeff_2, maml_pred_errors_2, maml_bins,
+                                 color='darkcyan', label=f'|err| {coeff_2_label}')
+        ax2.set_ylabel('Mean |pred error|', fontsize=8)
+        ax2.tick_params(axis='y', labelsize=7)
+        # Merge legends
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc='upper right')
+    else:
+        ax.legend(fontsize=8)
 
     # Baseline histogram - overlay both equations
     ax = axes[1]
@@ -694,7 +739,22 @@ def plot_jacobian_histogram(
     ax.set_xlabel(f'{symbol} Jacobian entries')
     ax.set_ylabel('Count')
     ax.set_title(f'Baseline (θ₀)')
-    ax.legend(fontsize=8)
+
+    # Prediction error overlay on Baseline panel
+    if baseline_pred_errors_1 is not None:
+        ax2 = ax.twinx()
+        _overlay_pred_errors(ax2, baseline_coeff_1, baseline_pred_errors_1, baseline_bins,
+                             color='darkorange', label=f'|err| {coeff_1_label}')
+        if baseline_pred_errors_2 is not None:
+            _overlay_pred_errors(ax2, baseline_coeff_2, baseline_pred_errors_2, baseline_bins,
+                                 color='goldenrod', label=f'|err| {coeff_2_label}')
+        ax2.set_ylabel('Mean |pred error|', fontsize=8)
+        ax2.tick_params(axis='y', labelsize=7)
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc='upper right')
+    else:
+        ax.legend(fontsize=8)
 
     plt.tight_layout()
 

@@ -232,6 +232,15 @@ def evaluate_task(
                 curves[f"{combo_key}/baseline_train_losses"] = np.array(baseline_result['train_losses'])
                 curves[f"{combo_key}/baseline_holdout_losses"] = np.array(baseline_result['holdout_losses'])
 
+                # Per-point prediction errors on holdout set (for overlay plots)
+                with torch.no_grad():
+                    maml_pred = maml_model(holdout_features)
+                    maml_pred_errors = (maml_pred - holdout_targets).abs().cpu().numpy()
+                    baseline_pred = baseline_model(holdout_features)
+                    baseline_pred_errors = (baseline_pred - holdout_targets).abs().cpu().numpy()
+                curves[f"{combo_key}/maml/pred_errors"] = maml_pred_errors
+                curves[f"{combo_key}/baseline/pred_errors"] = baseline_pred_errors
+
                 # Jacobian analysis for coefficient recovery (uses task.diffusion_coeffs property)
                 coeffs = task.diffusion_coeffs
                 if pde_type == 'ns':

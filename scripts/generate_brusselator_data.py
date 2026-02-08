@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.pde.brusselator import solve_brusselator
 from src.data.derivatives import spectral_spatial_derivatives as spatial_derivatives
-from src.data.initial_conditions_brusselator import create_brusselator_ic
+from src.data.initial_conditions_brusselator import create_brusselator_ic, compute_turing_threshold
 
 
 def generate_training_samples(
@@ -419,15 +419,27 @@ def process_single_ic(args_tuple):
     task_sim_params = simulation_params.copy()
 
     # Handle parameter sampling from ranges
+    # Single RNG per task — draws are sequential so D_A, D_B, k1, k2 get distinct values
+    param_rng = np.random.default_rng(ic_config.get('seed'))
     for param in ['D_A', 'D_B', 'k1', 'k2']:
         raw_val = ic_config.get(param, task_sim_params[param])
         if isinstance(raw_val, list):
             if len(raw_val) != 2:
                 return ('failed', ic_name, f"{param} as list must have 2 elements, got {len(raw_val)}", 0)
-            rng = np.random.default_rng(ic_config.get('seed'))
-            task_sim_params[param] = rng.uniform(raw_val[0], raw_val[1])
+            task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
         elif raw_val != task_sim_params[param]:
             task_sim_params[param] = raw_val
+
+    # k2_delta: sample k2 relative to Turing threshold instead of absolute range
+    k2_delta_range = ic_config.get('k2_delta')
+    if k2_delta_range is not None:
+        k2_c = compute_turing_threshold(
+            k1=task_sim_params['k1'],
+            D_A=task_sim_params['D_A'],
+            D_B=task_sim_params['D_B'],
+        )
+        delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
+        task_sim_params['k2'] = k2_c + delta
 
     # Inject k1, k2 into IC config for steady state calculation
     ic_config_with_params = ic_config.copy()
@@ -475,6 +487,9 @@ def process_single_ic(args_tuple):
             ic_config_to_save['D_B_used'] = task_sim_params['D_B']
             ic_config_to_save['seed_used'] = ic_config_attempt.get('seed')
             ic_config_to_save['retry_attempt'] = attempt
+            if k2_delta_range is not None:
+                ic_config_to_save['k2_c'] = k2_c
+                ic_config_to_save['k2_delta_used'] = task_sim_params['k2'] - k2_c
 
             if fourier_mode:
                 fourier_data = generate_fourier_data(concentration_history, times)
@@ -655,6 +670,8 @@ def main():
             task_sim_params = simulation_params.copy()
 
             # Handle parameter sampling from ranges
+            # Single RNG per task — draws are sequential so D_A, D_B, k1, k2 get distinct values
+            param_rng = np.random.default_rng(ic_config.get('seed'))
             for param in ['D_A', 'D_B', 'k1', 'k2']:
                 raw_val = ic_config.get(param, task_sim_params[param])
                 if isinstance(raw_val, list):
@@ -663,11 +680,22 @@ def main():
                             f"Task '{ic_name}': {param} as list must have exactly 2 elements [min, max], "
                             f"got {len(raw_val)} elements: {raw_val}"
                         )
-                    rng = np.random.default_rng(ic_config.get('seed'))
-                    task_sim_params[param] = rng.uniform(raw_val[0], raw_val[1])
+                    task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
                     print(f"Sampled {param} = {task_sim_params[param]:.6f} from range {raw_val}")
                 elif raw_val != task_sim_params[param]:
                     task_sim_params[param] = raw_val
+
+            # k2_delta: sample k2 relative to Turing threshold
+            k2_delta_range = ic_config.get('k2_delta')
+            if k2_delta_range is not None:
+                k2_c = compute_turing_threshold(
+                    k1=task_sim_params['k1'],
+                    D_A=task_sim_params['D_A'],
+                    D_B=task_sim_params['D_B'],
+                )
+                delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
+                task_sim_params['k2'] = k2_c + delta
+                print(f"k2_delta mode: k2_c={k2_c:.4f}, delta={delta:.4f}, k2={task_sim_params['k2']:.4f}")
 
             # Inject k1, k2 into IC config for steady state calculation
             ic_config_with_params = ic_config.copy()
@@ -718,6 +746,9 @@ def main():
                     ic_config_to_save['D_B_used'] = task_sim_params['D_B']
                     ic_config_to_save['seed_used'] = ic_config_attempt.get('seed')
                     ic_config_to_save['retry_attempt'] = attempt
+                    if k2_delta_range is not None:
+                        ic_config_to_save['k2_c'] = k2_c
+                        ic_config_to_save['k2_delta_used'] = task_sim_params['k2'] - k2_c
 
                     if args.fourier:
                         fourier_data = generate_fourier_data(concentration_history, times)
