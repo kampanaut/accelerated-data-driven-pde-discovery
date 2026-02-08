@@ -60,6 +60,9 @@ class MAMLConfig:
     warmup_iterations: int = 0           # Linear warmup iterations (0 = no warmup)
     use_scheduler: bool = False          # Use cosine annealing after warmup
     min_lr: float = 1e-6                 # Minimum LR at end of cosine decay
+    scheduler_type: str = 'cosine'       # 'cosine' (single decay) or 'warm_restarts'
+    T_0: int = 500                       # Initial restart period (warm_restarts only)
+    T_mult: int = 2                      # Period multiplier after each restart
 
 
 class MAMLTrainer:
@@ -102,22 +105,50 @@ class MAMLTrainer:
             lr=config.outer_lr
         )
 
-        # LR scheduler with warmup + cosine annealing
+        # LR scheduler: optional warmup → cosine decay (single or warm restarts)
         self.scheduler = None
         if config.use_scheduler or config.warmup_iterations > 0:
-            def lr_lambda(iteration: int) -> float:
-                # Linear warmup
-                if iteration < config.warmup_iterations:
-                    return (iteration + 1) / config.warmup_iterations
-                # Cosine annealing after warmup
-                if config.use_scheduler:
-                    import math
-                    progress = (iteration - config.warmup_iterations) / max(1, config.max_outer_iterations - config.warmup_iterations)
-                    cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
-                    # Scale between min_lr and outer_lr
-                    return config.min_lr / config.outer_lr + (1 - config.min_lr / config.outer_lr) * cosine_decay
-                return 1.0
-            self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.outer_opt, lr_lambda)
+            schedulers = []
+            milestones = []
+
+            # Phase 1: linear warmup
+            if config.warmup_iterations > 0:
+                warmup = torch.optim.lr_scheduler.LinearLR(
+                    self.outer_opt,
+                    start_factor=1.0 / config.warmup_iterations,
+                    end_factor=1.0,
+                    total_iters=config.warmup_iterations,
+                )
+                schedulers.append(warmup)
+                milestones.append(config.warmup_iterations)
+
+            # Phase 2: cosine decay
+            if config.use_scheduler:
+                post_warmup_iters = config.max_outer_iterations - config.warmup_iterations
+                if config.scheduler_type == 'warm_restarts':
+                    decay = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                        self.outer_opt,
+                        T_0=config.T_0,
+                        T_mult=config.T_mult,
+                        eta_min=config.min_lr,
+                    )
+                else:
+                    decay = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        self.outer_opt,
+                        T_max=post_warmup_iters,
+                        eta_min=config.min_lr,
+                    )
+                schedulers.append(decay)
+
+            # Chain them
+            if len(schedulers) > 1:
+                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    self.outer_opt,
+                    schedulers=schedulers,
+                    milestones=milestones,
+                )
+            elif schedulers:
+                self.scheduler = schedulers[0]
 
         # Training state
         self.iteration = 0
@@ -340,7 +371,10 @@ class MAMLTrainer:
         if self.config.warmup_iterations > 0:
             print(f"  Warmup: {self.config.warmup_iterations} iterations")
         if self.config.use_scheduler:
-            print(f"  LR scheduler: cosine annealing to {self.config.min_lr}")
+            sched_desc = f"cosine annealing to {self.config.min_lr}"
+            if self.config.scheduler_type == 'warm_restarts':
+                sched_desc += f" (warm restarts: T_0={self.config.T_0}, T_mult={self.config.T_mult})"
+            print(f"  LR scheduler: {sched_desc}")
         print()
 
         early_stopped: bool = False

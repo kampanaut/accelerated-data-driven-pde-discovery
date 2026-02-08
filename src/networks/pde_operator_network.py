@@ -81,12 +81,16 @@ class PDEOperatorNetwork(nn.Module):
         self.hidden_dims = hidden_dims if hidden_dims is not None else [100, 100]
 
         # Choose activation function
-        if activation == 'tanh':
-            act_fn = nn.Tanh
-        elif activation == 'relu':
-            act_fn = nn.ReLU
-        else:
-            raise ValueError(f"Unknown activation: {activation}. Use 'tanh' or 'relu'.")
+        activation_map = {
+            'tanh': nn.Tanh,
+            'relu': nn.ReLU,
+            'silu': nn.SiLU,      # Swish: x * sigmoid(x), C^inf, unbounded
+            'gelu': nn.GELU,      # Gaussian error linear unit, C^inf
+            'mish': nn.Mish,      # x * tanh(softplus(x)), C^inf
+        }
+        if activation not in activation_map:
+            raise ValueError(f"Unknown activation: {activation}. Use one of: {list(activation_map.keys())}")
+        act_fn = activation_map[activation]
 
         # Build network layers
         layers = []

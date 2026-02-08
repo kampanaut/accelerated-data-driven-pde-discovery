@@ -214,6 +214,9 @@ def main():
         warmup_iterations=train_cfg.get('warmup_iterations', 0),
         use_scheduler=train_cfg.get('use_scheduler', False),
         min_lr=train_cfg.get('min_lr', 1e-6),
+        scheduler_type=train_cfg.get('scheduler_type', 'cosine'),
+        T_0=train_cfg.get('T_0', 500),
+        T_mult=train_cfg.get('T_mult', 2),
         device=device,
         seed=seed,
     )
