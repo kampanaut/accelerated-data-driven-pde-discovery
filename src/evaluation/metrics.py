@@ -13,13 +13,14 @@ Legacy (deprecated):
 - Steps to lowest - replaced by plateau detection for monotonic curves
 """
 
-from typing import List, Optional, Dict, Tuple
+from typing import Any, List, Optional, Dict, Tuple
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import NDArray
 
 
-def steps_to_threshold(losses: List[float], threshold: float = 1e-6) -> Optional[int]:
+def steps_to_threshold(losses: NDArray[np.floating[Any]], threshold: float = 1e-6) -> Optional[int]:
     """
     Find first step where loss drops below threshold.
 
@@ -36,7 +37,7 @@ def steps_to_threshold(losses: List[float], threshold: float = 1e-6) -> Optional
     return None
 
 
-def steps_to_lowest(losses: List[float]) -> int:
+def steps_to_lowest(losses: NDArray[np.floating[Any]]) -> int:
     """
     Find step with minimum loss value.
 
@@ -52,7 +53,7 @@ def steps_to_lowest(losses: List[float]) -> int:
 
 
 def steps_to_plateau(
-    losses: List[float],
+    losses: np.ndarray,
     deriv_threshold: float = 1e-3,
 ) -> int:
     """
@@ -122,9 +123,7 @@ def loss_at_step(losses: List[float], step: int) -> float:
 
 
 def speedup_ratio(
-    maml_losses: List[float],
-    baseline_losses: List[float],
-    threshold: float = 1e-6
+    maml_losses: NDArray[np.floating[Any]], baseline_losses: NDArray[np.floating[Any]], threshold: float = 1e-6
 ) -> Tuple[Optional[float], str]:
     """
     Compute speedup ratio: baseline_steps / maml_steps.
@@ -148,7 +147,7 @@ def speedup_ratio(
     # Both reached threshold
     if maml_steps is not None and baseline_steps is not None:
         if maml_steps == 0:
-            return float('inf'), "threshold"
+            return float("inf"), "threshold"
         return baseline_steps / maml_steps, "threshold"
 
     # Neither reached threshold - use fallback
@@ -156,7 +155,7 @@ def speedup_ratio(
         maml_lowest = steps_to_lowest(maml_losses)
         baseline_lowest = steps_to_lowest(baseline_losses)
         if maml_lowest == 0:
-            return float('inf'), "lowest"
+            return float("inf"), "lowest"
         return baseline_lowest / maml_lowest, "lowest"
 
     # Only one reached - can't compare fairly
@@ -166,16 +165,17 @@ def speedup_ratio(
 @dataclass
 class SpeedupResult:
     """Result of speedup computation using plateau detection."""
-    ratio: float           # baseline_steps / maml_steps (>1 means MAML faster)
-    maml_steps: int        # steps to reach MAML's plateau
-    baseline_steps: int    # steps to reach baseline's plateau
-    maml_loss: float       # MAML's loss at plateau start
-    baseline_loss: float   # baseline's loss at plateau start
+
+    ratio: float  # baseline_steps / maml_steps (>1 means MAML faster)
+    maml_steps: int  # steps to reach MAML's plateau
+    baseline_steps: int  # steps to reach baseline's plateau
+    maml_loss: float  # MAML's loss at plateau start
+    baseline_loss: float  # baseline's loss at plateau start
 
 
 def speedup_ratio_dynamic(
-    maml_losses: List[float],
-    baseline_losses: List[float],
+    maml_losses: NDArray[np.floating[Any]],
+    baseline_losses: NDArray[np.floating[Any]],
     deriv_threshold: float = 1e-3,
 ) -> SpeedupResult:
     """
@@ -200,7 +200,7 @@ def speedup_ratio_dynamic(
 
     # Avoid division by zero
     if maml_step == 0:
-        ratio = float('inf')
+        ratio = float("inf")
     else:
         ratio = baseline_step / maml_step
 
@@ -244,12 +244,12 @@ class ComparisonMetrics:
 
 
 def compute_comparison_metrics(
-    maml_losses: List[float],
-    baseline_losses: List[float],
-    fixed_steps: List[int] = None,
+    maml_losses: NDArray[np.floating[Any]],
+    baseline_losses: NDArray[np.floating[Any]],
+    fixed_steps: NDArray[np.integer[Any]],
+    maml_holdout_losses: NDArray[np.floating[Any]],
+    baseline_holdout_losses: NDArray[np.floating[Any]],
     deriv_threshold: float = 1e-3,
-    maml_holdout_losses: List[float] = None,
-    baseline_holdout_losses: List[float] = None,
 ) -> ComparisonMetrics:
     """
     Compute all comparison metrics from loss curves.
@@ -266,11 +266,11 @@ def compute_comparison_metrics(
     Returns:
         ComparisonMetrics dataclass with all computed metrics
     """
-    if fixed_steps is None:
-        fixed_steps = [50, 100, 200]
 
     # Plateau detection (primary metric) on train loss
-    speedup_result = speedup_ratio_dynamic(maml_losses, baseline_losses, deriv_threshold)
+    speedup_result = speedup_ratio_dynamic(
+        maml_losses, baseline_losses, deriv_threshold
+    )
 
     # Loss at fixed steps
     max_step = min(len(maml_losses), len(baseline_losses)) - 1
@@ -279,12 +279,12 @@ def compute_comparison_metrics(
     ratios = {}
 
     for step in fixed_steps:
-        if step-1 <= max_step:
-            m_loss = maml_losses[step-1]
-            b_loss = baseline_losses[step-1]
+        if step - 1 <= max_step:
+            m_loss = maml_losses[step - 1]
+            b_loss = baseline_losses[step - 1]
             maml_at_steps[step] = m_loss
             baseline_at_steps[step] = b_loss
-            ratios[step] = m_loss / b_loss if b_loss > 0 else float('inf')
+            ratios[step] = m_loss / b_loss if b_loss > 0 else float("inf")
 
     # Holdout metrics (generalization)
     maml_plateau_holdout = None

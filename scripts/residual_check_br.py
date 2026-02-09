@@ -20,36 +20,36 @@ def load_task(npz_path: str) -> dict:
     """Load a task .npz and extract arrays + parameters."""
     data = np.load(npz_path, allow_pickle=True)
 
-    sim = data['simulation_params'].item()
+    sim = data["simulation_params"].item()
     return {
         # Fields and derivatives (flattened: n_snapshots * nx * ny)
-        'u': data['u'],
-        'v': data['v'],
-        'u_xx': data['u_xx'],
-        'u_yy': data['u_yy'],
-        'v_xx': data['v_xx'],
-        'v_yy': data['v_yy'],
-        'u_t': data['u_t'],
-        'v_t': data['v_t'],
+        "u": data["u"],
+        "v": data["v"],
+        "u_xx": data["u_xx"],
+        "u_yy": data["u_yy"],
+        "v_xx": data["v_xx"],
+        "v_yy": data["v_yy"],
+        "u_t": data["u_t"],
+        "v_t": data["v_t"],
         # PDE parameters
-        'D_A': sim['D_A'],
-        'D_B': sim['D_B'],
-        'k1': sim['k1'],
-        'k2': sim['k2'],
+        "D_A": sim["D_A"],
+        "D_B": sim["D_B"],
+        "k1": sim["k1"],
+        "k2": sim["k2"],
         # Grid info
-        'resolution': sim['resolution'],
-        'domain_size': sim['domain_size'],
+        "resolution": sim["resolution"],
+        "domain_size": sim["domain_size"],
     }
 
 
 def compute_residuals(task: dict) -> dict:
     """Compute PDE residuals for both u and v equations."""
-    u, v = task['u'], task['v']
-    u_xx, u_yy = task['u_xx'], task['u_yy']
-    v_xx, v_yy = task['v_xx'], task['v_yy']
-    u_t, v_t = task['u_t'], task['v_t']
-    D_A, D_B = task['D_A'], task['D_B']
-    k1, k2 = task['k1'], task['k2']
+    u, v = task["u"], task["v"]
+    u_xx, u_yy = task["u_xx"], task["u_yy"]
+    v_xx, v_yy = task["v_xx"], task["v_yy"]
+    u_t, v_t = task["u_t"], task["v_t"]
+    D_A, D_B = task["D_A"], task["D_B"]
+    k1, k2 = task["k1"], task["k2"]
 
     # Reconstruct u_t and v_t from stored spatial derivatives + known params
     u_diffusion = D_A * (u_xx + u_yy)
@@ -65,25 +65,25 @@ def compute_residuals(task: dict) -> dict:
 
     return {
         # Overall residuals
-        'u_residual_mse': float(np.mean(u_residual**2)),
-        'v_residual_mse': float(np.mean(v_residual**2)),
-        'u_residual_max': float(np.max(np.abs(u_residual))),
-        'v_residual_max': float(np.max(np.abs(v_residual))),
+        "u_residual_mse": float(np.mean(u_residual**2)),
+        "v_residual_mse": float(np.mean(v_residual**2)),
+        "u_residual_max": float(np.max(np.abs(u_residual))),
+        "v_residual_max": float(np.max(np.abs(v_residual))),
         # Per-term magnitudes (to see what dominates)
-        'u_diffusion_rms': float(np.sqrt(np.mean(u_diffusion**2))),
-        'u_reaction_rms': float(np.sqrt(np.mean(u_reaction**2))),
-        'v_diffusion_rms': float(np.sqrt(np.mean(v_diffusion**2))),
-        'v_reaction_rms': float(np.sqrt(np.mean(v_reaction**2))),
+        "u_diffusion_rms": float(np.sqrt(np.mean(u_diffusion**2))),
+        "u_reaction_rms": float(np.sqrt(np.mean(u_reaction**2))),
+        "v_diffusion_rms": float(np.sqrt(np.mean(v_diffusion**2))),
+        "v_reaction_rms": float(np.sqrt(np.mean(v_reaction**2))),
         # Relative error: residual / signal
-        'u_relative_mse': float(np.mean(u_residual**2) / np.mean(u_t**2)),
-        'v_relative_mse': float(np.mean(v_residual**2) / np.mean(v_t**2)),
+        "u_relative_mse": float(np.mean(u_residual**2) / np.mean(u_t**2)),
+        "v_relative_mse": float(np.mean(v_residual**2) / np.mean(v_t**2)),
         # Raw arrays for further analysis
-        '_u_residual': u_residual,
-        '_v_residual': v_residual,
-        '_u_t': u_t,
-        '_v_t': v_t,
-        '_u_diffusion': u_diffusion,
-        '_u_reaction': u_reaction,
+        "_u_residual": u_residual,
+        "_v_residual": v_residual,
+        "_u_t": u_t,
+        "_v_t": v_t,
+        "_u_diffusion": u_diffusion,
+        "_u_reaction": u_reaction,
     }
 
 
@@ -97,8 +97,8 @@ def main():
 
     task = load_task(npz_path)
 
-    res = task['resolution']
-    dom = task['domain_size']
+    res = task["resolution"]
+    dom = task["domain_size"]
     dx = dom[0] / res[0]
     print(f"Resolution: {res[0]}x{res[1]}, domain: {dom[0]}x{dom[1]}")
     print(f"dx = {dx:.4f}, dx² = {dx**2:.4f}")
@@ -115,7 +115,7 @@ def main():
 
     print("=== PDE Residual Check ===")
     for key, val in results.items():
-        if key.startswith('_'):
+        if key.startswith("_"):
             continue
         if isinstance(val, float):
             print(f"  {key}: {val:.6e}")
@@ -123,10 +123,10 @@ def main():
             print(f"  {key}: {val}")
 
     # Spatial analysis: boundary vs interior
-    nx, ny = task['resolution']
+    nx, ny = task["resolution"]
     n_spatial = nx * ny
-    u_res = results['_u_residual']
-    v_res = results['_v_residual']
+    u_res = results["_u_residual"]
+    v_res = results["_v_residual"]
     n_timesteps = len(u_res) // n_spatial
 
     print(f"\n=== Spatial Analysis ({n_timesteps} timesteps x {nx}x{ny}) ===")
@@ -146,15 +146,15 @@ def main():
     # Temporal distribution: early vs late
     mid = n_timesteps // 2
     print(f"\n=== Temporal Analysis ===")
-    print(f"  u early MSE (t<mid): {np.mean(u_res_grid[:mid]**2):.6e}")
-    print(f"  u late MSE  (t>mid): {np.mean(u_res_grid[mid:]**2):.6e}")
-    print(f"  v early MSE (t<mid): {np.mean(v_res_grid[:mid]**2):.6e}")
-    print(f"  v late MSE  (t>mid): {np.mean(v_res_grid[mid:]**2):.6e}")
+    print(f"  u early MSE (t<mid): {np.mean(u_res_grid[:mid] ** 2):.6e}")
+    print(f"  u late MSE  (t>mid): {np.mean(u_res_grid[mid:] ** 2):.6e}")
+    print(f"  v early MSE (t<mid): {np.mean(v_res_grid[:mid] ** 2):.6e}")
+    print(f"  v late MSE  (t>mid): {np.mean(v_res_grid[mid:] ** 2):.6e}")
 
     # Check: is it the diffusion or reaction term that's wrong?
-    u_diff = results['_u_diffusion']
-    u_react = results['_u_reaction']
-    u_t_stored = results['_u_t']
+    u_diff = results["_u_diffusion"]
+    u_react = results["_u_reaction"]
+    u_t_stored = results["_u_t"]
     # Correlation of residual with each term
     corr_diff = np.corrcoef(u_res.flatten(), u_diff.flatten())[0, 1]
     corr_react = np.corrcoef(u_res.flatten(), u_react.flatten())[0, 1]
@@ -164,5 +164,5 @@ def main():
     print(f"  (high |corr| => that term is the error source)")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

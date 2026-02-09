@@ -11,7 +11,7 @@ References:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Union
 import copy
 
 import torch
@@ -19,7 +19,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import higher
 
-from .task_loader import PDETask, NavierStokesTask, BrusselatorTask, MetaLearningDataLoader
+from .task_loader import (
+    BrusselatorFourierTask,
+    PDETask,
+    MetaLearningDataLoader,
+)
 
 
 @dataclass
@@ -29,40 +33,43 @@ class MAMLConfig:
 
     Hyperparameter defaults follow Finn et al. 2017 and experiment_bible.md.
     """
+
     # Inner loop (task adaptation)
-    inner_lr: float = 0.01           # α: learning rate for task adaptation
-    inner_steps: int = 1             # Number of gradient steps per task
+    inner_lr: float = 0.01  # α: learning rate for task adaptation
+    inner_steps: int = 1  # Number of gradient steps per task
 
     # Outer loop (meta-update)
-    outer_lr: float = 0.001          # β: learning rate for meta-update
-    meta_batch_size: int = 4         # Tasks per meta-update
+    outer_lr: float = 0.001  # β: learning rate for meta-update
+    meta_batch_size: int = 4  # Tasks per meta-update
 
     # Support/query split
-    k_shot: int = 100                # Support set size for inner loop
-    query_size: int = 1000           # Query set size for meta-gradient
+    k_shot: int = 100  # Support set size for inner loop
+    query_size: int = 1000  # Query set size for meta-gradient
 
     # Noise (for robustness experiments)
-    noise_level: float = 0.0         # 0.0 = clean data
+    noise_level: float = 0.0  # 0.0 = clean data
 
     # Training loop
     max_outer_iterations: int = 10000
-    patience: int = 50               # Iterations before validation check
+    patience: int = 50  # Iterations before validation check
     log_interval: int = 10
 
     # FOMAML (first-order approximation - faster, no second derivatives)
     first_order: bool = False
 
     # Device and reproducibility
-    device: str = field(default_factory=lambda: 'cuda' if torch.cuda.is_available() else 'cpu')
+    device: str = field(
+        default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
+    )
     seed: int = 42
 
     # LR scheduler
-    warmup_iterations: int = 0           # Linear warmup iterations (0 = no warmup)
-    use_scheduler: bool = False          # Use cosine annealing after warmup
-    min_lr: float = 1e-6                 # Minimum LR at end of cosine decay
-    scheduler_type: str = 'cosine'       # 'cosine' (single decay) or 'warm_restarts'
-    T_0: int = 500                       # Initial restart period (warm_restarts only)
-    T_mult: int = 2                      # Period multiplier after each restart
+    warmup_iterations: int = 0  # Linear warmup iterations (0 = no warmup)
+    use_scheduler: bool = False  # Use cosine annealing after warmup
+    min_lr: float = 1e-6  # Minimum LR at end of cosine decay
+    scheduler_type: str = "cosine"  # 'cosine' (single decay) or 'warm_restarts'
+    T_0: int = 500  # Initial restart period (warm_restarts only)
+    T_mult: int = 2  # Period multiplier after each restart
 
 
 class MAMLTrainer:
@@ -80,7 +87,7 @@ class MAMLTrainer:
         model: nn.Module,
         config: MAMLConfig,
         train_loader: MetaLearningDataLoader,
-        val_loader: Optional[MetaLearningDataLoader] = None
+        val_loader: Optional[MetaLearningDataLoader] = None,
     ):
         """
         Initialize MAML trainer.
@@ -100,10 +107,7 @@ class MAMLTrainer:
         self.device = config.device
 
         # Outer loop optimizer (meta-update)
-        self.outer_opt = torch.optim.Adam(
-            self.model.parameters(),
-            lr=config.outer_lr
-        )
+        self.outer_opt = torch.optim.Adam(self.model.parameters(), lr=config.outer_lr)
 
         # LR scheduler: optional warmup → cosine decay (single or warm restarts)
         self.scheduler = None
@@ -124,8 +128,10 @@ class MAMLTrainer:
 
             # Phase 2: cosine decay
             if config.use_scheduler:
-                post_warmup_iters = config.max_outer_iterations - config.warmup_iterations
-                if config.scheduler_type == 'warm_restarts':
+                post_warmup_iters = (
+                    config.max_outer_iterations - config.warmup_iterations
+                )
+                if config.scheduler_type == "warm_restarts":
                     decay = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                         self.outer_opt,
                         T_0=config.T_0,
@@ -152,11 +158,13 @@ class MAMLTrainer:
 
         # Training state
         self.iteration = 0
-        self.best_train_loss = float('inf')
-        self.best_val_loss = float('inf')
+        self.best_train_loss = float("inf")
+        self.best_val_loss = float("inf")
         self.best_train_state = None  # Stash weights when train loss improves
 
-    def compute_task_loss(self, task: PDETask, seed: int) -> torch.Tensor:
+    def compute_task_loss(
+        self, task: Union[PDETask, BrusselatorFourierTask], seed: int
+    ) -> torch.Tensor:
         """
         Compute query loss after inner loop adaptation.
 
@@ -178,7 +186,7 @@ class MAMLTrainer:
             K_shot=self.config.k_shot,
             query_size=self.config.query_size,
             seed=seed,
-            noise_level=self.config.noise_level
+            noise_level=self.config.noise_level,
         )
 
         # Unpack tensors (already on device from task loader)
@@ -186,19 +194,17 @@ class MAMLTrainer:
         query_x, query_y = query
 
         # Inner loop optimizer (recreated each task)
-        inner_opt = torch.optim.SGD(
-            self.model.parameters(),
-            lr=self.config.inner_lr
-        )
+        inner_opt = torch.optim.SGD(self.model.parameters(), lr=self.config.inner_lr)
 
         # Inner loop with higher library
-        with higher.innerloop_ctx(
-            self.model,
-            inner_opt,
-            copy_initial_weights=False,  # Share meta-parameters
-            track_higher_grads=not self.config.first_order  # FOMAML skips second derivatives
-        ) as (fmodel, diffopt):
-
+        with (
+            higher.innerloop_ctx(
+                self.model,
+                inner_opt,
+                copy_initial_weights=False,  # Share meta-parameters
+                track_higher_grads=not self.config.first_order,  # FOMAML skips second derivatives
+            ) as (fmodel, diffopt)
+        ):
             # Inner loop: adapt on support set
             for _ in range(self.config.inner_steps):
                 support_pred = fmodel(support_x)
@@ -211,7 +217,7 @@ class MAMLTrainer:
 
         return query_loss
 
-    def outer_step(self, tasks: List[PDETask]) -> float:
+    def outer_step(self, tasks: List[Union[PDETask, BrusselatorFourierTask]]) -> float:
         """
         Perform one meta-update step.
 
@@ -225,7 +231,7 @@ class MAMLTrainer:
         self.outer_opt.zero_grad()
 
         # Compute query losses for all tasks
-        total_loss = 0.0
+        total_loss = torch.tensor(0.0, device=self.device)
         for i, task in enumerate(tasks):
             # Use iteration + task index as seed for reproducibility
             seed = self.iteration * len(tasks) + i
@@ -241,7 +247,9 @@ class MAMLTrainer:
 
         return avg_loss.item()
 
-    def evaluate(self, tasks: List[PDETask], seed: int = 0) -> float:
+    def evaluate(
+        self, tasks: List[Union[PDETask, BrusselatorFourierTask]], seed: int = 0
+    ) -> float:
         """
         Evaluate meta-learned initialization on tasks (no meta-update).
 
@@ -270,8 +278,15 @@ class MAMLTrainer:
 
         return total_loss / len(tasks)
 
-    def validate(self, train_loss: float, checkpoint_dir: Path, history: Dict[str, List]) -> bool:
-        print(f"  → Patience exhausted. Comparing current vs best-train on validation...")
+    def validate(
+        self, train_loss: float, checkpoint_dir: Path, history: Dict[str, List]
+    ) -> bool:
+        print(
+            "  → Patience exhausted. Comparing current vs best-train on validation..."
+        )
+
+        assert self.val_loader is not None
+        assert self.best_train_state is not None
 
         # Stash current state before we modify model
         current_state = copy.deepcopy(self.model.state_dict())
@@ -291,39 +306,39 @@ class MAMLTrainer:
             winner_state = current_state
             winner_val_loss = current_val_loss
             winner_train_loss = train_loss
-            print(f"  → Winner: current weights")
+            print("  → Winner: current weights")
         else:
             winner_state = self.best_train_state
             winner_val_loss = best_train_val_loss
             winner_train_loss = self.best_train_loss
-            print(f"  → Winner: best-train weights")
+            print("  → Winner: best-train weights")
 
-        history['val_loss'].append(winner_val_loss)
+        history["val_loss"].append(winner_val_loss)
 
         # Did winner beat previous best val?
         if winner_val_loss < self.best_val_loss:
             self.best_val_loss = winner_val_loss
-            print(f"  → Validation improved! Resetting patience.")
+            print("  → Validation improved! Resetting patience.")
 
-            print(f"  → Saved checkpoint to {checkpoint_dir / 'best_model.pt'}. Train loss: {winner_train_loss:.6f}, Val loss: {winner_val_loss:.6f}")
+            print(
+                f"  → Saved checkpoint to {checkpoint_dir / 'best_model.pt'}. Train loss: {winner_train_loss:.6f}, Val loss: {winner_val_loss:.6f}"
+            )
             print(f"      - Current weights train_loss: {train_loss}")
             print(f"      - Best-train weights train_loss: {self.best_train_loss}")
 
             # Continue training from winner weights
             self.model.load_state_dict(winner_state)
             self.best_train_state = copy.deepcopy(winner_state)
-            self.best_train_loss = winner_train_loss # Reset train baseline
+            self.best_train_loss = winner_train_loss  # Reset train baseline
 
-            self.save_checkpoint(checkpoint_dir / 'best_model.pt')
+            self.save_checkpoint(checkpoint_dir / "best_model.pt")
             return True
         else:
-            print(f"  → Validation stalled. Early stopping.")
+            print("  → Validation stalled. Early stopping.")
             return False
 
     def train(
-        self,
-        checkpoint_dir: Optional[Path] = None,
-        log_interval: Optional[int] = None
+        self, checkpoint_dir: Optional[Path] = None, log_interval: Optional[int] = None
     ) -> Dict[str, List]:
         """
         Run full MAML training loop with two-level early stopping.
@@ -352,13 +367,9 @@ class MAMLTrainer:
 
         # Initialize tracking
         patience_counter = 0
-        history: Dict[str, List] = {
-            'train_loss': [],
-            'val_loss': [],
-            'iteration': []
-        }
+        history: Dict[str, List] = {"train_loss": [], "val_loss": [], "iteration": []}
 
-        print(f"Starting MAML training:")
+        print("Starting MAML training:")
         print(f"  Device: {self.device}")
         print(f"  Inner LR (α): {self.config.inner_lr}")
         print(f"  Outer LR (β): {self.config.outer_lr}")
@@ -372,20 +383,20 @@ class MAMLTrainer:
             print(f"  Warmup: {self.config.warmup_iterations} iterations")
         if self.config.use_scheduler:
             sched_desc = f"cosine annealing to {self.config.min_lr}"
-            if self.config.scheduler_type == 'warm_restarts':
+            if self.config.scheduler_type == "warm_restarts":
                 sched_desc += f" (warm restarts: T_0={self.config.T_0}, T_mult={self.config.T_mult})"
             print(f"  LR scheduler: {sched_desc}")
         print()
 
         early_stopped: bool = False
         train_loss: float = 0.0
+        iteration = 0
         for iteration in range(self.config.max_outer_iterations):
             self.iteration = iteration
 
             # Sample task batch
             tasks = self.train_loader.sample_batch(
-                self.config.meta_batch_size,
-                seed=iteration
+                self.config.meta_batch_size, seed=iteration
             )
 
             # Meta-update
@@ -396,8 +407,8 @@ class MAMLTrainer:
                 self.scheduler.step()
 
             # Record history
-            history['train_loss'].append(train_loss)
-            history['iteration'].append(iteration)
+            history["train_loss"].append(train_loss)
+            history["iteration"].append(iteration)
 
             # Level 1: Track train loss improvement and stash best weights
             if train_loss < self.best_train_loss:
@@ -409,9 +420,15 @@ class MAMLTrainer:
 
             # Logging
             if iteration % log_interval == 0:
-                lr_str = f", lr={self.outer_opt.param_groups[0]['lr']:.2e}" if self.scheduler else ""
+                lr_str = (
+                    f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
+                    if self.scheduler
+                    else ""
+                )
                 if self.val_loader:
-                    print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={patience_counter}{lr_str}")
+                    print(
+                        f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={patience_counter}{lr_str}"
+                    )
                 else:
                     print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}{lr_str}")
 
@@ -442,11 +459,12 @@ class MAMLTrainer:
             if self.best_train_state is not None:
                 self.model.load_state_dict(self.best_train_state)
 
-
             # Always save final model (in case validation never triggered)
-            if not (checkpoint_dir / 'best_model.pt').exists():
-                print("Saving final model as best_model.pt (no validation checkpoint was saved)...")
-                self.save_checkpoint(checkpoint_dir / 'best_model.pt')
+            if not (checkpoint_dir / "best_model.pt").exists():
+                print(
+                    "Saving final model as best_model.pt (no validation checkpoint was saved)..."
+                )
+                self.save_checkpoint(checkpoint_dir / "best_model.pt")
 
         print()
         print(f"Training complete at iteration {iteration}")
@@ -464,15 +482,18 @@ class MAMLTrainer:
             path: Path to save checkpoint
         """
         path = Path(path)
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.outer_opt.state_dict(),
-            'config': self.config,
-            'iteration': self.iteration,
-            'best_train_loss': self.best_train_loss,
-            'best_val_loss': self.best_val_loss,
-            'best_train_state': self.best_train_state,
-        }, path)
+        torch.save(
+            {
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": self.outer_opt.state_dict(),
+                "config": self.config,
+                "iteration": self.iteration,
+                "best_train_loss": self.best_train_loss,
+                "best_val_loss": self.best_val_loss,
+                "best_train_state": self.best_train_state,
+            },
+            path,
+        )
 
     def load_checkpoint(self, path: Path) -> None:
         """
@@ -484,12 +505,12 @@ class MAMLTrainer:
         path = Path(path)
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.outer_opt.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.iteration = checkpoint.get('iteration', 0)
-        self.best_train_loss = checkpoint.get('best_train_loss', float('inf'))
-        self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
-        self.best_train_state = checkpoint.get('best_train_state', None)
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.outer_opt.load_state_dict(checkpoint["optimizer_state_dict"])
+        self.iteration = checkpoint.get("iteration", 0)
+        self.best_train_loss = checkpoint.get("best_train_loss", float("inf"))
+        self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+        self.best_train_state = checkpoint.get("best_train_state", None)
 
         print(f"Loaded checkpoint from {path}")
         print(f"  Iteration: {self.iteration}")
@@ -498,9 +519,7 @@ class MAMLTrainer:
 
 
 def get_meta_learned_init(
-    checkpoint_path: Path,
-    model_class: type = None,
-    **model_kwargs
+    checkpoint_path: Path, model_class: type, **model_kwargs
 ) -> nn.Module:
     """
     Load meta-learned initialization θ* from checkpoint.
@@ -513,14 +532,10 @@ def get_meta_learned_init(
     Returns:
         Model with meta-learned weights loaded
     """
-    # Import here to avoid circular dependency
-    if model_class is None:
-        from ..networks.pde_operator_network import PDEOperatorNetwork
-        model_class = PDEOperatorNetwork
 
     model = model_class(**model_kwargs)
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model.load_state_dict(checkpoint["model_state_dict"])
 
     return model
 
@@ -531,7 +546,7 @@ def fine_tune(
     targets: torch.Tensor,
     lr: float,
     max_steps: int,
-    device: str = 'cpu'
+    device: str = "cpu",
 ) -> List[float]:
     """
     Fine-tune model on given data and return loss curve.
@@ -566,62 +581,3 @@ def fine_tune(
         opt.step()
 
     return losses
-
-
-def compare_initializations(
-    maml_checkpoint: Path,
-    task: PDETask,
-    k_shot: int,
-    max_steps: int,
-    lr: float,
-    seed: int = 42,
-    device: str = 'cpu',
-    model_class: type = None,
-    **model_kwargs
-) -> Dict[str, Any]:
-    """
-    Compare MAML initialization vs random initialization on a task.
-
-    Args:
-        maml_checkpoint: Path to MAML checkpoint
-        task: Task to evaluate on
-        k_shot: Number of samples for fine-tuning
-        max_steps: Number of fine-tuning steps
-        lr: Learning rate for fine-tuning
-        seed: Random seed for data sampling
-        device: Device to run on
-        model_class: Model class (default: PDEOperatorNetwork)
-        **model_kwargs: Model constructor arguments
-
-    Returns:
-        Dict with 'maml_losses', 'baseline_losses', 'samples'
-    """
-    if model_class is None:
-        from ..networks.pde_operator_network import PDEOperatorNetwork
-        model_class = PDEOperatorNetwork
-
-    # Sample data ONCE (fair comparison)
-    support, _ = task.get_support_query_split(
-        K_shot=k_shot,
-        query_size=0,  # Only need support for fine-tuning
-        seed=seed
-    )
-    features, targets = support
-
-    # MAML initialization
-    maml_model = get_meta_learned_init(maml_checkpoint, model_class, **model_kwargs)
-    maml_model = copy.deepcopy(maml_model)  # Don't modify checkpoint model
-    maml_losses = fine_tune(maml_model, features, targets, lr, max_steps, device)
-
-    # Random initialization (baseline)
-    baseline_model = model_class(**model_kwargs)
-    baseline_losses = fine_tune(baseline_model, features, targets, lr, max_steps, device)
-
-    return {
-        'maml_losses': maml_losses,
-        'baseline_losses': baseline_losses,
-        'k_shot': k_shot,
-        'max_steps': max_steps,
-        'lr': lr,
-        'task_name': task.task_name
-    }

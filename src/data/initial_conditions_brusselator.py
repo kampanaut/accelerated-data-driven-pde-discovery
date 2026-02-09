@@ -74,7 +74,7 @@ def perturbed_uniform_ic(
     B_star = k2 / k1
 
     # Create meshgrid
-    X, Y = np.meshgrid(x, y)
+    X, _ = np.meshgrid(x, y) # X, Y
     ny, nx = X.shape
 
     # Add small random perturbations around steady state
@@ -131,7 +131,7 @@ def random_smooth_ic(
     B_star = k2 / k1
 
     # Create meshgrid
-    X, Y = np.meshgrid(x, y)
+    X, _ = np.meshgrid(x, y) # X, Y
     ny, nx = X.shape
 
     # Generate smooth random fields
@@ -273,7 +273,7 @@ def multi_patch_perturbation_ic(
     # Create meshgrid
     X, Y = np.meshgrid(x, y)
     ny, nx = X.shape
-    Lx, Ly = x[-1] - x[0], y[-1] - y[0]
+    # Lx, Ly = x[-1] - x[0], y[-1] - y[0]
 
     # Start at exact steady state
     A = np.full((ny, nx), A_star)

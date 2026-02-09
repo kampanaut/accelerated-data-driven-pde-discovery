@@ -7,7 +7,18 @@ This module wraps PhiFlow's incompressible fluid simulation to solve
 
 import numpy as np
 from typing import Tuple, List
-from phi.jax.flow import *
+from phi.jax.flow import (
+    Box,
+    CenteredGrid,
+    Solve,
+    advect,
+    channel,
+    diffuse,
+    extrapolation,
+    fluid,
+    math,
+    spatial,
+)
 
 
 def solve_navier_stokes(
@@ -16,7 +27,7 @@ def solve_navier_stokes(
     domain_size: Tuple[float, float],
     t_end: float,
     dt: float,
-    save_interval: float = None
+    save_interval: float,
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """
     Solve 2D incompressible Navier-Stokes equations using PhiFlow.
@@ -31,7 +42,7 @@ def solve_navier_stokes(
         domain_size: (Lx, Ly) physical domain size
         t_end: Final simulation time
         dt: Timestep for time integration
-        save_interval: How often to save snapshots. If None, save every step.
+        save_interval: How often to save snapshots.
 
     Returns:
         Tuple of:
@@ -53,36 +64,30 @@ def solve_navier_stokes(
     # Create velocity as StaggeredGrid (proper way for vector fields in PhiFlow)
 
     # Create a domain box
-    domain = Box(x=(0, Lx), y=(0, Ly))
+    domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[reportCallIssue]
 
     # Create initial velocity as StaggeredGrid from numpy arrays
     # StaggeredGrid expects a callable or specific format
     # Easier approach: use CenteredGrid with tensor wrapper
-    velocity_field = math.tensor(np.stack([u_init, v_init], axis=-1), spatial('y,x'), channel('vector'))
-
-    velocity = CenteredGrid(
-        velocity_field,
-        extrapolation.PERIODIC,
-        bounds=domain
+    velocity_field = math.tensor(
+        np.stack([u_init, v_init], axis=-1), spatial("y,x"), channel("vector")
     )
+
+    velocity = CenteredGrid(velocity_field, extrapolation.PERIODIC, bounds=domain)
 
     # Initialize storage
     velocity_history = []
     times = []
 
-    # Determine save frequency
-    if save_interval is None:
-        save_interval = dt
-
     n_steps = int(t_end / dt)
     save_every = max(1, int(save_interval / dt))
 
     # Save initial condition
-    vel_data = math.reshaped_native(velocity.values, ['y', 'x', 'vector'])
+    vel_data = math.reshaped_native(velocity.values, ["y", "x", "vector"])
     velocity_history.append((vel_data[..., 0], vel_data[..., 1]))
     times.append(0.0)
 
-    print(f"Starting Navier-Stokes simulation:")
+    print("Starting Navier-Stokes simulation:")
     print(f"  Domain: {Lx} × {Ly}")
     print(f"  Resolution: {nx} × {ny}")
     print(f"  Viscosity: ν = {nu}")
@@ -105,11 +110,13 @@ def solve_navier_stokes(
         velocity = diffuse.explicit(velocity, nu, dt)
 
         # Pressure projection (make incompressible)
-        velocity, pressure = fluid.make_incompressible(velocity, (), Solve('auto', 1e-5, x0=None))
+        velocity, _ = fluid.make_incompressible(  # returns (velocity, pressure)
+            velocity, (), Solve("auto", 1e-5, x0=None)
+        )
 
         # Save snapshot at specified intervals
         if step % save_every == 0:
-            vel_data = math.reshaped_native(velocity.values, ['y', 'x', 'vector'])
+            vel_data = math.reshaped_native(velocity.values, ["y", "x", "vector"])
             velocity_history.append((vel_data[..., 0], vel_data[..., 1]))
             times.append(t)
 
@@ -121,10 +128,7 @@ def solve_navier_stokes(
     return velocity_history, np.array(times), x, y
 
 
-def solve_navier_stokes_with_params(
-    ic_params: dict,
-    simulation_params: dict
-) -> dict:
+def solve_navier_stokes_with_params(ic_params: dict, simulation_params: dict) -> dict:
     """
     High-level interface: generate IC from parameters and solve N-S.
 
@@ -148,58 +152,34 @@ def solve_navier_stokes_with_params(
         - 'ic_params': Copy of IC parameters
         - 'simulation_params': Copy of simulation parameters
     """
-    from src.data.initial_conditions import gaussian_vortex_ic, multi_vortex_ic, taylor_green_vortex
-
-    # Extract parameters
-    nx, ny = simulation_params['resolution']
-    Lx, Ly = simulation_params['domain_size']
-
-    # Create coordinate arrays
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
 
     # Generate initial condition
-    ic_type = ic_params['type']
+    ic_type = ic_params["type"]
 
-    if ic_type == 'custom':
+    if (
+        ic_type == "custom"
+    ):  # TODO: Very bad looking. Works, but we could make it look prettier
         # Directly use provided velocity fields
-        u_init = ic_params['u_init']
-        v_init = ic_params['v_init']
-    elif ic_type == 'gaussian_vortex':
-        u_init, v_init = gaussian_vortex_ic(
-            center=ic_params['center'],
-            width=ic_params['width'],
-            strength=ic_params['strength'],
-            x=x, y=y
-        )
-    elif ic_type == 'multi_vortex':
-        u_init, v_init = multi_vortex_ic(
-            vortex_params=ic_params['vortices'],
-            x=x, y=y
-        )
-    elif ic_type == 'taylor_green':
-        u_init, v_init = taylor_green_vortex(
-            x=x, y=y,
-            amplitude=ic_params.get('amplitude', 1.0)
-        )
+        u_init = ic_params["u_init"]
+        v_init = ic_params["v_init"]
     else:
         raise ValueError(f"Unknown IC type: {ic_type}")
 
     # Solve Navier-Stokes
     velocity_history, times, x_out, y_out = solve_navier_stokes(
         initial_velocity=(u_init, v_init),
-        nu=simulation_params['nu'],
-        domain_size=simulation_params['domain_size'],
-        t_end=simulation_params['t_end'],
-        dt=simulation_params['dt'],
-        save_interval=simulation_params.get('save_interval')
+        nu=simulation_params["nu"],
+        domain_size=simulation_params["domain_size"],
+        t_end=simulation_params["t_end"],
+        dt=simulation_params["dt"],
+        save_interval=simulation_params["save_interval"],
     )
 
     return {
-        'velocity_history': velocity_history,
-        'times': times,
-        'x': x_out,
-        'y': y_out,
-        'ic_params': ic_params.copy(),
-        'simulation_params': simulation_params.copy()
+        "velocity_history": velocity_history,
+        "times": times,
+        "x": x_out,
+        "y": y_out,
+        "ic_params": ic_params.copy(),
+        "simulation_params": simulation_params.copy(),
     }

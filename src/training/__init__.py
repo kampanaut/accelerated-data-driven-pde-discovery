@@ -8,15 +8,13 @@ from .maml import (
     MAMLTrainer,
     fine_tune,
     get_meta_learned_init,
-    compare_initializations,
 )
 
 __all__ = [
-    'NavierStokesTask',
-    'MetaLearningDataLoader',
-    'MAMLConfig',
-    'MAMLTrainer',
-    'fine_tune',
-    'get_meta_learned_init',
-    'compare_initializations',
+    "NavierStokesTask",
+    "MetaLearningDataLoader",
+    "MAMLConfig",
+    "MAMLTrainer",
+    "fine_tune",
+    "get_meta_learned_init",
 ]

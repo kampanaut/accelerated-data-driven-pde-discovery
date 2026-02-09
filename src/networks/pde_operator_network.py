@@ -40,10 +40,10 @@ class PDEOperatorNetwork(nn.Module):
 
     def __init__(
         self,
+        hidden_dims: List[int],
         input_dim: int = 10,
-        hidden_dims: List[int] = None,
         output_dim: int = 2,
-        activation: str = 'tanh'
+        activation: str = "tanh",
     ):
         """
         Initialize PDE Operator Network.
@@ -82,14 +82,16 @@ class PDEOperatorNetwork(nn.Module):
 
         # Choose activation function
         activation_map = {
-            'tanh': nn.Tanh,
-            'relu': nn.ReLU,
-            'silu': nn.SiLU,      # Swish: x * sigmoid(x), C^inf, unbounded
-            'gelu': nn.GELU,      # Gaussian error linear unit, C^inf
-            'mish': nn.Mish,      # x * tanh(softplus(x)), C^inf
+            "tanh": nn.Tanh,
+            "relu": nn.ReLU,
+            "silu": nn.SiLU,  # Swish: x * sigmoid(x), C^inf, unbounded
+            "gelu": nn.GELU,  # Gaussian error linear unit, C^inf
+            "mish": nn.Mish,  # x * tanh(softplus(x)), C^inf
         }
         if activation not in activation_map:
-            raise ValueError(f"Unknown activation: {activation}. Use one of: {list(activation_map.keys())}")
+            raise ValueError(
+                f"Unknown activation: {activation}. Use one of: {list(activation_map.keys())}"
+            )
         act_fn = activation_map[activation]
 
         # Build network layers
@@ -101,7 +103,7 @@ class PDEOperatorNetwork(nn.Module):
 
         # Hidden layers: hidden_dims[i] → hidden_dims[i+1]
         for i in range(len(self.hidden_dims) - 1):
-            layers.append(nn.Linear(self.hidden_dims[i], self.hidden_dims[i+1]))
+            layers.append(nn.Linear(self.hidden_dims[i], self.hidden_dims[i + 1]))
             layers.append(act_fn())
 
         # Output layer: hidden_dims[-1] → output_dim (no activation)

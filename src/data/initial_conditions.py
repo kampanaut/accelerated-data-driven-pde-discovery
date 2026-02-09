@@ -6,9 +6,10 @@ vorticity specifications (e.g., Gaussian vortex bumps).
 """
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve
-from typing import Tuple
+from typing import Any, Tuple
 
 
 def gaussian_hill_ic(
@@ -91,7 +92,7 @@ def solve_poisson_2d(
     Returns:
         Solution φ, shape (ny, nx)
     """
-    ny, nx = rhs.shape
+    # ny, nx = rhs.shape
     dx = x[1] - x[0]
     dy = y[1] - y[0]
 
@@ -149,7 +150,7 @@ def solve_poisson_periodic(
 
 
 def solve_poisson_dirichlet(
-    rhs: np.ndarray,
+    rhs: NDArray[np.floating[Any]],
     dx: float,
     dy: float
 ) -> np.ndarray:
@@ -188,13 +189,13 @@ def solve_poisson_dirichlet(
 
     offsets = [0, 1, -1, nx-2, -(nx-2)]
 
-    A = diags(diagonals, offsets, shape=(n_interior, n_interior), format='csr')
+    A = diags(diagonals, offsets, shape=(n_interior, n_interior), format='csr')  # type: ignore[reportArgumentType]
 
     # Flatten RHS (interior points only)
     b = rhs[1:-1, 1:-1].flatten()
 
     # Solve sparse system
-    phi_interior = spsolve(A, b)
+    phi_interior: np.ndarray = spsolve(A, b)  # type: ignore[reportAssignmentType]
 
     # Reconstruct full solution with boundary conditions
     phi = np.zeros((ny, nx))
@@ -441,7 +442,7 @@ def perturbed_uniform_flow_ic(
     perturbation_wavelength: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: int = None
+    seed: int
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate uniform flow with small random perturbations.
@@ -475,7 +476,7 @@ def perturbed_uniform_flow_ic(
     v_pert = np.zeros_like(Y)
 
     modes = []
-    for i in range(n_modes):
+    for _ in range(n_modes):
         phase_u = rng.uniform(0, 2 * np.pi)
         phase_v = rng.uniform(0, 2 * np.pi)
         kx = k_pert * rng.uniform(0.5, 1.5)
@@ -515,7 +516,7 @@ def random_vortex_soup_ic(
     width_range: Tuple[float, float],
     x: np.ndarray,
     y: np.ndarray,
-    seed: int = None
+    seed: int
 ) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate random collection of vortices (turbulent-like initial state).
@@ -564,7 +565,7 @@ def gaussian_vortex_ic(
     width_range: Tuple[float, float],
     x: np.ndarray,
     y: np.ndarray,
-    seed: int = None
+    seed: int
 ) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate velocity field from sum of random Gaussian vorticity distributions.
@@ -637,7 +638,7 @@ def gaussian_direct_ic(
     width_range: Tuple[float, float],
     x: np.ndarray,
     y: np.ndarray,
-    seed: int = None
+    seed: int
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate velocity field by directly constructing u and v from independent Gaussian sums.
@@ -743,7 +744,7 @@ def gaussian_hybrid_ic(
     beta: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: int = None
+    seed: int
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate hybrid velocity field combining vorticity-based and direct construction.
@@ -800,7 +801,7 @@ def gaussian_hybrid_ic(
 
     # Generate direct component (arbitrary directions, not divergence-free)
     # Use seed offset to ensure decorrelation when seed is specified
-    seed_direct = (seed + 1000) if seed is not None else None
+    seed_direct = (seed + 1000)
     u_direct, v_direct, direct_params = gaussian_direct_ic(
         n_gaussians_u=n_gaussians_u,
         n_gaussians_v=n_gaussians_v,
@@ -853,7 +854,7 @@ def von_karman_street_ic(
         - v: y-component of velocity, shape (ny, nx)
         - vortex_params: List of dicts with actual vortex parameters
     """
-    domain_x = x[-1] - x[0]
+    # domain_x = x[-1] - x[0]
     domain_y = y[-1] - y[0]
     center_y = domain_y / 2
 

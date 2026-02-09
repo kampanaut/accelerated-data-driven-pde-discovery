@@ -19,17 +19,23 @@ from typing import List
 
 # Arrays to add noise to (all field arrays in the .npz)
 NOISY_ARRAYS = [
-    'u', 'v',
-    'u_x', 'u_y', 'u_xx', 'u_yy',
-    'v_x', 'v_y', 'v_xx', 'v_yy',
-    'u_t', 'v_t'
+    "u",
+    "v",
+    "u_x",
+    "u_y",
+    "u_xx",
+    "u_yy",
+    "v_x",
+    "v_y",
+    "v_xx",
+    "v_yy",
+    "u_t",
+    "v_t",
 ]
 
 
 def add_gaussian_noise(
-    array: np.ndarray,
-    noise_level: float,
-    rng: np.random.RandomState
+    array: np.ndarray, noise_level: float, rng: np.random.RandomState
 ) -> np.ndarray:
     """
     Add Gaussian noise scaled by array standard deviation.
@@ -60,19 +66,19 @@ def check_metadata_status(npz_path: Path) -> tuple:
     Returns:
         (is_success, error_msg): Tuple of success status and error message if failed
     """
-    txt_path = npz_path.with_suffix('.txt')
+    txt_path = npz_path.with_suffix(".txt")
 
     if not txt_path.exists():
         return True, None  # No metadata file, assume valid
 
-    with open(txt_path, 'r') as f:
+    with open(txt_path, "r") as f:
         content = f.read()
 
     # Check for FAILED status
-    if 'Status: FAILED' in content:
+    if "Status: FAILED" in content:
         # Extract error message if present
-        for line in content.split('\n'):
-            if line.startswith('Error:'):
+        for line in content.split("\n"):
+            if line.startswith("Error:"):
                 return False, line.strip()
         return False, "Status: FAILED"
 
@@ -80,9 +86,7 @@ def check_metadata_status(npz_path: Path) -> tuple:
 
 
 def inject_noise_into_task(
-    npz_path: Path,
-    noise_levels: List[float],
-    seed: int
+    npz_path: Path, noise_levels: List[float], seed: int
 ) -> Path:
     """
     Create task_noisy.npz with noisy versions at multiple noise levels.
@@ -130,10 +134,7 @@ def inject_noise_into_task(
 
 
 def process_directory(
-    data_dir: Path,
-    noise_levels: List[float],
-    seed: int,
-    overwrite: bool = False
+    data_dir: Path, noise_levels: List[float], seed: int, overwrite: bool = False
 ) -> int:
     """
     Process all task .npz files in directory.
@@ -151,8 +152,7 @@ def process_directory(
 
     # Find all .npz files that aren't already noisy files
     npz_files = [
-        f for f in sorted(data_dir.glob("*.npz"))
-        if not f.stem.endswith("_noisy")
+        f for f in sorted(data_dir.glob("*.npz")) if not f.stem.endswith("_noisy")
     ]
 
     if not npz_files:
@@ -200,25 +200,23 @@ def main():
         "--data-dir",
         type=Path,
         required=True,
-        help="Directory containing task .npz files"
+        help="Directory containing task .npz files",
     )
     parser.add_argument(
         "--noise-levels",
         type=float,
         nargs="+",
         default=[0.01, 0.05, 0.10],
-        help="Noise levels as fraction of std (default: 0.01 0.05 0.10)"
+        help="Noise levels as fraction of std (default: 0.01 0.05 0.10)",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=42,
-        help="Random seed for reproducibility (default: 42)"
+        help="Random seed for reproducibility (default: 42)",
     )
     parser.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite existing noisy files"
+        "--overwrite", action="store_true", help="Overwrite existing noisy files"
     )
 
     args = parser.parse_args()
@@ -227,12 +225,7 @@ def main():
         print(f"Error: Directory not found: {args.data_dir}")
         return 1
 
-    process_directory(
-        args.data_dir,
-        args.noise_levels,
-        args.seed,
-        args.overwrite
-    )
+    process_directory(args.data_dir, args.noise_levels, args.seed, args.overwrite)
     return 0
 
 

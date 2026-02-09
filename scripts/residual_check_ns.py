@@ -21,36 +21,36 @@ def load_task(npz_path: str) -> dict:
     """Load a task .npz and extract arrays + parameters."""
     data = np.load(npz_path, allow_pickle=True)
 
-    sim = data['simulation_params'].item()
+    sim = data["simulation_params"].item()
 
     return {
-        'u': data['u'],
-        'v': data['v'],
-        'u_x': data['u_x'],
-        'u_y': data['u_y'],
-        'u_xx': data['u_xx'],
-        'u_yy': data['u_yy'],
-        'v_x': data['v_x'],
-        'v_y': data['v_y'],
-        'v_xx': data['v_xx'],
-        'v_yy': data['v_yy'],
-        'u_t': data['u_t'],
-        'v_t': data['v_t'],
-        'nu': sim['nu'],
-        'resolution': sim['resolution'],
-        'domain_size': sim['domain_size'],
+        "u": data["u"],
+        "v": data["v"],
+        "u_x": data["u_x"],
+        "u_y": data["u_y"],
+        "u_xx": data["u_xx"],
+        "u_yy": data["u_yy"],
+        "v_x": data["v_x"],
+        "v_y": data["v_y"],
+        "v_xx": data["v_xx"],
+        "v_yy": data["v_yy"],
+        "u_t": data["u_t"],
+        "v_t": data["v_t"],
+        "nu": sim["nu"],
+        "resolution": sim["resolution"],
+        "domain_size": sim["domain_size"],
     }
 
 
 def compute_residuals(task: dict) -> dict:
     """Compute PDE residuals for both u and v equations (ignoring pressure)."""
-    u, v = task['u'], task['v']
-    u_x, u_y = task['u_x'], task['u_y']
-    u_xx, u_yy = task['u_xx'], task['u_yy']
-    v_x, v_y = task['v_x'], task['v_y']
-    v_xx, v_yy = task['v_xx'], task['v_yy']
-    u_t, v_t = task['u_t'], task['v_t']
-    nu = task['nu']
+    u, v = task["u"], task["v"]
+    u_x, u_y = task["u_x"], task["u_y"]
+    u_xx, u_yy = task["u_xx"], task["u_yy"]
+    v_x, v_y = task["v_x"], task["v_y"]
+    v_xx, v_yy = task["v_xx"], task["v_yy"]
+    u_t, v_t = task["u_t"], task["v_t"]
+    nu = task["nu"]
 
     # Reconstruct (minus pressure gradient)
     u_advection = -(u * u_x + v * u_y)
@@ -65,22 +65,22 @@ def compute_residuals(task: dict) -> dict:
     v_residual = v_t - v_t_reconstructed  # includes -dp/dy
 
     return {
-        'u_residual_mse': float(np.mean(u_residual**2)),
-        'v_residual_mse': float(np.mean(v_residual**2)),
-        'u_residual_max': float(np.max(np.abs(u_residual))),
-        'v_residual_max': float(np.max(np.abs(v_residual))),
-        'u_advection_rms': float(np.sqrt(np.mean(u_advection**2))),
-        'u_diffusion_rms': float(np.sqrt(np.mean(u_diffusion**2))),
-        'v_advection_rms': float(np.sqrt(np.mean(v_advection**2))),
-        'v_diffusion_rms': float(np.sqrt(np.mean(v_diffusion**2))),
-        'u_relative_mse': float(np.mean(u_residual**2) / np.mean(u_t**2)),
-        'v_relative_mse': float(np.mean(v_residual**2) / np.mean(v_t**2)),
-        '_u_residual': u_residual,
-        '_v_residual': v_residual,
-        '_u_t': u_t,
-        '_v_t': v_t,
-        '_u_diffusion': u_diffusion,
-        '_u_advection': u_advection,
+        "u_residual_mse": float(np.mean(u_residual**2)),
+        "v_residual_mse": float(np.mean(v_residual**2)),
+        "u_residual_max": float(np.max(np.abs(u_residual))),
+        "v_residual_max": float(np.max(np.abs(v_residual))),
+        "u_advection_rms": float(np.sqrt(np.mean(u_advection**2))),
+        "u_diffusion_rms": float(np.sqrt(np.mean(u_diffusion**2))),
+        "v_advection_rms": float(np.sqrt(np.mean(v_advection**2))),
+        "v_diffusion_rms": float(np.sqrt(np.mean(v_diffusion**2))),
+        "u_relative_mse": float(np.mean(u_residual**2) / np.mean(u_t**2)),
+        "v_relative_mse": float(np.mean(v_residual**2) / np.mean(v_t**2)),
+        "_u_residual": u_residual,
+        "_v_residual": v_residual,
+        "_u_t": u_t,
+        "_v_t": v_t,
+        "_u_diffusion": u_diffusion,
+        "_u_advection": u_advection,
     }
 
 
@@ -94,8 +94,8 @@ def main():
 
     task = load_task(npz_path)
 
-    res = task['resolution']
-    dom = task['domain_size']
+    res = task["resolution"]
+    dom = task["domain_size"]
     dx = dom[0] / res[0]
     print(f"Resolution: {res[0]}x{res[1]}, domain: {dom[0]:.4f}x{dom[1]:.4f}")
     print(f"dx = {dx:.4f}, dx² = {dx**2:.6f}")
@@ -108,7 +108,7 @@ def main():
 
     print("=== PDE Residual Check (NS) ===")
     for key, val in results.items():
-        if key.startswith('_'):
+        if key.startswith("_"):
             continue
         if isinstance(val, float):
             print(f"  {key}: {val:.6e}")
@@ -116,10 +116,10 @@ def main():
             print(f"  {key}: {val}")
 
     # Spatial analysis
-    nx, ny = task['resolution']
+    nx, ny = task["resolution"]
     n_spatial = nx * ny
-    u_res = results['_u_residual']
-    v_res = results['_v_residual']
+    u_res = results["_u_residual"]
+    v_res = results["_v_residual"]
     n_timesteps = len(u_res) // n_spatial
 
     print(f"\n=== Spatial Analysis ({n_timesteps} timesteps x {nx}x{ny}) ===")
@@ -138,14 +138,14 @@ def main():
     # Temporal
     mid = n_timesteps // 2
     print(f"\n=== Temporal Analysis ===")
-    print(f"  u early MSE (t<mid): {np.mean(u_res_grid[:mid]**2):.6e}")
-    print(f"  u late MSE  (t>mid): {np.mean(u_res_grid[mid:]**2):.6e}")
-    print(f"  v early MSE (t<mid): {np.mean(v_res_grid[:mid]**2):.6e}")
-    print(f"  v late MSE  (t>mid): {np.mean(v_res_grid[mid:]**2):.6e}")
+    print(f"  u early MSE (t<mid): {np.mean(u_res_grid[:mid] ** 2):.6e}")
+    print(f"  u late MSE  (t>mid): {np.mean(u_res_grid[mid:] ** 2):.6e}")
+    print(f"  v early MSE (t<mid): {np.mean(v_res_grid[:mid] ** 2):.6e}")
+    print(f"  v late MSE  (t>mid): {np.mean(v_res_grid[mid:] ** 2):.6e}")
 
     # Error source correlation
-    u_diff = results['_u_diffusion']
-    u_adv = results['_u_advection']
+    u_diff = results["_u_diffusion"]
+    u_adv = results["_u_advection"]
     corr_diff = np.corrcoef(u_res.flatten(), u_diff.flatten())[0, 1]
     corr_adv = np.corrcoef(u_res.flatten(), u_adv.flatten())[0, 1]
     print(f"\n=== Error Source ===")
@@ -154,5 +154,5 @@ def main():
     print(f"  (residual ~= pressure gradient for NS)")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -46,9 +46,10 @@ class JacobianResultsNS:
     Computes Laplacian coefficient estimates by treating ∇²u = u_xx + u_yy
     as a single mathematical object, using directional derivatives.
     """
+
     # Per-point Laplacian coefficient estimates
-    nu_u: np.ndarray       # shape: (n_samples,) — ν from u equation
-    nu_v: np.ndarray       # shape: (n_samples,) — ν from v equation
+    nu_u: np.ndarray  # shape: (n_samples,) — ν from u equation
+    nu_v: np.ndarray  # shape: (n_samples,) — ν from v equation
 
     # True parameter for comparison
     nu_true: float
@@ -67,30 +68,32 @@ class JacobianResultsNS:
     def error_pct(self) -> float:
         """Relative error in recovered viscosity (%)."""
         if self.nu_true == 0:
-            return float('inf')
-        return (abs(((self.nu_recovered_v + self.nu_recovered_u) / 2) - self.nu_true) / self.nu_true) * 100
-
+            return float("inf")
+        return (
+            abs(((self.nu_recovered_v + self.nu_recovered_u) / 2) - self.nu_true)
+            / self.nu_true
+        ) * 100
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'nu_true': self.nu_true,
-            'nu_recovered_u_only': self.nu_recovered_u,
-            'nu_recovered_v_only': self.nu_recovered_v,
-            'error_pct': self.error_pct,
-            'nu_u_mean': float(np.mean(self.nu_u)),
-            'nu_u_std': float(np.std(self.nu_u)),
-            'nu_v_mean': float(np.mean(self.nu_v)),
-            'nu_v_std': float(np.std(self.nu_v)),
+            "nu_true": self.nu_true,
+            "nu_recovered_u_only": self.nu_recovered_u,
+            "nu_recovered_v_only": self.nu_recovered_v,
+            "error_pct": self.error_pct,
+            "nu_u_mean": float(np.mean(self.nu_u)),
+            "nu_u_std": float(np.std(self.nu_u)),
+            "nu_v_mean": float(np.mean(self.nu_v)),
+            "nu_v_std": float(np.std(self.nu_v)),
         }
 
     def to_npz_dict(self, prefix: str = "") -> Dict[str, np.ndarray]:
         """Convert to dictionary for NPZ storage (full distributions)."""
         p = f"{prefix}/" if prefix else ""
         return {
-            f'{p}nu_u': self.nu_u,
-            f'{p}nu_v': self.nu_v,
-            f'{p}nu_true': np.array([self.nu_true]),
+            f"{p}nu_u": self.nu_u,
+            f"{p}nu_v": self.nu_v,
+            f"{p}nu_true": np.array([self.nu_true]),
         }
 
 
@@ -107,6 +110,7 @@ class JacobianResultsBR:
         D_u = ∂u_t/∂(u_xx + u_yy) = (∂u_t/∂u_xx + ∂u_t/∂u_yy) / 2
         D_v = ∂v_t/∂(v_xx + v_yy) = (∂v_t/∂v_xx + ∂v_t/∂v_yy) / 2
     """
+
     # Per-point Laplacian coefficient estimates
     D_u: np.ndarray  # shape: (n_samples,) — D_u estimate per point
     D_v: np.ndarray  # shape: (n_samples,) — D_v estimate per point
@@ -129,14 +133,14 @@ class JacobianResultsBR:
     def D_u_error_pct(self) -> float:
         """Relative error in recovered D_u (%)."""
         if self.D_u_true == 0:
-            return float('inf')
+            return float("inf")
         return abs(self.D_u_recovered - self.D_u_true) / self.D_u_true * 100
 
     @property
     def D_v_error_pct(self) -> float:
         """Relative error in recovered D_v (%)."""
         if self.D_v_true == 0:
-            return float('inf')
+            return float("inf")
         return abs(self.D_v_recovered - self.D_v_true) / self.D_v_true * 100
 
     @property
@@ -147,27 +151,27 @@ class JacobianResultsBR:
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization."""
         return {
-            'D_u_true': self.D_u_true,
-            'D_v_true': self.D_v_true,
-            'D_u_recovered': self.D_u_recovered,
-            'D_v_recovered': self.D_v_recovered,
-            'D_u_error_pct': self.D_u_error_pct,
-            'D_v_error_pct': self.D_v_error_pct,
-            'error_pct': self.error_pct,
-            'D_u_mean': float(np.mean(self.D_u)),
-            'D_u_std': float(np.std(self.D_u)),
-            'D_v_mean': float(np.mean(self.D_v)),
-            'D_v_std': float(np.std(self.D_v)),
+            "D_u_true": self.D_u_true,
+            "D_v_true": self.D_v_true,
+            "D_u_recovered": self.D_u_recovered,
+            "D_v_recovered": self.D_v_recovered,
+            "D_u_error_pct": self.D_u_error_pct,
+            "D_v_error_pct": self.D_v_error_pct,
+            "error_pct": self.error_pct,
+            "D_u_mean": float(np.mean(self.D_u)),
+            "D_u_std": float(np.std(self.D_u)),
+            "D_v_mean": float(np.mean(self.D_v)),
+            "D_v_std": float(np.std(self.D_v)),
         }
 
     def to_npz_dict(self, prefix: str = "") -> Dict[str, np.ndarray]:
         """Convert to dictionary for NPZ storage (full distributions)."""
         p = f"{prefix}/" if prefix else ""
         return {
-            f'{p}D_u': self.D_u,  # Per-point estimates for histogram
-            f'{p}D_v': self.D_v,
-            f'{p}D_u_true': np.array([self.D_u_true]),
-            f'{p}D_v_true': np.array([self.D_v_true]),
+            f"{p}D_u": self.D_u,  # Per-point estimates for histogram
+            f"{p}D_v": self.D_v,
+            f"{p}D_u_true": np.array([self.D_u_true]),
+            f"{p}D_v_true": np.array([self.D_v_true]),
         }
 
 
@@ -176,9 +180,7 @@ JacobianResultsType = JacobianResultsNS | JacobianResultsBR
 
 
 def compute_laplacian_jacobian_jvp_ns(
-    model: torch.nn.Module,
-    X: torch.Tensor,
-    device: str = "cpu"
+    model: torch.nn.Module, X: torch.Tensor, device: str = "cpu"
 ) -> dict:
     """
     Compute Laplacian coefficients using JVP (forward-mode autodiff).
@@ -226,19 +228,17 @@ def compute_laplacian_jacobian_jvp_ns(
 
     # Extract and divide by 2 to get coefficient estimates
     # (dividing by 2 because we perturbed both xx and yy by 1, so Laplacian changed by 2)
-    nu_u = (jvp_u[:, 0] / 2).detach().cpu().numpy()
-    nu_v = (jvp_v[:, 1] / 2).detach().cpu().numpy()
+    nu_u = (jvp_u[:, 0] / 2).detach().cpu().numpy()  # type: ignore[reportCallIssue]
+    nu_v = (jvp_v[:, 1] / 2).detach().cpu().numpy()  # type: ignore[reportCallIssue]
 
     return {
-        'nu_u': nu_u,           # ν from u equation only
-        'nu_v': nu_v,           # ν from v equation only
+        "nu_u": nu_u,  # ν from u equation only
+        "nu_v": nu_v,  # ν from v equation only
     }
 
 
 def compute_laplacian_jacobian_jvp_br(
-    model: torch.nn.Module,
-    X: torch.Tensor,
-    device: str = "cpu"
+    model: torch.nn.Module, X: torch.Tensor, device: str = "cpu"
 ) -> dict:
     """
     Compute diffusion coefficients for Brusselator using JVP.
@@ -275,12 +275,12 @@ def compute_laplacian_jacobian_jvp_br(
     _, jvp_v = jvp(forward, (X,), (tangent_v,))
 
     # For Brusselator, D_u comes from u equation, D_v from v equation
-    D_u = (jvp_u[:, 0] / 2).detach().cpu().numpy()
-    D_v = (jvp_v[:, 1] / 2).detach().cpu().numpy()
+    D_u = (jvp_u[:, 0] / 2).detach().cpu().numpy()  # type: ignore[reportCallIssue, reportArgumentType]
+    D_v = (jvp_v[:, 1] / 2).detach().cpu().numpy()  # type: ignore[reportCallIssue, reportArgumentType]
 
     return {
-        'D_u': D_u,
-        'D_v': D_v,
+        "D_u": D_u,
+        "D_v": D_v,
     }
 
 
@@ -289,7 +289,7 @@ def analyze_jacobian_ns(
     features: torch.Tensor,
     nu_true: float,
     device: str = "cpu",
-    max_samples: Optional[int] = None
+    max_samples: Optional[int] = None,
 ) -> JacobianResultsNS:
     """
     Analyze Jacobian for Navier-Stokes to extract viscosity coefficient.
@@ -316,8 +316,8 @@ def analyze_jacobian_ns(
     results = compute_laplacian_jacobian_jvp_ns(model, features, device=device)
 
     return JacobianResultsNS(
-        nu_u=results['nu_u'],
-        nu_v=results['nu_v'],
+        nu_u=results["nu_u"],
+        nu_v=results["nu_v"],
         nu_true=nu_true,
     )
 
@@ -328,7 +328,7 @@ def analyze_jacobian_br(
     D_u_true: float,
     D_v_true: float,
     device: str = "cpu",
-    max_samples: Optional[int] = None
+    max_samples: Optional[int] = None,
 ) -> JacobianResultsBR:
     """
     Analyze Jacobian for Brusselator to extract diffusion coefficients.
@@ -356,8 +356,8 @@ def analyze_jacobian_br(
     results = compute_laplacian_jacobian_jvp_br(model, features, device=device)
 
     return JacobianResultsBR(
-        D_u=results['D_u'],
-        D_v=results['D_v'],
+        D_u=results["D_u"],
+        D_v=results["D_v"],
         D_u_true=D_u_true,
         D_v_true=D_v_true,
     )

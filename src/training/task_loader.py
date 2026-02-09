@@ -42,37 +42,59 @@ class PDETask(ABC):
         data = np.load(npz_path, allow_pickle=True)
 
         # Load features → GPU tensors immediately (numpy only at I/O boundary)
-        self.features = torch.tensor(np.stack([
-            data['u'].flatten(),
-            data['v'].flatten(),
-            data['u_x'].flatten(),
-            data['u_y'].flatten(),
-            data['u_xx'].flatten(),
-            data['u_yy'].flatten(),
-            data['v_x'].flatten(),
-            data['v_y'].flatten(),
-            data['v_xx'].flatten(),
-            data['v_yy'].flatten(),
-        ], axis=1), dtype=torch.float32, device=device)
+        self.features = torch.tensor(
+            np.stack(
+                [
+                    data["u"].flatten(),
+                    data["v"].flatten(),
+                    data["u_x"].flatten(),
+                    data["u_y"].flatten(),
+                    data["u_xx"].flatten(),
+                    data["u_yy"].flatten(),
+                    data["v_x"].flatten(),
+                    data["v_y"].flatten(),
+                    data["v_xx"].flatten(),
+                    data["v_yy"].flatten(),
+                ],
+                axis=1,
+            ),
+            dtype=torch.float32,
+            device=device,
+        )
 
         # Load targets → GPU tensors
-        self.targets = torch.tensor(np.stack([
-            data['u_t'].flatten(),
-            data['v_t'].flatten(),
-        ], axis=1), dtype=torch.float32, device=device)
+        self.targets = torch.tensor(
+            np.stack(
+                [
+                    data["u_t"].flatten(),
+                    data["v_t"].flatten(),
+                ],
+                axis=1,
+            ),
+            dtype=torch.float32,
+            device=device,
+        )
 
         # Common metadata
-        self.ic_config = data['ic_config'].item() if 'ic_config' in data else {}
-        self.simulation_params = data['simulation_params'].item() if 'simulation_params' in data else {}
+        if "ic_config" in data:
+            self.ic_config = data["ic_config"].item()
+        else:
+            raise Exception("`ic_config` key not included in 'data'")
+
+        if "simulation_params" in data:
+            self.simulation_params = data["simulation_params"].item()
+        else:
+            raise Exception("`simulation_params` key not included in 'data'")
+
         self.n_samples = self.features.shape[0]
         self.task_name = self.npz_path.stem
 
         # Subclass-specific parameter extraction
-        self._extract_pde_params(data)
+        self._extract_pde_params()
         self._validate()
 
     @abstractmethod
-    def _extract_pde_params(self, data) -> None:
+    def _extract_pde_params(self) -> None:
         """Extract PDE-specific coefficients from data."""
         pass
 
@@ -90,12 +112,14 @@ class PDETask(ABC):
             ValueError: If metadata indicates failure, or data has shape mismatches
         """
         # Check metadata file for status (authoritative source)
-        txt_path = self.npz_path.with_suffix('.txt')
+        txt_path = self.npz_path.with_suffix(".txt")
         if txt_path.exists():
-            with open(txt_path, 'r') as f:
+            with open(txt_path, "r") as f:
                 content = f.read()
-            if 'Status: FAILED' in content:
-                raise ValueError(f"Task marked as failed in metadata: {self.npz_path.name}")
+            if "Status: FAILED" in content:
+                raise ValueError(
+                    f"Task marked as failed in metadata: {self.npz_path.name}"
+                )
 
         # Check shape consistency
         if self.features.shape[0] != self.targets.shape[0]:
@@ -110,7 +134,7 @@ class PDETask(ABC):
         query_size: int,
         seed: Optional[int] = None,
         noise_level: float = 0.0,
-        clean_targets: bool = False
+        clean_targets: bool = False,
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
         """
         Split task data into support set (D) and query set (D') for MAML.
@@ -150,7 +174,7 @@ class PDETask(ABC):
 
         # Split into support and query (disjoint sets)
         support_idx = indices[:K_shot]
-        query_idx = indices[K_shot:K_shot + query_size]
+        query_idx = indices[K_shot : K_shot + query_size]
 
         support = (features[support_idx], targets[support_idx])
         query = (features[query_idx], targets[query_idx])
@@ -158,9 +182,7 @@ class PDETask(ABC):
         return support, query
 
     def _load_noisy_data(
-        self,
-        noise_level: float,
-        clean_targets: bool = False
+        self, noise_level: float, clean_targets: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Load noisy features and optionally clean targets as GPU tensors.
@@ -178,20 +200,27 @@ class PDETask(ABC):
         level_key = f"noise_{noise_level:.2f}"
 
         try:
-            features = torch.tensor(np.stack([
-                noisy_data[f'{level_key}/u'].flatten(),
-                noisy_data[f'{level_key}/v'].flatten(),
-                noisy_data[f'{level_key}/u_x'].flatten(),
-                noisy_data[f'{level_key}/u_y'].flatten(),
-                noisy_data[f'{level_key}/u_xx'].flatten(),
-                noisy_data[f'{level_key}/u_yy'].flatten(),
-                noisy_data[f'{level_key}/v_x'].flatten(),
-                noisy_data[f'{level_key}/v_y'].flatten(),
-                noisy_data[f'{level_key}/v_xx'].flatten(),
-                noisy_data[f'{level_key}/v_yy'].flatten(),
-            ], axis=1), dtype=torch.float32, device=self.device)
+            features = torch.tensor(
+                np.stack(
+                    [
+                        noisy_data[f"{level_key}/u"].flatten(),
+                        noisy_data[f"{level_key}/v"].flatten(),
+                        noisy_data[f"{level_key}/u_x"].flatten(),
+                        noisy_data[f"{level_key}/u_y"].flatten(),
+                        noisy_data[f"{level_key}/u_xx"].flatten(),
+                        noisy_data[f"{level_key}/u_yy"].flatten(),
+                        noisy_data[f"{level_key}/v_x"].flatten(),
+                        noisy_data[f"{level_key}/v_y"].flatten(),
+                        noisy_data[f"{level_key}/v_xx"].flatten(),
+                        noisy_data[f"{level_key}/v_yy"].flatten(),
+                    ],
+                    axis=1,
+                ),
+                dtype=torch.float32,
+                device=self.device,
+            )
         except KeyError as e:
-            available = [k.split('/')[0] for k in noisy_data.keys() if '/' in k]
+            available = [k.split("/")[0] for k in noisy_data.keys() if "/" in k]
             available = sorted(set(available))
             raise KeyError(
                 f"Noise level '{level_key}' not found in {noisy_path}. "
@@ -201,10 +230,17 @@ class PDETask(ABC):
         if clean_targets:
             targets = self.targets  # already on device
         else:
-            targets = torch.tensor(np.stack([
-                noisy_data[f'{level_key}/u_t'].flatten(),
-                noisy_data[f'{level_key}/v_t'].flatten(),
-            ], axis=1), dtype=torch.float32, device=self.device)
+            targets = torch.tensor(
+                np.stack(
+                    [
+                        noisy_data[f"{level_key}/u_t"].flatten(),
+                        noisy_data[f"{level_key}/v_t"].flatten(),
+                    ],
+                    axis=1,
+                ),
+                dtype=torch.float32,
+                device=self.device,
+            )
 
         return features, targets
 
@@ -227,14 +263,19 @@ class NavierStokesTask(PDETask):
     Diffusion coefficient: nu (kinematic viscosity)
     """
 
-    def _extract_pde_params(self, data) -> None:
+    def _extract_pde_params(self) -> None:
         """Extract viscosity from data."""
-        self.nu = float(data['nu_used']) if 'nu_used' in data else None
+        self.nu = self.simulation_params.get("nu") or self.ic_config.get("nu")
+
+        if self.nu is None:
+            raise Exception("NS coefficient nu is None")
+
+        self.nu = float(self.nu)
 
     @property
     def diffusion_coeffs(self) -> dict:
         """Return viscosity as diffusion coefficient."""
-        return {'nu': self.nu}
+        return {"nu": self.nu}
 
 
 class BrusselatorTask(PDETask):
@@ -245,22 +286,27 @@ class BrusselatorTask(PDETask):
     Reaction coefficients: k1, k2
     """
 
-    def _extract_pde_params(self, data) -> None:
+    def _extract_pde_params(self) -> None:
         """Extract diffusion and reaction coefficients from data."""
         # Brusselator stores coefficients in simulation_params or ic_config
-        self.D_u = self.simulation_params.get('D_A') or self.ic_config.get('D_A_used')
-        self.D_v = self.simulation_params.get('D_B') or self.ic_config.get('D_B_used')
-        self.k1 = self.simulation_params.get('k1')
-        self.k2 = self.simulation_params.get('k2')
+        self.D_u = self.simulation_params.get("D_A") or self.ic_config.get("D_A_used")
+        self.D_v = self.simulation_params.get("D_B") or self.ic_config.get("D_B_used")
+        self.k1 = self.simulation_params.get("k1")
+        self.k2 = self.simulation_params.get("k2")
+
+        if self.D_u is None:
+            raise Exception("BR coefficient D_u is None")
+        if self.D_v is None:
+            raise Exception("BR coefficient D_v is None")
 
         # Convert to float if present
-        self.D_u = float(self.D_u) if self.D_u is not None else None
-        self.D_v = float(self.D_v) if self.D_v is not None else None
+        self.D_u = float(self.D_u)
+        self.D_v = float(self.D_v)
 
     @property
     def diffusion_coeffs(self) -> dict:
         """Return diffusion coefficients for both species."""
-        return {'D_u': self.D_u, 'D_v': self.D_v}
+        return {"D_u": self.D_u, "D_v": self.D_v}
 
 
 class BrusselatorFourierTask:
@@ -287,36 +333,50 @@ class BrusselatorFourierTask:
         data = np.load(npz_path, allow_pickle=True)
 
         # Fourier coefficients → GPU as complex128 tensors
-        self.n_snapshots = data['A_hat'].shape[0]
-        self.ny, self.nx = data['A_hat'].shape[1], data['A_hat'].shape[2]
-        self.A_hat = torch.tensor(data['A_hat'], dtype=torch.complex128, device=device)
-        self.B_hat = torch.tensor(data['B_hat'], dtype=torch.complex128, device=device)
-        self.times = data['times']
+        self.n_snapshots = data["A_hat"].shape[0]
+        self.ny, self.nx = data["A_hat"].shape[1], data["A_hat"].shape[2]
+        self.A_hat = torch.tensor(data["A_hat"], dtype=torch.complex128, device=device)
+        self.B_hat = torch.tensor(data["B_hat"], dtype=torch.complex128, device=device)
+        self.times = data["times"]
 
         # Metadata
-        self.ic_config = data['ic_config'].item() if 'ic_config' in data else {}
-        self.simulation_params = data['simulation_params'].item() if 'simulation_params' in data else {}
+        if "ic_config" in data:
+            self.ic_config = data["ic_config"].item()
+        else:
+            raise Exception("`ic_config` key not included in 'data'")
+
+        if "simulation_params" in data:
+            self.simulation_params = data["simulation_params"].item()
+        else:
+            raise Exception("`simulation_params` key not included in 'data'")
+
         self.task_name = self.npz_path.stem
 
         # PDE parameters
-        self.D_u = float(self.simulation_params.get('D_A') or self.ic_config.get('D_A_used'))
-        self.D_v = float(self.simulation_params.get('D_B') or self.ic_config.get('D_B_used'))
-        self.k1 = float(self.simulation_params.get('k1'))
-        self.k2 = float(self.simulation_params.get('k2'))
+        self.D_u = float(
+            self.simulation_params.get("D_A") or self.ic_config.get("D_A_used")
+        )
+        self.D_v = float(
+            self.simulation_params.get("D_B") or self.ic_config.get("D_B_used")
+        )
+        self.k1 = float(self.simulation_params.get("k1"))
+        self.k2 = float(self.simulation_params.get("k2"))
 
         # Domain geometry
-        Lx, Ly = self.simulation_params['domain_size']
+        Lx, Ly = self.simulation_params["domain_size"]
         self.Lx, self.Ly = float(Lx), float(Ly)
 
         # Precompute wavenumbers on GPU
-        self.kx, self.ky = build_wavenumbers(self.nx, self.ny, self.Lx, self.Ly, device=device)
+        self.kx, self.ky = build_wavenumbers(
+            self.nx, self.ny, self.Lx, self.Ly, device=device
+        )
 
         # Report n_samples as snapshot_count * grid_size for compatibility
         self.n_samples = self.n_snapshots * self.ny * self.nx
 
     @property
     def diffusion_coeffs(self) -> dict:
-        return {'D_u': self.D_u, 'D_v': self.D_v}
+        return {"D_u": self.D_u, "D_v": self.D_v}
 
     def get_support_query_split(
         self,
@@ -340,26 +400,42 @@ class BrusselatorFourierTask:
             gen.manual_seed(seed)
 
         # Sample random snapshot indices and spatial coordinates (all on GPU)
-        snap_idx = torch.randint(0, self.n_snapshots, (n_total,), generator=gen, device=self.device)
-        x_pts = torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64) * self.Lx
-        y_pts = torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64) * self.Ly
+        snap_idx = torch.randint(
+            0, self.n_snapshots, (n_total,), generator=gen, device=self.device
+        )
+        x_pts = (
+            torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64)
+            * self.Lx
+        )
+        y_pts = (
+            torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64)
+            * self.Ly
+        )
 
         # Build phase matrices on GPU
         E_x = torch.exp(1j * torch.outer(x_pts, self.kx))  # (n_total, nx)
         E_y = torch.exp(1j * torch.outer(y_pts, self.ky))  # (n_total, ny)
 
         # Group points by snapshot for efficient evaluation
-        all_features = torch.empty((n_total, 10), dtype=torch.float32, device=self.device)
+        all_features = torch.empty(
+            (n_total, 10), dtype=torch.float32, device=self.device
+        )
         all_targets = torch.empty((n_total, 2), dtype=torch.float32, device=self.device)
 
         unique_snaps = torch.unique(snap_idx)
         for si in unique_snaps:
             mask_idx = torch.where(snap_idx == si)[0]
             feats, tgts = evaluate_all_features(
-                self.A_hat[si.item()], self.B_hat[si.item()],
-                self.kx, self.ky,
-                E_x[mask_idx], E_y[mask_idx],
-                self.D_u, self.D_v, self.k1, self.k2,
+                self.A_hat[si.item()],
+                self.B_hat[si.item()],
+                self.kx,
+                self.ky,
+                E_x[mask_idx],
+                E_y[mask_idx],
+                self.D_u,
+                self.D_v,
+                self.k1,
+                self.k2,
             )
             all_features[mask_idx] = feats
             all_targets[mask_idx] = tgts
@@ -374,7 +450,7 @@ class BrusselatorFourierTask:
                 u, v = all_features[:, 0], all_features[:, 1]
                 u_xx, u_yy = all_features[:, 4], all_features[:, 5]
                 v_xx, v_yy = all_features[:, 8], all_features[:, 9]
-                a_sq_b = u ** 2 * v
+                a_sq_b = u**2 * v
                 u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + a_sq_b
                 v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - a_sq_b
                 all_targets = torch.stack([u_t, v_t], dim=1)
@@ -412,7 +488,9 @@ class MetaLearningDataLoader:
     def __init__(
         self,
         data_dir: Path,
-        task_class: Union[Type[PDETask], Type['BrusselatorFourierTask']] = NavierStokesTask,
+        task_class: Union[
+            Type["PDETask"], Type["BrusselatorFourierTask"]
+        ] = NavierStokesTask,
         task_pattern: str = "*.npz",
         device: str = "cuda",
     ):
@@ -434,24 +512,26 @@ class MetaLearningDataLoader:
         npz_files = sorted(self.data_dir.glob(task_pattern))
 
         # Exclude noisy files (they're loaded on-demand by get_support_query_split)
-        npz_files = [f for f in npz_files if not f.stem.endswith('_noisy')]
+        npz_files = [f for f in npz_files if not f.stem.endswith("_noisy")]
 
         if len(npz_files) == 0:
-            raise ValueError(f"No .npz files found in {data_dir} with pattern '{task_pattern}'")
+            raise ValueError(
+                f"No .npz files found in {data_dir} with pattern '{task_pattern}'"
+            )
 
         # Load all tasks, skipping invalid ones
-        self.tasks: List[PDETask] = []
+        self.tasks: List[Union[PDETask, BrusselatorFourierTask]] = []
         self.task_names: List[str] = []
         skipped: List[str] = []
 
         print(f"Loading tasks from {data_dir}...")
-        for f in npz_files:
+        for npz_path in npz_files:
             try:
-                task = self.task_class(f, device=self.device)
+                task = self.task_class(npz_path, device=self.device)
                 self.tasks.append(task)
-                self.task_names.append(f.stem)
+                self.task_names.append(npz_path.stem)
             except ValueError as e:
-                skipped.append(f"{f.stem}: {e}")
+                skipped.append(f"{npz_path.stem}: {e}")
 
         if skipped:
             print(f"\n⚠ Skipped {len(skipped)} invalid tasks:")
@@ -461,10 +541,14 @@ class MetaLearningDataLoader:
         print(f"\n✓ Loaded {len(self.tasks)} tasks:")
         for name, task in zip(self.task_names, self.tasks):
             coeffs = task.diffusion_coeffs
-            coeff_str = ", ".join(f"{k}={v:.6f}" if v else f"{k}=unknown" for k, v in coeffs.items())
+            coeff_str = ", ".join(
+                f"{k}={v:.6f}" if v else f"{k}=unknown" for k, v in coeffs.items()
+            )
             print(f"  {name:30s}  {task.n_samples:>7,} samples  {coeff_str}")
 
-    def sample_batch(self, n_tasks: int, seed: Optional[int] = None) -> List[PDETask]:
+    def sample_batch(
+        self, n_tasks: int, seed: Optional[int] = None
+    ) -> List[Union[PDETask, BrusselatorFourierTask]]:
         """
         Sample random subset of tasks for meta-training batch.
 
@@ -490,9 +574,9 @@ class MetaLearningDataLoader:
         if seed is not None:
             gen.manual_seed(seed)
         indices = torch.randperm(len(self.tasks), generator=gen)[:n_tasks]
-        return [self.tasks[i.item()] for i in indices]
+        return [self.tasks[int(i)] for i in indices]
 
-    def get_task_by_name(self, name: str) -> PDETask:
+    def get_task_by_name(self, name: str) -> Union[PDETask, BrusselatorFourierTask]:
         """
         Get specific task by name for evaluation.
 
@@ -514,10 +598,11 @@ class MetaLearningDataLoader:
             )
 
     def train_test_split(
-        self,
-        test_ratio: float = 0.2,
-        seed: Optional[int] = None
-    ) -> Tuple[List[PDETask], List[PDETask]]:
+        self, test_ratio: float = 0.2, seed: Optional[int] = None
+    ) -> Tuple[
+        List[Union[PDETask, BrusselatorFourierTask]],
+        List[Union[PDETask, BrusselatorFourierTask]],
+    ]:
         """
         Split tasks into train/test sets for meta-learning.
 
@@ -542,10 +627,10 @@ class MetaLearningDataLoader:
         test_idx = indices[:n_test]
         train_idx = indices[n_test:]
 
-        train_tasks = [self.tasks[i.item()] for i in train_idx]
-        test_tasks = [self.tasks[i.item()] for i in test_idx]
+        train_tasks = [self.tasks[int(i)] for i in train_idx]
+        test_tasks = [self.tasks[int(i)] for i in test_idx]
 
-        print(f"\nTrain/test split:")
+        print("\nTrain/test split:")
         print(f"  Train tasks: {len(train_tasks)}")
         print(f"  Test tasks: {len(test_tasks)}")
 
