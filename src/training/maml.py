@@ -11,7 +11,7 @@ References:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict
 import copy
 
 import torch
@@ -19,11 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import higher
 
-from .task_loader import (
-    BrusselatorFourierTask,
-    PDETask,
-    MetaLearningDataLoader,
-)
+from .task_loader import PDETask, MetaLearningDataLoader
 
 
 @dataclass
@@ -163,7 +159,7 @@ class MAMLTrainer:
         self.best_train_state = None  # Stash weights when train loss improves
 
     def compute_task_loss(
-        self, task: Union[PDETask, BrusselatorFourierTask], seed: int
+        self, task: PDETask, seed: int
     ) -> torch.Tensor:
         """
         Compute query loss after inner loop adaptation.
@@ -217,7 +213,7 @@ class MAMLTrainer:
 
         return query_loss
 
-    def outer_step(self, tasks: List[Union[PDETask, BrusselatorFourierTask]]) -> float:
+    def outer_step(self, tasks: List[PDETask]) -> float:
         """
         Perform one meta-update step.
 
@@ -248,7 +244,7 @@ class MAMLTrainer:
         return avg_loss.item()
 
     def evaluate(
-        self, tasks: List[Union[PDETask, BrusselatorFourierTask]], seed: int = 0
+        self, tasks: List[PDETask], seed: int = 0
     ) -> float:
         """
         Evaluate meta-learned initialization on tasks (no meta-update).

@@ -21,7 +21,7 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Tuple, Union
+from typing import List, Dict, Any, Tuple
 
 import yaml
 import torch
@@ -35,9 +35,8 @@ from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import (
     MetaLearningDataLoader,
     PDETask,
-    NavierStokesTask,
     BrusselatorTask,
-    BrusselatorFourierTask,
+    NavierStokesTask,
 )
 from src.evaluation.jacobian import analyze_jacobian_ns, analyze_jacobian_br
 
@@ -142,7 +141,7 @@ def fine_tune(
 
 
 def evaluate_task(
-    task: Union[PDETask, BrusselatorFourierTask],
+    task: PDETask,
     theta_star: PDEOperatorNetwork,
     theta_0: PDEOperatorNetwork,
     k_values: List[int],
@@ -433,20 +432,14 @@ def main():
     if not test_dir.exists():
         raise FileNotFoundError(f"Meta-test directory not found: {test_dir}")
 
-    if not (pde_type == "br" or pde_type == "nr"):
-        raise ValueError("Invalid value for pde_type, must be 'br' or 'ns'")
-
-    data_format = config["experiment"].get("data_format", "grid")
-
-    if pde_type == "br" and data_format == "fourier":
-        task_class = BrusselatorFourierTask
-        task_pattern = "*_fourier.npz"
-    elif pde_type == "br":
+    if pde_type == "br":
         task_class = BrusselatorTask
-        task_pattern = "*.npz"
-    else:
+    elif pde_type == "ns":
         task_class = NavierStokesTask
-        task_pattern = "*.npz"
+    else:
+        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br' or 'ns'.")
+
+    task_pattern = "*_fourier.npz"
 
     test_loader = MetaLearningDataLoader(
         test_dir, task_class=task_class, task_pattern=task_pattern, device=device

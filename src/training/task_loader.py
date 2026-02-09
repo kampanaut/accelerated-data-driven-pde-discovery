@@ -1,79 +1,45 @@
 """
 Task data loaders for MAML-based meta-learning on PDEs.
 
-Loads pre-computed derivative data from .npz files and provides support/query
-splits for meta-learning. Supports both Navier-Stokes and Brusselator PDEs.
+Fourier-native architecture: tasks store FFT coefficients and evaluate
+features/targets at random collocation points on-the-fly on GPU. This gives:
+- Spectrally exact derivatives (no finite-difference error)
+- Fresh random points each batch (infinite effective dataset)
+- Arbitrary evaluation locations (not grid-locked)
+- GPU-accelerated Fourier synthesis
 """
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Tuple, List, Optional, Type, Union
+from typing import Tuple, List, Optional, Type
 import numpy as np
 import torch
+
+from src.data.fourier_eval import build_wavenumbers
 
 
 class PDETask(ABC):
     """
-    Abstract base class for PDE discovery tasks.
+    Abstract base class for Fourier-native PDE discovery tasks.
 
-    Each task contains:
-    - Features: (u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy)
-    - Targets: (u_t, v_t)
-    - Metadata: IC configuration, diffusion coefficients, etc.
+    Stores FFT coefficients and evaluates features at random collocation
+    points on-the-fly. Subclasses implement PDE-specific coefficient loading,
+    evaluation, and noise injection.
 
     The task provides support/query splits for MAML:
     - Support set (D): K samples for inner loop adaptation
     - Query set (D'): Q samples for meta-gradient evaluation
     """
 
+    ny: int
+    nx: int
+    n_snapshots: int
+
+
     def __init__(self, npz_path: Path, device: str = "cuda"):
-        """
-        Load task from .npz file. Features and targets stored as GPU tensors.
-
-        Args:
-            npz_path: Path to .npz file with pre-computed derivatives
-            device: Torch device for tensor storage
-
-        Raises:
-            ValueError: If data is corrupted (NaN/Inf/shape mismatches)
-        """
         self.npz_path = Path(npz_path)
         self.device = device
         data = np.load(npz_path, allow_pickle=True)
-
-        # Load features → GPU tensors immediately (numpy only at I/O boundary)
-        self.features = torch.tensor(
-            np.stack(
-                [
-                    data["u"].flatten(),
-                    data["v"].flatten(),
-                    data["u_x"].flatten(),
-                    data["u_y"].flatten(),
-                    data["u_xx"].flatten(),
-                    data["u_yy"].flatten(),
-                    data["v_x"].flatten(),
-                    data["v_y"].flatten(),
-                    data["v_xx"].flatten(),
-                    data["v_yy"].flatten(),
-                ],
-                axis=1,
-            ),
-            dtype=torch.float32,
-            device=device,
-        )
-
-        # Load targets → GPU tensors
-        self.targets = torch.tensor(
-            np.stack(
-                [
-                    data["u_t"].flatten(),
-                    data["v_t"].flatten(),
-                ],
-                axis=1,
-            ),
-            dtype=torch.float32,
-            device=device,
-        )
 
         # Common metadata
         if "ic_config" in data:
@@ -86,297 +52,86 @@ class PDETask(ABC):
         else:
             raise Exception("`simulation_params` key not included in 'data'")
 
-        self.n_samples = self.features.shape[0]
         self.task_name = self.npz_path.stem
-
-        # Subclass-specific parameter extraction
-        self._extract_pde_params()
-        self._validate()
-
-    @abstractmethod
-    def _extract_pde_params(self) -> None:
-        """Extract PDE-specific coefficients from data."""
-        pass
-
-    @property
-    @abstractmethod
-    def diffusion_coeffs(self) -> dict:
-        """Return diffusion coefficients as dict. Keys: 'nu' (NS) or 'D_u', 'D_v' (BR)."""
-        pass
-
-    def _validate(self):
-        """
-        Validate data integrity.
-
-        Raises:
-            ValueError: If metadata indicates failure, or data has shape mismatches
-        """
-        # Check metadata file for status (authoritative source)
-        txt_path = self.npz_path.with_suffix(".txt")
-        if txt_path.exists():
-            with open(txt_path, "r") as f:
-                content = f.read()
-            if "Status: FAILED" in content:
-                raise ValueError(
-                    f"Task marked as failed in metadata: {self.npz_path.name}"
-                )
-
-        # Check shape consistency
-        if self.features.shape[0] != self.targets.shape[0]:
-            raise ValueError(
-                f"Shape mismatch in {self.npz_path.name}: "
-                f"features {self.features.shape} vs targets {self.targets.shape}"
-            )
-
-    def get_support_query_split(
-        self,
-        K_shot: int,
-        query_size: int,
-        seed: Optional[int] = None,
-        noise_level: float = 0.0,
-        clean_targets: bool = False,
-    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Split task data into support set (D) and query set (D') for MAML.
-
-        Returns GPU tensors directly — no numpy conversion.
-
-        Args:
-            K_shot: Support set size (number of samples for inner loop)
-            query_size: Query set size (number of samples for meta-gradient)
-            seed: Random seed for reproducible splits
-            noise_level: Noise level to use (0.0 = clean data, >0 loads from *_noisy.npz)
-            clean_targets: If True and noise_level > 0, use noisy features but clean targets
-
-        Returns:
-            support: Tuple of (features[K], targets[K]) tensors on device
-            query: Tuple of (features[Q], targets[Q]) tensors on device
-        """
-        # Get features and targets (clean or noisy)
-        if noise_level > 0.0:
-            features, targets = self._load_noisy_data(noise_level, clean_targets)
-        else:
-            features, targets = self.features, self.targets
-
-        n_samples = features.shape[0]
-
-        if K_shot + query_size > n_samples:
-            raise ValueError(
-                f"K_shot ({K_shot}) + query_size ({query_size}) = {K_shot + query_size} "
-                f"exceeds task size ({n_samples}) for {self.task_name}"
-            )
-
-        # Shuffle with torch RNG on device
-        gen = torch.Generator(device=self.device)
-        if seed is not None:
-            gen.manual_seed(seed)
-        indices = torch.randperm(n_samples, generator=gen, device=self.device)
-
-        # Split into support and query (disjoint sets)
-        support_idx = indices[:K_shot]
-        query_idx = indices[K_shot : K_shot + query_size]
-
-        support = (features[support_idx], targets[support_idx])
-        query = (features[query_idx], targets[query_idx])
-
-        return support, query
-
-    def _load_noisy_data(
-        self, noise_level: float, clean_targets: bool = False
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Load noisy features and optionally clean targets as GPU tensors.
-        Numpy only at the I/O boundary (np.load), then straight to device.
-        """
-        noisy_path = self.npz_path.parent / f"{self.npz_path.stem}_noisy.npz"
-
-        if not noisy_path.exists():
-            raise FileNotFoundError(
-                f"Noisy file not found: {noisy_path}. "
-                f"Run scripts/inject_noise.py to create it."
-            )
-
-        noisy_data = np.load(noisy_path, allow_pickle=True)
-        level_key = f"noise_{noise_level:.2f}"
-
-        try:
-            features = torch.tensor(
-                np.stack(
-                    [
-                        noisy_data[f"{level_key}/u"].flatten(),
-                        noisy_data[f"{level_key}/v"].flatten(),
-                        noisy_data[f"{level_key}/u_x"].flatten(),
-                        noisy_data[f"{level_key}/u_y"].flatten(),
-                        noisy_data[f"{level_key}/u_xx"].flatten(),
-                        noisy_data[f"{level_key}/u_yy"].flatten(),
-                        noisy_data[f"{level_key}/v_x"].flatten(),
-                        noisy_data[f"{level_key}/v_y"].flatten(),
-                        noisy_data[f"{level_key}/v_xx"].flatten(),
-                        noisy_data[f"{level_key}/v_yy"].flatten(),
-                    ],
-                    axis=1,
-                ),
-                dtype=torch.float32,
-                device=self.device,
-            )
-        except KeyError as e:
-            available = [k.split("/")[0] for k in noisy_data.keys() if "/" in k]
-            available = sorted(set(available))
-            raise KeyError(
-                f"Noise level '{level_key}' not found in {noisy_path}. "
-                f"Available levels: {available}"
-            ) from e
-
-        if clean_targets:
-            targets = self.targets  # already on device
-        else:
-            targets = torch.tensor(
-                np.stack(
-                    [
-                        noisy_data[f"{level_key}/u_t"].flatten(),
-                        noisy_data[f"{level_key}/v_t"].flatten(),
-                    ],
-                    axis=1,
-                ),
-                dtype=torch.float32,
-                device=self.device,
-            )
-
-        return features, targets
-
-    def __repr__(self) -> str:
-        """String representation of task."""
-        return (
-            f"{self.__class__.__name__}(\n"
-            f"  name='{self.task_name}',\n"
-            f"  samples={self.n_samples:,},\n"
-            f"  diffusion_coeffs={self.diffusion_coeffs},\n"
-            f"  ic_type='{self.ic_config.get('type', 'unknown')}'\n"
-            f")"
-        )
-
-
-class NavierStokesTask(PDETask):
-    """
-    Navier-Stokes PDE task.
-
-    Diffusion coefficient: nu (kinematic viscosity)
-    """
-
-    def _extract_pde_params(self) -> None:
-        """Extract viscosity from data."""
-        self.nu = self.simulation_params.get("nu") or self.ic_config.get("nu")
-
-        if self.nu is None:
-            raise Exception("NS coefficient nu is None")
-
-        self.nu = float(self.nu)
-
-    @property
-    def diffusion_coeffs(self) -> dict:
-        """Return viscosity as diffusion coefficient."""
-        return {"nu": self.nu}
-
-
-class BrusselatorTask(PDETask):
-    """
-    Brusselator PDE task.
-
-    Diffusion coefficients: D_u (for species A/u), D_v (for species B/v)
-    Reaction coefficients: k1, k2
-    """
-
-    def _extract_pde_params(self) -> None:
-        """Extract diffusion and reaction coefficients from data."""
-        # Brusselator stores coefficients in simulation_params or ic_config
-        self.D_u = self.simulation_params.get("D_A") or self.ic_config.get("D_A_used")
-        self.D_v = self.simulation_params.get("D_B") or self.ic_config.get("D_B_used")
-        self.k1 = self.simulation_params.get("k1")
-        self.k2 = self.simulation_params.get("k2")
-
-        if self.D_u is None:
-            raise Exception("BR coefficient D_u is None")
-        if self.D_v is None:
-            raise Exception("BR coefficient D_v is None")
-
-        # Convert to float if present
-        self.D_u = float(self.D_u)
-        self.D_v = float(self.D_v)
-
-    @property
-    def diffusion_coeffs(self) -> dict:
-        """Return diffusion coefficients for both species."""
-        return {"D_u": self.D_u, "D_v": self.D_v}
-
-
-class BrusselatorFourierTask:
-    """
-    Brusselator task using Fourier coefficient representation.
-
-    Instead of pre-computed grid derivatives, stores FFT coefficients and
-    evaluates features at random collocation points on-the-fly on GPU. This gives:
-    - Spectrally exact derivatives (no finite-difference error)
-    - Fresh random points each batch (infinite effective dataset)
-    - Arbitrary evaluation locations (not grid-locked)
-    - GPU-accelerated Fourier synthesis
-
-    Duck-types the PDETask interface for drop-in use with MetaLearningDataLoader
-    and MAMLTrainer.
-    """
-
-    def __init__(self, npz_path: Path, device: str = "cuda"):
-        import torch
-        from src.data.fourier_eval import build_wavenumbers
-
-        self.npz_path = Path(npz_path)
-        self.device = device
-        data = np.load(npz_path, allow_pickle=True)
-
-        # Fourier coefficients → GPU as complex128 tensors
-        self.n_snapshots = data["A_hat"].shape[0]
-        self.ny, self.nx = data["A_hat"].shape[1], data["A_hat"].shape[2]
-        self.A_hat = torch.tensor(data["A_hat"], dtype=torch.complex128, device=device)
-        self.B_hat = torch.tensor(data["B_hat"], dtype=torch.complex128, device=device)
-        self.times = data["times"]
-
-        # Metadata
-        if "ic_config" in data:
-            self.ic_config = data["ic_config"].item()
-        else:
-            raise Exception("`ic_config` key not included in 'data'")
-
-        if "simulation_params" in data:
-            self.simulation_params = data["simulation_params"].item()
-        else:
-            raise Exception("`simulation_params` key not included in 'data'")
-
-        self.task_name = self.npz_path.stem
-
-        # PDE parameters
-        self.D_u = float(
-            self.simulation_params.get("D_A") or self.ic_config.get("D_A_used")
-        )
-        self.D_v = float(
-            self.simulation_params.get("D_B") or self.ic_config.get("D_B_used")
-        )
-        self.k1 = float(self.simulation_params.get("k1"))
-        self.k2 = float(self.simulation_params.get("k2"))
 
         # Domain geometry
         Lx, Ly = self.simulation_params["domain_size"]
         self.Lx, self.Ly = float(Lx), float(Ly)
+
+        # Subclass loads PDE-specific Fourier tensors, sets n_snapshots/ny/nx
+        self._load_coefficients(data)
 
         # Precompute wavenumbers on GPU
         self.kx, self.ky = build_wavenumbers(
             self.nx, self.ny, self.Lx, self.Ly, device=device
         )
 
-        # Report n_samples as snapshot_count * grid_size for compatibility
+        # n_samples for compatibility (snapshot_count * grid_size)
         self.n_samples = self.n_snapshots * self.ny * self.nx
 
+        # Subclass-specific parameter extraction
+        self._extract_pde_params()
+
+    @abstractmethod
+    def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
+        """
+        Load PDE-specific Fourier tensors to GPU.
+        Must set self.n_snapshots, self.ny, self.nx.
+        """
+        pass
+
+    @abstractmethod
+    def _extract_pde_params(self) -> None:
+        """Extract PDE-specific coefficients from metadata."""
+        pass
+
+    @abstractmethod
+    def _evaluate_snapshot(
+        self,
+        snap_idx: int,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Evaluate features and targets for one snapshot at given points.
+
+        Args:
+            snap_idx: Snapshot index
+            E_x: Phase matrix, shape (n_points, nx), complex128
+            E_y: Phase matrix, shape (n_points, ny), complex128
+
+        Returns:
+            (features, targets): float32 tensors, shapes (n_points, 10) and (n_points, 2)
+        """
+        pass
+
+    @abstractmethod
+    def _inject_noise(
+        self,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        noise_level: float,
+        clean_targets: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Inject noise into features (and optionally targets).
+
+        Args:
+            features: (N, 10) float32
+            targets: (N, 2) float32
+            noise_level: Proportional noise level
+            clean_targets: If True, don't modify targets
+
+        Returns:
+            (noisy_features, noisy_or_clean_targets)
+        """
+        pass
+
     @property
+    @abstractmethod
     def diffusion_coeffs(self) -> dict:
-        return {"D_u": self.D_u, "D_v": self.D_v}
+        """Return diffusion coefficients as dict."""
+        pass
 
     def get_support_query_split(
         self,
@@ -390,8 +145,6 @@ class BrusselatorFourierTask:
         Generate support/query data at random collocation points.
         Everything stays on GPU — no numpy, no host transfers.
         """
-        from src.data.fourier_eval import evaluate_all_features
-
         n_total = K_shot + query_size
 
         # Torch RNG on device
@@ -425,35 +178,19 @@ class BrusselatorFourierTask:
         unique_snaps = torch.unique(snap_idx)
         for si in unique_snaps:
             mask_idx = torch.where(snap_idx == si)[0]
-            feats, tgts = evaluate_all_features(
-                self.A_hat[si.item()],
-                self.B_hat[si.item()],
-                self.kx,
-                self.ky,
+            feats, tgts = self._evaluate_snapshot(
+                si.item(),
                 E_x[mask_idx],
                 E_y[mask_idx],
-                self.D_u,
-                self.D_v,
-                self.k1,
-                self.k2,
             )
             all_features[mask_idx] = feats
             all_targets[mask_idx] = tgts
 
         # Inject noise if requested
         if noise_level > 0.0:
-            feat_std = all_features.std(dim=0, keepdim=True)
-            noise = torch.randn_like(all_features) * (noise_level * feat_std)
-            all_features = all_features + noise
-
-            if not clean_targets:
-                u, v = all_features[:, 0], all_features[:, 1]
-                u_xx, u_yy = all_features[:, 4], all_features[:, 5]
-                v_xx, v_yy = all_features[:, 8], all_features[:, 9]
-                a_sq_b = u**2 * v
-                u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + a_sq_b
-                v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - a_sq_b
-                all_targets = torch.stack([u_t, v_t], dim=1)
+            all_features, all_targets = self._inject_noise(
+                all_features, all_targets, noise_level, clean_targets
+            )
 
         support = (all_features[:K_shot], all_targets[:K_shot])
         query = (all_features[K_shot:], all_targets[K_shot:])
@@ -462,7 +199,7 @@ class BrusselatorFourierTask:
 
     def __repr__(self) -> str:
         return (
-            f"BrusselatorFourierTask(\n"
+            f"{self.__class__.__name__}(\n"
             f"  name='{self.task_name}',\n"
             f"  snapshots={self.n_snapshots}, grid=({self.ny}, {self.nx}),\n"
             f"  diffusion_coeffs={self.diffusion_coeffs},\n"
@@ -472,47 +209,178 @@ class BrusselatorFourierTask:
         )
 
 
+class BrusselatorTask(PDETask):
+    """
+    Brusselator PDE task (Fourier-native).
+
+    Stores A_hat/B_hat FFT coefficients. Targets computed from PDE RHS
+    (self-consistent with features).
+
+    Diffusion coefficients: D_u (for species A/u), D_v (for species B/v)
+    Reaction coefficients: k1, k2
+    """
+
+    def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
+        self.n_snapshots = data["A_hat"].shape[0]
+        self.ny, self.nx = data["A_hat"].shape[1], data["A_hat"].shape[2]
+        self.A_hat = torch.tensor(data["A_hat"], dtype=torch.complex128, device=self.device)
+        self.B_hat = torch.tensor(data["B_hat"], dtype=torch.complex128, device=self.device)
+
+    def _extract_pde_params(self) -> None:
+        self.D_u = self.simulation_params.get("D_A") or self.ic_config.get("D_A_used")
+        self.D_v = self.simulation_params.get("D_B") or self.ic_config.get("D_B_used")
+        self.k1 = self.simulation_params.get("k1")
+        self.k2 = self.simulation_params.get("k2")
+
+        if self.D_u is None:
+            raise Exception("BR coefficient D_u is None")
+        if self.D_v is None:
+            raise Exception("BR coefficient D_v is None")
+
+        self.D_u = float(self.D_u)
+        self.D_v = float(self.D_v)
+        self.k1 = float(self.k1)
+        self.k2 = float(self.k2)
+
+    def _evaluate_snapshot(
+        self,
+        snap_idx: int,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        from src.data.fourier_eval import evaluate_all_features
+
+        return evaluate_all_features(
+            self.A_hat[snap_idx],
+            self.B_hat[snap_idx],
+            self.kx,
+            self.ky,
+            E_x,
+            E_y,
+            self.D_u,
+            self.D_v,
+            self.k1,
+            self.k2,
+        )
+
+    def _inject_noise(
+        self,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        noise_level: float,
+        clean_targets: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Proportional noise on features
+        feat_std = features.std(dim=0, keepdim=True)
+        noise = torch.randn_like(features) * (noise_level * feat_std)
+        features = features + noise
+
+        if not clean_targets:
+            # Recompute targets from noisy features via PDE RHS (self-consistent)
+            u, v = features[:, 0], features[:, 1]
+            u_xx, u_yy = features[:, 4], features[:, 5]
+            v_xx, v_yy = features[:, 8], features[:, 9]
+            a_sq_b = u**2 * v
+            u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + a_sq_b
+            v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - a_sq_b
+            targets = torch.stack([u_t, v_t], dim=1)
+
+        return features, targets
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        return {"D_u": self.D_u, "D_v": self.D_v}
+
+
+class NavierStokesTask(PDETask):
+    """
+    Navier-Stokes PDE task (Fourier-native).
+
+    Stores u_hat/v_hat/u_t_hat/v_t_hat FFT coefficients. Targets come from
+    temporal central differences (NOT from PDE RHS — pressure term is implicit).
+
+    Diffusion coefficient: nu (kinematic viscosity)
+    """
+
+    def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
+        self.n_snapshots = data["u_hat"].shape[0]
+        self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.device)
+        self.u_t_hat = torch.tensor(data["u_t_hat"], dtype=torch.complex128, device=self.device)
+        self.v_t_hat = torch.tensor(data["v_t_hat"], dtype=torch.complex128, device=self.device)
+
+    def _extract_pde_params(self) -> None:
+        self.nu = float(
+            self.simulation_params.get("nu") or self.ic_config.get("nu")
+        )
+        if self.nu is None:
+            raise Exception("NS coefficient nu is None")
+
+    def _evaluate_snapshot(
+        self,
+        snap_idx: int,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        from src.data.fourier_eval import evaluate_ns_features
+
+        return evaluate_ns_features(
+            self.u_hat[snap_idx],
+            self.v_hat[snap_idx],
+            self.u_t_hat[snap_idx],
+            self.v_t_hat[snap_idx],
+            self.kx,
+            self.ky,
+            E_x,
+            E_y,
+        )
+
+    def _inject_noise(
+        self,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        noise_level: float,
+        clean_targets: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Proportional noise on features
+        feat_std = features.std(dim=0, keepdim=True)
+        feat_noise = torch.randn_like(features) * (noise_level * feat_std)
+        features = features + feat_noise
+
+        if not clean_targets:
+            # Can't recompute targets from noisy features (pressure is implicit).
+            # Add proportional noise to targets independently.
+            tgt_std = targets.std(dim=0, keepdim=True)
+            tgt_noise = torch.randn_like(targets) * (noise_level * tgt_std)
+            targets = targets + tgt_noise
+
+        return features, targets
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        return {"nu": self.nu}
+
+
 class MetaLearningDataLoader:
     """
     Manages multiple PDE tasks for MAML meta-learning.
 
-    Loads all .npz files from a directory, each representing a different task
-    (typically different initial conditions with the same PDE parameters).
-
-    Provides functionality for:
-    - Loading all tasks from a directory
-    - Sampling random task batches for meta-training
-    - Splitting tasks into train/test sets
+    Loads all Fourier .npz files from a directory, each representing a different
+    task (typically different initial conditions with the same PDE parameters).
     """
 
     def __init__(
         self,
         data_dir: Path,
-        task_class: Union[
-            Type["PDETask"], Type["BrusselatorFourierTask"]
-        ] = NavierStokesTask,
-        task_pattern: str = "*.npz",
+        task_class: Type[PDETask] = NavierStokesTask,
+        task_pattern: str = "*_fourier.npz",
         device: str = "cuda",
     ):
-        """
-        Initialize data loader by loading all tasks from directory.
-
-        Args:
-            data_dir: Directory containing .npz task files
-            task_class: Task class to instantiate (NavierStokesTask or BrusselatorTask)
-            task_pattern: Glob pattern for task files (default: "*.npz")
-            device: Torch device for tensor storage
-
-        Raises:
-            ValueError: If no .npz files found or if any task is corrupted
-        """
         self.data_dir = Path(data_dir)
         self.task_class = task_class
         self.device = device
         npz_files = sorted(self.data_dir.glob(task_pattern))
-
-        # Exclude noisy files (they're loaded on-demand by get_support_query_split)
-        npz_files = [f for f in npz_files if not f.stem.endswith("_noisy")]
 
         if len(npz_files) == 0:
             raise ValueError(
@@ -520,7 +388,7 @@ class MetaLearningDataLoader:
             )
 
         # Load all tasks, skipping invalid ones
-        self.tasks: List[Union[PDETask, BrusselatorFourierTask]] = []
+        self.tasks: List[PDETask] = []
         self.task_names: List[str] = []
         skipped: List[str] = []
 
@@ -530,7 +398,7 @@ class MetaLearningDataLoader:
                 task = self.task_class(npz_path, device=self.device)
                 self.tasks.append(task)
                 self.task_names.append(npz_path.stem)
-            except ValueError as e:
+            except (ValueError, Exception) as e:
                 skipped.append(f"{npz_path.stem}: {e}")
 
         if skipped:
@@ -548,22 +416,9 @@ class MetaLearningDataLoader:
 
     def sample_batch(
         self, n_tasks: int, seed: Optional[int] = None
-    ) -> List[Union[PDETask, BrusselatorFourierTask]]:
+    ) -> List[PDETask]:
         """
         Sample random subset of tasks for meta-training batch.
-
-        This is used in the MAML outer loop to get a batch of tasks for
-        computing the meta-gradient.
-
-        Args:
-            n_tasks: Number of tasks to sample (meta-batch size)
-            seed: Random seed for reproducibility
-
-        Returns:
-            List of n_tasks PDETask objects
-
-        Raises:
-            ValueError: If n_tasks exceeds number of available tasks
         """
         if n_tasks > len(self.tasks):
             raise ValueError(
@@ -576,19 +431,8 @@ class MetaLearningDataLoader:
         indices = torch.randperm(len(self.tasks), generator=gen)[:n_tasks]
         return [self.tasks[int(i)] for i in indices]
 
-    def get_task_by_name(self, name: str) -> Union[PDETask, BrusselatorFourierTask]:
-        """
-        Get specific task by name for evaluation.
-
-        Args:
-            name: Task name (stem of .npz filename)
-
-        Returns:
-            PDETask object
-
-        Raises:
-            ValueError: If task name not found
-        """
+    def get_task_by_name(self, name: str) -> PDETask:
+        """Get specific task by name for evaluation."""
         try:
             idx = self.task_names.index(name)
             return self.tasks[idx]
@@ -599,24 +443,8 @@ class MetaLearningDataLoader:
 
     def train_test_split(
         self, test_ratio: float = 0.2, seed: Optional[int] = None
-    ) -> Tuple[
-        List[Union[PDETask, BrusselatorFourierTask]],
-        List[Union[PDETask, BrusselatorFourierTask]],
-    ]:
-        """
-        Split tasks into train/test sets for meta-learning.
-
-        Meta-train tasks: Used for meta-training (learn meta-initialization θ)
-        Meta-test tasks: Held-out for final evaluation (test generalization)
-
-        Args:
-            test_ratio: Fraction of tasks to reserve for testing (default: 0.2)
-            seed: Random seed for reproducible splits
-
-        Returns:
-            train_tasks: List of tasks for meta-training
-            test_tasks: List of held-out tasks for meta-testing
-        """
+    ) -> Tuple[List[PDETask], List[PDETask]]:
+        """Split tasks into train/test sets for meta-learning."""
         n_test = max(1, int(len(self.tasks) * test_ratio))
 
         gen = torch.Generator()
@@ -637,11 +465,9 @@ class MetaLearningDataLoader:
         return train_tasks, test_tasks
 
     def __len__(self) -> int:
-        """Number of tasks."""
         return len(self.tasks)
 
     def __repr__(self) -> str:
-        """String representation of data loader."""
         return (
             f"MetaLearningDataLoader(\n"
             f"  data_dir='{self.data_dir}',\n"

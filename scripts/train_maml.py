@@ -30,9 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import (
     MetaLearningDataLoader,
-    NavierStokesTask,
     BrusselatorTask,
-    BrusselatorFourierTask,
+    NavierStokesTask,
 )
 from src.training.maml import MAMLTrainer, MAMLConfig
 
@@ -126,22 +125,19 @@ def main():
     if not val_dir.exists():
         raise FileNotFoundError(f"Meta-val directory not found: {val_dir}")
 
-    # Select task class based on PDE type and data format
+    # Select task class based on PDE type
     pde_type = config["experiment"].get("pde_type", "ns")
-    data_format = config["experiment"].get("data_format", "grid")
 
-    if pde_type == "br" and data_format == "fourier":
-        task_class = BrusselatorFourierTask
-        task_pattern = "*_fourier.npz"
-        print(f"PDE type: Brusselator (Fourier collocation)")
-    elif pde_type == "br":
+    if pde_type == "br":
         task_class = BrusselatorTask
-        task_pattern = "*.npz"
         print(f"PDE type: Brusselator")
-    else:
+    elif pde_type == "ns":
         task_class = NavierStokesTask
-        task_pattern = "*.npz"
         print(f"PDE type: Navier-Stokes")
+    else:
+        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br' or 'ns'.")
+
+    task_pattern = "*_fourier.npz"
 
     train_loader = MetaLearningDataLoader(
         train_dir, task_class=task_class, task_pattern=task_pattern, device=device
