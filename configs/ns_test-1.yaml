@@ -1,5 +1,5 @@
 simulation:
-  name: "ic_test-1"                  # Output: {base_dir}/{name}/
+  name: "ns_test-1"                  # Output: {base_dir}/{name}/
   nu: [0.01, 0.025]                            # Viscosity (or [min, max] to sample)
   domain_size: [6.283185, 6.283185]   # 2pi x 2pi
   resolution: [128, 128]                # ny x nx grid
