@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.pde.navier_stokes import solve_navier_stokes_with_params
 from src.data.derivatives import spatial_derivatives, temporal_derivative
 from src.utils.visualization import save_flow_evolution
-from src.data import initial_conditions
+from src.data import initial_conditions_ns
 
 # Import for catching divergence errors
 try:
@@ -180,7 +180,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
     ic_type = ic_config["type"]
 
     if ic_type == "gaussian_hill":
-        return initial_conditions.gaussian_hill_ic(
+        return initial_conditions_ns.gaussian_hill_ic(
             center=tuple(ic_config["center"]),
             width=ic_config["width"],
             strength=ic_config["strength"],
@@ -198,14 +198,14 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
                     "strength": v["strength"],
                 }
             )
-        return initial_conditions.multi_vortex_ic(vortex_params, x, y)
+        return initial_conditions_ns.multi_vortex_ic(vortex_params, x, y)
 
     elif ic_type == "taylor_green":
         amplitude = ic_config.get("amplitude", 1.0)
-        return initial_conditions.taylor_green_vortex(x, y, amplitude)
+        return initial_conditions_ns.taylor_green_vortex(x, y, amplitude)
 
     elif ic_type == "shear_layer":
-        return initial_conditions.shear_layer_ic(
+        return initial_conditions_ns.shear_layer_ic(
             y_center=ic_config["y_center"],
             thickness=ic_config["thickness"],
             velocity_jump=ic_config["velocity_jump"],
@@ -215,7 +215,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "lamb_oseen":
-        return initial_conditions.lamb_oseen_vortex_ic(
+        return initial_conditions_ns.lamb_oseen_vortex_ic(
             center=tuple(ic_config["center"]),
             core_radius=ic_config["core_radius"],
             circulation=ic_config["circulation"],
@@ -224,7 +224,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "dipole":
-        return initial_conditions.dipole_vortex_ic(
+        return initial_conditions_ns.dipole_vortex_ic(
             center=tuple(ic_config["center"]),
             separation=ic_config["separation"],
             width=ic_config["width"],
@@ -234,7 +234,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "perturbed_flow":
-        return initial_conditions.perturbed_uniform_flow_ic(
+        return initial_conditions_ns.perturbed_uniform_flow_ic(
             u_mean=ic_config["u_mean"],
             v_mean=ic_config["v_mean"],
             perturbation_amplitude=ic_config["perturbation_amplitude"],
@@ -245,7 +245,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "random_soup":
-        return initial_conditions.random_vortex_soup_ic(
+        return initial_conditions_ns.random_vortex_soup_ic(
             n_vortices=ic_config["n_vortices"],
             strength_range=tuple(ic_config["strength_range"]),
             width_range=tuple(ic_config["width_range"]),
@@ -255,7 +255,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "von_karman":
-        return initial_conditions.von_karman_street_ic(
+        return initial_conditions_ns.von_karman_street_ic(
             n_vortices=ic_config["n_vortices"],
             spacing=ic_config["spacing"],
             offset=ic_config["offset"],
@@ -266,7 +266,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "gaussian_vortex":
-        return initial_conditions.gaussian_vortex_ic(
+        return initial_conditions_ns.gaussian_vortex_ic(
             n_gaussians=ic_config["n_gaussians"],
             amplitude_range=tuple(ic_config["amplitude_range"]),
             width_range=tuple(ic_config["width_range"]),
@@ -276,7 +276,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "gaussian_direct":
-        return initial_conditions.gaussian_direct_ic(
+        return initial_conditions_ns.gaussian_direct_ic(
             n_gaussians_u=ic_config["n_gaussians_u"],
             n_gaussians_v=ic_config["n_gaussians_v"],
             amplitude_range=tuple(ic_config["amplitude_range"]),
@@ -287,7 +287,7 @@ def create_ic_from_config(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tupl
         )
 
     elif ic_type == "gaussian_hybrid":
-        return initial_conditions.gaussian_hybrid_ic(
+        return initial_conditions_ns.gaussian_hybrid_ic(
             n_gaussians_vorticity=ic_config["n_gaussians_vorticity"],
             n_gaussians_u=ic_config["n_gaussians_u"],
             n_gaussians_v=ic_config["n_gaussians_v"],
