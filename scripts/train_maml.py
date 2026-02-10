@@ -31,6 +31,7 @@ from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import (
     MetaLearningDataLoader,
     BrusselatorTask,
+    FitzHughNagumoTask,
     NavierStokesTask,
 )
 from src.training.maml import MAMLTrainer, MAMLConfig
@@ -131,11 +132,14 @@ def main():
     if pde_type == "br":
         task_class = BrusselatorTask
         print(f"PDE type: Brusselator")
+    elif pde_type == "fhn":
+        task_class = FitzHughNagumoTask
+        print(f"PDE type: FitzHugh-Nagumo")
     elif pde_type == "ns":
         task_class = NavierStokesTask
         print(f"PDE type: Navier-Stokes")
     else:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br' or 'ns'.")
+        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', or 'ns'.")
 
     task_pattern = "*_fourier.npz"
 

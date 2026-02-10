@@ -1,0 +1,63 @@
+# FitzHugh-Nagumo Test Configuration v1
+# 30 tasks: 6 lb + 6 mb + 6 pf + 6 bw (OOD) + 6 rp (OOD)
+# Same parameter ranges as train/val, plus OOD IC types
+
+simulation:
+  name: "fhn_test-1"
+
+  D_u: 1.0
+  D_v: 0.1
+  eps: 0.2
+  a: 0.7
+  b: 0.0
+
+  domain_size: [20.0, 20.0]
+  resolution: [128, 128]
+
+  t_end: 50.0
+  dt: 0.01
+  save_interval: 0.5
+
+output:
+  base_dir: "data/datasets"
+
+initial_conditions:
+  # ========== localized_bump (lb) — 6 tasks ==========
+  - {name: "fhnt_lb_001", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 300001}
+  - {name: "fhnt_lb_002", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 300002}
+  - {name: "fhnt_lb_003", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 300003}
+  - {name: "fhnt_lb_004", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 300004}
+  - {name: "fhnt_lb_005", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 300005}
+  - {name: "fhnt_lb_006", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 300006}
+
+  # ========== multi_bump (mb) — 6 tasks ==========
+  - {name: "fhnt_mb_001", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 310001}
+  - {name: "fhnt_mb_002", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 310002}
+  - {name: "fhnt_mb_003", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 5, seed: 310003}
+  - {name: "fhnt_mb_004", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 310004}
+  - {name: "fhnt_mb_005", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 310005}
+  - {name: "fhnt_mb_006", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 5, seed: 310006}
+
+  # ========== perturbed_front (pf) — 6 tasks ==========
+  - {name: "fhnt_pf_001", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 320001}
+  - {name: "fhnt_pf_002", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 1.0, seed: 320002}
+  - {name: "fhnt_pf_003", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 0.5, seed: 320003}
+  - {name: "fhnt_pf_004", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 1.0, seed: 320004}
+  - {name: "fhnt_pf_005", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 320005}
+  - {name: "fhnt_pf_006", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 0.5, seed: 320006}
+
+  # ========== broken_wavefront (bw) — 6 tasks (OOD) ==========
+  - {name: "fhnt_bw_001", type: "broken_wavefront", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], seed: 330001}
+  - {name: "fhnt_bw_002", type: "broken_wavefront", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], seed: 330002}
+  - {name: "fhnt_bw_003", type: "broken_wavefront", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], seed: 330003}
+  - {name: "fhnt_bw_004", type: "broken_wavefront", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], seed: 330004}
+  - {name: "fhnt_bw_005", type: "broken_wavefront", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], seed: 330005}
+  - {name: "fhnt_bw_006", type: "broken_wavefront", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], seed: 330006}
+
+  # ========== random_perturbation (rp) — 6 tasks (OOD) ==========
+  - {name: "fhnt_rp_001", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], perturbation_amplitude: 0.1, seed: 340001}
+  - {name: "fhnt_rp_002", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], perturbation_amplitude: 0.1, seed: 340002}
+  - {name: "fhnt_rp_003", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], perturbation_amplitude: 0.1, seed: 340003}
+  - {name: "fhnt_rp_004", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], perturbation_amplitude: 0.1, seed: 340004}
+  - {name: "fhnt_rp_005", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], perturbation_amplitude: 0.1, seed: 340005}
+  - {name: "fhnt_rp_006", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], perturbation_amplitude: 0.1, seed: 340006}

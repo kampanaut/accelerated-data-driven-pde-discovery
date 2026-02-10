@@ -1,0 +1,78 @@
+# FitzHugh-Nagumo Training Configuration v1
+# 42 tasks: 14 lb + 14 mb + 14 pf
+# Excitable regime: eps=0.2, b=0
+# D_u, D_v, a sampled per-task from ranges
+
+simulation:
+  name: "fhn_train-1"
+
+  # Default parameters (overridden per-task via ranges)
+  D_u: 1.0
+  D_v: 0.1
+  eps: 0.2
+  a: 0.7
+  b: 0.0
+
+  # Domain — 20x20 captures spiral arm width (~2-5 units)
+  domain_size: [20.0, 20.0]
+  resolution: [128, 128]
+
+  # Time integration
+  t_end: 50.0
+  dt: 0.01
+  save_interval: 0.5
+
+output:
+  base_dir: "data/datasets"
+
+# ============================================================================
+# Initial Conditions: 14 lb + 14 mb + 14 pf = 42 tasks
+# ============================================================================
+initial_conditions:
+  # ========== localized_bump (lb) — 14 tasks ==========
+  - {name: "fhn_lb_001", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100001}
+  - {name: "fhn_lb_002", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100002}
+  - {name: "fhn_lb_003", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100003}
+  - {name: "fhn_lb_004", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100004}
+  - {name: "fhn_lb_005", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100005}
+  - {name: "fhn_lb_006", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100006}
+  - {name: "fhn_lb_007", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100007}
+  - {name: "fhn_lb_008", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100008}
+  - {name: "fhn_lb_009", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100009}
+  - {name: "fhn_lb_010", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100010}
+  - {name: "fhn_lb_011", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100011}
+  - {name: "fhn_lb_012", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100012}
+  - {name: "fhn_lb_013", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100013}
+  - {name: "fhn_lb_014", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 100014}
+
+  # ========== multi_bump (mb) — 14 tasks ==========
+  - {name: "fhn_mb_001", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 110001}
+  - {name: "fhn_mb_002", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 110002}
+  - {name: "fhn_mb_003", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 110003}
+  - {name: "fhn_mb_004", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 110004}
+  - {name: "fhn_mb_005", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 5, seed: 110005}
+  - {name: "fhn_mb_006", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 5, seed: 110006}
+  - {name: "fhn_mb_007", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 110007}
+  - {name: "fhn_mb_008", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 110008}
+  - {name: "fhn_mb_009", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 5, seed: 110009}
+  - {name: "fhn_mb_010", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 110010}
+  - {name: "fhn_mb_011", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 110011}
+  - {name: "fhn_mb_012", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 5, seed: 110012}
+  - {name: "fhn_mb_013", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 110013}
+  - {name: "fhn_mb_014", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 110014}
+
+  # ========== perturbed_front (pf) — 14 tasks ==========
+  - {name: "fhn_pf_001", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 120001}
+  - {name: "fhn_pf_002", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 120002}
+  - {name: "fhn_pf_003", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 120003}
+  - {name: "fhn_pf_004", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 120004}
+  - {name: "fhn_pf_005", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 120005}
+  - {name: "fhn_pf_006", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 120006}
+  - {name: "fhn_pf_007", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 120007}
+  - {name: "fhn_pf_008", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 1.0, seed: 120008}
+  - {name: "fhn_pf_009", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 1.0, seed: 120009}
+  - {name: "fhn_pf_010", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 1.0, seed: 120010}
+  - {name: "fhn_pf_011", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 0.5, seed: 120011}
+  - {name: "fhn_pf_012", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 0.5, seed: 120012}
+  - {name: "fhn_pf_013", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 1.0, seed: 120013}
+  - {name: "fhn_pf_014", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 1.0, seed: 120014}

@@ -244,7 +244,7 @@ def generate_per_task_figures(
         coeff_configs = [
             ("nu_u", "nu_v", "nu_true"),
         ]
-    else:  # 'br'
+    else: # covers 'br' and 'fhn'
         # Each coefficient has only one JVP estimate (no secondary),
         # so secondary = primary makes the averaging a no-op.
         coeff_configs = [
@@ -486,7 +486,7 @@ def generate_per_task_figures(
                     )
                     plt.close(fig)
 
-                else:  # Brusselator - separate histograms for D_u and D_v
+                else:  # Brusselator or FitzHugh-Nagumo - separate histograms for D_u and D_v
                     # D_u histogram
                     coeff_true_u = combo_data.get("maml_D_u_true")
                     maml_Du = combo_data.get("maml_D_u")
@@ -746,7 +746,7 @@ def generate_aggregated_figures(
         coeff_configs = [
             ("nu_u", "nu_v", "nu_true"),
         ]
-    else:  # 'br'
+    else:  # covers 'br' and 'fhn'
         coeff_configs = [
             ("D_u", "D_u", "D_u_true"),
             ("D_v", "D_v", "D_v_true"),
@@ -1124,7 +1124,7 @@ def generate_aggregated_figures(
                     )
                     plt.close(fig)
 
-            else:  # Brusselator
+            else:  # Brusselator and FitzHugh-Nagumo
                 # D_u histogram
                 maml_Du_all, baseline_Du_all = [], []
                 coeff_true_u = None
