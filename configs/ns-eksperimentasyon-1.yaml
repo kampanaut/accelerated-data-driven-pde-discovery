@@ -19,7 +19,7 @@ training:
   outer_lr: 0.00001
   inner_steps: 8
   meta_batch_size: 30       # Small batch for quick test
-  k_shot: 500              # Small K for speed
+  k_shot: 100 # Small K for speed
   query_size: 1000         # Small query for speed
   max_iterations: 1000       # Just 5 iterations for dry run
   patience: 60

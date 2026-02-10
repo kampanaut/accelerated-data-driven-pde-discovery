@@ -1,0 +1,77 @@
+# Lambda-Omega Training Configuration v1
+# 42 tasks: 14 ss + 14 tp + 14 mp
+# Oscillatory regime: a=1.0 fixed, D_u/D_v/c sampled per-task
+# Domain 50x50, 128x128, dt=0.01
+
+simulation:
+  name: "lo_train-1"
+
+  # Default parameters (overridden per-task via ranges)
+  D_u: 1.0
+  D_v: 1.0
+  a: 1.0
+  c: 2.0
+
+  # Domain — 50x50 captures spiral arm spacing at these diffusion values
+  domain_size: [50.0, 50.0]
+  resolution: [128, 128]
+
+  # Time integration
+  t_end: 50.0
+  dt: 0.01
+  save_interval: 0.5
+
+output:
+  base_dir: "data/datasets"
+
+# ============================================================================
+# Initial Conditions: 14 ss + 14 tp + 14 mp = 42 tasks
+# ============================================================================
+initial_conditions:
+  # ========== single_spiral (ss) — 14 tasks ==========
+  - {name: "lo_ss_001", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.5, r_core: 2.0, seed: 200001}
+  - {name: "lo_ss_002", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.5, r_core: 2.0, seed: 200002}
+  - {name: "lo_ss_003", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.3, r_core: 2.0, seed: 200003}
+  - {name: "lo_ss_004", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.3, r_core: 2.0, seed: 200004}
+  - {name: "lo_ss_005", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.7, r_core: 2.0, seed: 200005}
+  - {name: "lo_ss_006", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.7, r_core: 2.0, seed: 200006}
+  - {name: "lo_ss_007", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.5, r_core: 3.0, seed: 200007}
+  - {name: "lo_ss_008", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.5, r_core: 3.0, seed: 200008}
+  - {name: "lo_ss_009", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.4, r_core: 2.0, seed: 200009}
+  - {name: "lo_ss_010", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.4, r_core: 2.0, seed: 200010}
+  - {name: "lo_ss_011", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.6, r_core: 2.5, seed: 200011}
+  - {name: "lo_ss_012", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.6, r_core: 2.5, seed: 200012}
+  - {name: "lo_ss_013", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.5, r_core: 1.5, seed: 200013}
+  - {name: "lo_ss_014", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.5, r_core: 1.5, seed: 200014}
+
+  # ========== target_pattern (tp) — 14 tasks ==========
+  - {name: "lo_tp_001", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 210001}
+  - {name: "lo_tp_002", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 210002}
+  - {name: "lo_tp_003", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 210003}
+  - {name: "lo_tp_004", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 210004}
+  - {name: "lo_tp_005", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.5, seed: 210005}
+  - {name: "lo_tp_006", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.5, seed: 210006}
+  - {name: "lo_tp_007", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 210007}
+  - {name: "lo_tp_008", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 210008}
+  - {name: "lo_tp_009", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 210009}
+  - {name: "lo_tp_010", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.5, seed: 210010}
+  - {name: "lo_tp_011", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 210011}
+  - {name: "lo_tp_012", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 210012}
+  - {name: "lo_tp_013", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 210013}
+  - {name: "lo_tp_014", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.5, seed: 210014}
+
+  # ========== multi_pacemaker (mp) — 14 tasks ==========
+  - {name: "lo_mp_001", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 220001}
+  - {name: "lo_mp_002", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 220002}
+  - {name: "lo_mp_003", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 220003}
+  - {name: "lo_mp_004", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 220004}
+  - {name: "lo_mp_005", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 5, seed: 220005}
+  - {name: "lo_mp_006", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 5, seed: 220006}
+  - {name: "lo_mp_007", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 220007}
+  - {name: "lo_mp_008", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 220008}
+  - {name: "lo_mp_009", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 5, seed: 220009}
+  - {name: "lo_mp_010", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 220010}
+  - {name: "lo_mp_011", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 220011}
+  - {name: "lo_mp_012", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 5, seed: 220012}
+  - {name: "lo_mp_013", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 220013}
+  - {name: "lo_mp_014", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 220014}

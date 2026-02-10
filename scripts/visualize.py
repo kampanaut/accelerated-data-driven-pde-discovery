@@ -244,7 +244,7 @@ def generate_per_task_figures(
         coeff_configs = [
             ("nu_u", "nu_v", "nu_true"),
         ]
-    else: # covers 'br' and 'fhn'
+    else:  # covers 'br', 'fhn', and 'lo'
         # Each coefficient has only one JVP estimate (no secondary),
         # so secondary = primary makes the averaging a no-op.
         coeff_configs = [
@@ -746,7 +746,7 @@ def generate_aggregated_figures(
         coeff_configs = [
             ("nu_u", "nu_v", "nu_true"),
         ]
-    else:  # covers 'br' and 'fhn'
+    else:  # covers 'br', 'fhn', and 'lo'
         coeff_configs = [
             ("D_u", "D_u", "D_u_true"),
             ("D_v", "D_v", "D_v_true"),

@@ -2,7 +2,7 @@
 Training infrastructure for meta-learning on PDE discovery.
 """
 
-from .task_loader import PDETask, BrusselatorTask, FitzHughNagumoTask, NavierStokesTask, MetaLearningDataLoader
+from .task_loader import PDETask, BrusselatorTask, FitzHughNagumoTask, LambdaOmegaTask, NavierStokesTask, MetaLearningDataLoader
 from .maml import (
     MAMLConfig,
     MAMLTrainer,
@@ -14,6 +14,7 @@ __all__ = [
     "PDETask",
     "BrusselatorTask",
     "FitzHughNagumoTask",
+    "LambdaOmegaTask",
     "NavierStokesTask",
     "MetaLearningDataLoader",
     "MAMLConfig",

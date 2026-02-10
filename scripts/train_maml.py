@@ -32,6 +32,7 @@ from src.training.task_loader import (
     MetaLearningDataLoader,
     BrusselatorTask,
     FitzHughNagumoTask,
+    LambdaOmegaTask,
     NavierStokesTask,
 )
 from src.training.maml import MAMLTrainer, MAMLConfig
@@ -135,11 +136,14 @@ def main():
     elif pde_type == "fhn":
         task_class = FitzHughNagumoTask
         print(f"PDE type: FitzHugh-Nagumo")
+    elif pde_type == "lo":
+        task_class = LambdaOmegaTask
+        print(f"PDE type: Lambda-Omega")
     elif pde_type == "ns":
         task_class = NavierStokesTask
         print(f"PDE type: Navier-Stokes")
     else:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', or 'ns'.")
+        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', or 'ns'.")
 
     task_pattern = "*_fourier.npz"
 

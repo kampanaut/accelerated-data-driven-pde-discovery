@@ -37,6 +37,7 @@ from src.training.task_loader import (
     PDETask,
     BrusselatorTask,
     FitzHughNagumoTask,
+    LambdaOmegaTask,
     NavierStokesTask,
 )
 from src.evaluation.jacobian import analyze_jacobian_ns, analyze_jacobian_br
@@ -265,7 +266,7 @@ def evaluate_task(
                     baseline_jacobian = analyze_jacobian_ns(
                         baseline_model, holdout_features, coeffs["nu"], device=device
                     )
-                elif pde_type in ("br", "fhn"):
+                elif pde_type in ("br", "fhn", "lo"):
                     maml_jacobian = analyze_jacobian_br(
                         maml_model,
                         holdout_features,
@@ -281,7 +282,7 @@ def evaluate_task(
                         device=device,
                     )
                 else:
-                    raise ValueError(f"Unknown pde_type: {pde_type}. Use 'ns', 'br', or 'fhn'.")
+                    raise ValueError(f"Unknown pde_type: {pde_type}. Use 'ns', 'br', 'fhn', or 'lo'.")
 
                 # Store Jacobian distributions in curves
                 for key, val in maml_jacobian.to_npz_dict(f"{combo_key}/maml").items():
@@ -437,10 +438,12 @@ def main():
         task_class = BrusselatorTask
     elif pde_type == "fhn":
         task_class = FitzHughNagumoTask
+    elif pde_type == "lo":
+        task_class = LambdaOmegaTask
     elif pde_type == "ns":
         task_class = NavierStokesTask
     else:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', or 'ns'.")
+        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', or 'ns'.")
 
     task_pattern = "*_fourier.npz"
 

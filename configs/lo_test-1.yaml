@@ -1,0 +1,64 @@
+# Lambda-Omega Test Configuration v1
+# 30 tasks: 6 ss + 6 tp + 6 mp + 6 rp (OOD) + 6 mas/pw (OOD)
+# Same parameter ranges as train/val, plus OOD IC types
+
+simulation:
+  name: "lo_test-1"
+
+  D_u: 1.0
+  D_v: 1.0
+  a: 1.0
+  c: 2.0
+
+  domain_size: [50.0, 50.0]
+  resolution: [128, 128]
+
+  t_end: 50.0
+  dt: 0.01
+  save_interval: 0.5
+
+output:
+  base_dir: "data/datasets"
+
+initial_conditions:
+  # ========== single_spiral (ss) — 6 tasks ==========
+  - {name: "lot_ss_001", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.5, r_core: 2.0, seed: 240001}
+  - {name: "lot_ss_002", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.5, r_core: 2.0, seed: 240002}
+  - {name: "lot_ss_003", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.3, r_core: 2.0, seed: 240003}
+  - {name: "lot_ss_004", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.7, r_core: 2.0, seed: 240004}
+  - {name: "lot_ss_005", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.4, r_core: 2.5, seed: 240005}
+  - {name: "lot_ss_006", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.6, r_core: 2.5, seed: 240006}
+
+  # ========== target_pattern (tp) — 6 tasks ==========
+  - {name: "lot_tp_001", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 241001}
+  - {name: "lot_tp_002", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 241002}
+  - {name: "lot_tp_003", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.5, seed: 241003}
+  - {name: "lot_tp_004", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 241004}
+  - {name: "lot_tp_005", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 241005}
+  - {name: "lot_tp_006", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.5, seed: 241006}
+
+  # ========== multi_pacemaker (mp) — 6 tasks ==========
+  - {name: "lot_mp_001", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 242001}
+  - {name: "lot_mp_002", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 242002}
+  - {name: "lot_mp_003", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 5, seed: 242003}
+  - {name: "lot_mp_004", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 242004}
+  - {name: "lot_mp_005", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 242005}
+  - {name: "lot_mp_006", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 5, seed: 242006}
+
+  # ========== random_perturbation (rp) — 6 tasks (OOD) ==========
+  - {name: "lot_rp_001", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.1, seed: 243001}
+  - {name: "lot_rp_002", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.1, seed: 243002}
+  - {name: "lot_rp_003", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.1, seed: 243003}
+  - {name: "lot_rp_004", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.1, seed: 243004}
+  - {name: "lot_rp_005", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.1, seed: 243005}
+  - {name: "lot_rp_006", type: "random_perturbation", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.1, seed: 243006}
+
+  # ========== multi_arm_spiral (mas) — 3 tasks (OOD) ==========
+  - {name: "lot_mas_001", type: "multi_arm_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], m: 2, k: 0.5, r_core: 2.0, seed: 244001}
+  - {name: "lot_mas_002", type: "multi_arm_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], m: 3, k: 0.5, r_core: 2.0, seed: 244002}
+  - {name: "lot_mas_003", type: "multi_arm_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], m: 2, k: 0.3, r_core: 2.0, seed: 244003}
+
+  # ========== plane_wave (pw) — 3 tasks (OOD) ==========
+  - {name: "lot_pw_001", type: "plane_wave", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], q: 0.3, seed: 245001}
+  - {name: "lot_pw_002", type: "plane_wave", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], q: 0.5, seed: 245002}
+  - {name: "lot_pw_003", type: "plane_wave", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], q: 0.7, seed: 245003}

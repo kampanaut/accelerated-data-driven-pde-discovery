@@ -144,9 +144,9 @@ initial_conditions:
     amplitude: 1.6
     seed: 100
 
-  - name: "tg_amp1.8_s101_101"
+  - name: "tg_amp1.7_s101_101"
     type: "taylor_green"
-    amplitude: 1.8
+    amplitude: 1.7
     seed: 101
 
   # sl (shear_layer) - 4 tasks, seeds 102-105

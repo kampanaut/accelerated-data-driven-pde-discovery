@@ -390,6 +390,96 @@ class FitzHughNagumoTask(PDETask):
         return {"D_u": self.D_u, "D_v": self.D_v}
 
 
+class LambdaOmegaTask(PDETask):
+    """
+    Lambda-Omega PDE task (Fourier-native).
+
+    Stores u_hat/v_hat FFT coefficients. Targets computed from PDE RHS
+    (self-consistent with features, like FHN/Brusselator).
+
+    Diffusion coefficients: D_u, D_v
+    Kinetic parameters: a, c
+    """
+
+    def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
+        self.n_snapshots = data["u_hat"].shape[0]
+        self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.device)
+
+    def _extract_pde_params(self) -> None:
+        D_u = self.simulation_params.get("D_u")
+        D_v = self.simulation_params.get("D_v")
+        a = self.simulation_params.get("a")
+        c = self.simulation_params.get("c")
+
+        if D_u is None:
+            D_u = self.ic_config.get("D_u_used")
+        if D_v is None:
+            D_v = self.ic_config.get("D_v_used")
+        if a is None:
+            a = self.ic_config.get("a")
+        if c is None:
+            c = self.ic_config.get("c_used")
+
+        if D_u is None or D_v is None or a is None or c is None:
+            missing = [k for k, v in {"D_u": D_u, "D_v": D_v, "a": a, "c": c}.items() if v is None]
+            raise ValueError(f"Lambda-Omega coefficients missing: {missing}")
+
+        self.D_u = float(D_u)
+        self.D_v = float(D_v)
+        self.a = float(a)
+        self.c = float(c)
+
+    def _evaluate_snapshot(
+        self,
+        snap_idx: int,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        from src.data.fourier_eval import evaluate_lo_features
+
+        return evaluate_lo_features(
+            self.u_hat[snap_idx],
+            self.v_hat[snap_idx],
+            self.kx,
+            self.ky,
+            E_x,
+            E_y,
+            self.D_u,
+            self.D_v,
+            self.a,
+            self.c,
+        )
+
+    def _inject_noise(
+        self,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        noise_level: float,
+        clean_targets: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        feat_std = features.std(dim=0, keepdim=True)
+        noise = torch.randn_like(features) * (noise_level * feat_std)
+        features = features + noise
+
+        if not clean_targets:
+            # Recompute targets from noisy features via Lambda-Omega RHS
+            u, v = features[:, 0], features[:, 1]
+            u_xx, u_yy = features[:, 4], features[:, 5]
+            v_xx, v_yy = features[:, 8], features[:, 9]
+            r2 = u ** 2 + v ** 2
+            u_t = self.D_u * (u_xx + u_yy) + self.a * u - (u + self.c * v) * r2
+            v_t = self.D_v * (v_xx + v_yy) + self.a * v + (self.c * u - v) * r2
+            targets = torch.stack([u_t, v_t], dim=1)
+
+        return features, targets
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        return {"D_u": self.D_u, "D_v": self.D_v}
+
+
 class NavierStokesTask(PDETask):
     """
     Navier-Stokes PDE task (Fourier-native).
