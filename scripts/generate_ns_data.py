@@ -357,6 +357,7 @@ def process_single_ic(args_tuple):
             return ("success", ic_name, None, attempt)
 
         except Diverged:
+            print(f"{ic_name} Diverged")
             if attempt < max_retries - 1:
                 continue
             return (
