@@ -1,0 +1,50 @@
+# Nonlinear Heat Equation Test Configuration v1
+# 30 tasks: 8 gb + 8 mb + 7 rp + 7 ss
+
+simulation:
+  name: "nl_heat_test-1"
+  K: 1.0
+  domain_size: [6.283185307179586, 6.283185307179586]
+  resolution: [128, 128]
+  t_end: 5.0
+  dt: 0.01
+  save_interval: 0.1
+
+output:
+  base_dir: "data/datasets"
+
+initial_conditions:
+  # NOTE: amplitude must stay < 1.0 for nl_heat
+  - {name: "nlh_gb_t01", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.25, amplitude: 0.8, seed: 580001}
+  - {name: "nlh_gb_t02", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.45, amplitude: 0.7, seed: 580002}
+  - {name: "nlh_gb_t03", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.6, amplitude: 0.75, seed: 580003}
+  - {name: "nlh_gb_t04", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.35, amplitude: 0.8, seed: 580004}
+  - {name: "nlh_gb_t05", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.7, amplitude: 0.65, seed: 580005}
+  - {name: "nlh_gb_t06", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.4, amplitude: 0.7, seed: 580006}
+  - {name: "nlh_gb_t07", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.5, amplitude: 0.5, seed: 580007}
+  - {name: "nlh_gb_t08", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.3, amplitude: 0.8, seed: 580008}
+
+  - {name: "nlh_mb_t01", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.2, 0.5], seed: 590001}
+  - {name: "nlh_mb_t02", type: "multi_bump", K: [0.1, 2.0], n_bumps: 5, sigma_range: [0.3, 0.7], seed: 590002}
+  - {name: "nlh_mb_t03", type: "multi_bump", K: [0.1, 2.0], n_bumps: 2, sigma_range: [0.2, 0.8], seed: 590003}
+  - {name: "nlh_mb_t04", type: "multi_bump", K: [0.1, 2.0], n_bumps: 4, sigma_range: [0.15, 0.5], seed: 590004}
+  - {name: "nlh_mb_t05", type: "multi_bump", K: [0.1, 2.0], n_bumps: 6, sigma_range: [0.2, 0.6], seed: 590005}
+  - {name: "nlh_mb_t06", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.3, 0.6], seed: 590006}
+  - {name: "nlh_mb_t07", type: "multi_bump", K: [0.1, 2.0], n_bumps: 8, sigma_range: [0.1, 0.4], seed: 590007}
+  - {name: "nlh_mb_t08", type: "multi_bump", K: [0.1, 2.0], n_bumps: 4, sigma_range: [0.25, 0.7], seed: 590008}
+
+  - {name: "nlh_rp_t01", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.25, n_modes: 8, seed: 600001}
+  - {name: "nlh_rp_t02", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.15, n_modes: 15, seed: 600002}
+  - {name: "nlh_rp_t03", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.3, n_modes: 6, seed: 600003}
+  - {name: "nlh_rp_t04", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 12, seed: 600004}
+  - {name: "nlh_rp_t05", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 10, seed: 600005}
+  - {name: "nlh_rp_t06", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.12, n_modes: 18, seed: 600006}
+  - {name: "nlh_rp_t07", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.25, n_modes: 7, seed: 600007}
+
+  - {name: "nlh_ss_t01", type: "sine_superposition", K: [0.1, 2.0], modes: 2, seed: 610001}
+  - {name: "nlh_ss_t02", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 610002}
+  - {name: "nlh_ss_t03", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 610003}
+  - {name: "nlh_ss_t04", type: "sine_superposition", K: [0.1, 2.0], modes: 5, seed: 610004}
+  - {name: "nlh_ss_t05", type: "sine_superposition", K: [0.1, 2.0], modes: 6, seed: 610005}
+  - {name: "nlh_ss_t06", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 610006}
+  - {name: "nlh_ss_t07", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 610007}

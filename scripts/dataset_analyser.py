@@ -2,11 +2,11 @@
 SVD and correlation analysis of PDE input features.
 
 Usage:
-    uv run scripts/svd_correlation_analysis.py <directory> [--n_points 500] [--seed 42]
+    uv run scripts/dataset_analyser.py <directory> [--n_points 500] [--k_snapshots 5] [--seed 42]
 
 Loads all *_fourier.npz files from the given directory, evaluates the 10
 input features [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy] at
-random spatial points, then runs SVD and correlation analysis.
+random spatial points across multiple timesteps, then runs SVD and correlation analysis.
 """
 
 import argparse
@@ -82,14 +82,22 @@ def build_phase_matrices(n_points, nx, ny, Lx, Ly, seed, device="cuda"):
     return kx, ky, E_x, E_y
 
 
-def collect_features(directory: Path, n_points: int, seed: int) -> torch.Tensor:
-    """Load all fourier .npz files and collect features into one big matrix."""
+def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int = 1) -> torch.Tensor:
+    """Load all fourier .npz files and collect features into one big matrix.
+
+    Args:
+        directory: Path containing *_fourier.npz files
+        n_points: Random spatial points per snapshot
+        seed: Random seed for spatial point sampling
+        k_snapshots: Number of evenly-spaced timesteps to sample per task
+    """
     files = sorted(directory.glob("*_fourier.npz"))
     if not files:
         print(f"No *_fourier.npz files found in {directory}")
         sys.exit(1)
 
     print(f"Found {len(files)} fourier files in {directory}")
+    print(f"Sampling {k_snapshots} timestep(s) per task, {n_points} spatial points each")
 
     all_features = []
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -110,16 +118,17 @@ def collect_features(directory: Path, n_points: int, seed: int) -> torch.Tensor:
         else:
             nx = ny = int(resolution)
 
-        n_snapshots = loaded["field1_hat"].shape[0]
-        mid = n_snapshots // 2
-
-        f1 = torch.tensor(loaded["field1_hat"][mid], device=device)
-        f2 = torch.tensor(loaded["field2_hat"][mid], device=device)
+        n_total = loaded["field1_hat"].shape[0]
+        indices = np.linspace(0, n_total - 1, k_snapshots, dtype=int)
 
         kx, ky, E_x, E_y = build_phase_matrices(n_points, nx, ny, Lx, Ly, seed, device)
 
-        feats = evaluate_features(f1, f2, kx, ky, E_x, E_y)
-        all_features.append(feats.cpu())
+        for idx in indices:
+            f1 = torch.tensor(loaded["field1_hat"][idx], device=device)
+            f2 = torch.tensor(loaded["field2_hat"][idx], device=device)
+
+            feats = evaluate_features(f1, f2, kx, ky, E_x, E_y)
+            all_features.append(feats.cpu())
 
     return torch.cat(all_features, dim=0)
 
@@ -212,6 +221,7 @@ def main():
     parser = argparse.ArgumentParser(description="SVD/correlation analysis of PDE features")
     parser.add_argument("directory", type=Path, help="Directory containing *_fourier.npz files")
     parser.add_argument("--n_points", type=int, default=500, help="Random spatial points per snapshot")
+    parser.add_argument("--k_snapshots", type=int, default=5, help="Timesteps to sample per task (default: 5)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir", type=Path, default=None, help="Where to save figures")
     args = parser.parse_args()
@@ -219,7 +229,7 @@ def main():
     if args.output_dir is None:
         args.output_dir = args.directory
 
-    features = collect_features(args.directory, args.n_points, args.seed)
+    features = collect_features(args.directory, args.n_points, args.seed, args.k_snapshots)
     print(f"\nFeature matrix shape: {features.shape}  (samples x features)")
 
     S, Vt = run_svd_analysis(features)

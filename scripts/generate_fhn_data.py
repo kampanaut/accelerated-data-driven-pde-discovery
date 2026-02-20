@@ -29,6 +29,11 @@ else:
 import numpy as np
 import argparse
 import yaml
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -74,6 +79,113 @@ def generate_fourier_data(
         "v_hat": v_hat,
         "times": times,
     }
+
+
+def save_fhn_evolution(
+    field_history: list,
+    times: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    output_path: str,
+    n_snapshots: int = 8,
+) -> None:
+    """
+    Save a multi-panel figure showing FitzHugh-Nagumo evolution over time.
+
+    Creates a 5×n_snapshots grid:
+    - Row 1: u field (activator, 2D heatmap)
+    - Row 2: v field (recovery, 2D heatmap)
+    - Row 3: phase θ = atan2(v, u) (cyclic colormap)
+    - Row 4: amplitude r = √(u² + v²)
+    - Row 5: u field (3D surface)
+    """
+    indices = np.linspace(0, len(field_history) - 1, n_snapshots, dtype=int)
+
+    X, Y = np.meshgrid(x, y)
+    Lx, Ly = float(x[-1]), float(y[-1])
+
+    u_sel = [field_history[i][0] for i in indices]
+    v_sel = [field_history[i][1] for i in indices]
+    phase_sel = [np.arctan2(v, u) for u, v in zip(u_sel, v_sel)]
+    amp_sel = [np.sqrt(u**2 + v**2) for u, v in zip(u_sel, v_sel)]
+
+    u_min, u_max = min(a.min() for a in u_sel), max(a.max() for a in u_sel)
+    v_min, v_max = min(a.min() for a in v_sel), max(a.max() for a in v_sel)
+    amp_min, amp_max = min(a.min() for a in amp_sel), max(a.max() for a in amp_sel)
+
+    fig = plt.figure(figsize=(4 * n_snapshots, 22))
+
+    for col, idx in enumerate(indices):
+        t = times[idx]
+
+        # Row 1: u field
+        ax = plt.subplot(5, n_snapshots, col + 1)
+        im = ax.imshow(
+            u_sel[col], cmap="RdBu_r", vmin=u_min, vmax=u_max,
+            origin="lower", extent=(0, Lx, 0, Ly),
+        )
+        ax.set_title(f"t={t:.1f}", fontsize=10)
+        if col == 0:
+            ax.set_ylabel("u", fontsize=12)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        # Row 2: v field
+        ax = plt.subplot(5, n_snapshots, n_snapshots + col + 1)
+        im = ax.imshow(
+            v_sel[col], cmap="RdBu_r", vmin=v_min, vmax=v_max,
+            origin="lower", extent=(0, Lx, 0, Ly),
+        )
+        if col == 0:
+            ax.set_ylabel("v", fontsize=12)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        # Row 3: phase θ = atan2(v, u)
+        ax = plt.subplot(5, n_snapshots, 2 * n_snapshots + col + 1)
+        im = ax.imshow(
+            phase_sel[col], cmap="twilight", vmin=-np.pi, vmax=np.pi,
+            origin="lower", extent=(0, Lx, 0, Ly),
+        )
+        if col == 0:
+            ax.set_ylabel("θ = atan2(v,u)", fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        # Row 4: amplitude r = √(u² + v²)
+        ax = plt.subplot(5, n_snapshots, 3 * n_snapshots + col + 1)
+        im = ax.imshow(
+            amp_sel[col], cmap="viridis", vmin=amp_min, vmax=amp_max,
+            origin="lower", extent=(0, Lx, 0, Ly),
+        )
+        if col == 0:
+            ax.set_ylabel("r = √(u²+v²)", fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        # Row 5: u 3D surface (downsampled)
+        ax3d = fig.add_subplot(
+            5, n_snapshots, 4 * n_snapshots + col + 1, projection="3d",
+        )
+        assert isinstance(ax3d, Axes3D)
+        step = max(1, X.shape[0] // 32)
+        ax3d.plot_surface(
+            X[::step, ::step], Y[::step, ::step], u_sel[col][::step, ::step],
+            cmap="RdBu_r", linewidth=0, antialiased=True, alpha=0.9,
+        )
+        ax3d.set_xlabel("x", fontsize=8)
+        ax3d.set_ylabel("y", fontsize=8)
+        ax3d.set_zlabel("u", fontsize=8)
+        ax3d.view_init(elev=30, azim=45)
+        ax3d.tick_params(labelsize=6)
+
+    plt.tight_layout(rect=(0, 0, 1, 0.97))
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close()
 
 
 def load_config(config_path: Path) -> dict:
@@ -182,6 +294,10 @@ def process_single_ic(args_tuple):
                 D_v_used=task_D_v,
                 a_used=task_a,
             )
+
+            # Save evolution visualization
+            vis_file = Path(data_dir) / f"{ic_name}_evolution.png"
+            save_fhn_evolution(field_history, times, x, y, str(vis_file))
 
             return ("success", ic_name, None, attempt)
 

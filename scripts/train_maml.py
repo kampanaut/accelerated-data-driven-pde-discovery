@@ -34,6 +34,8 @@ from src.training.task_loader import (
     FitzHughNagumoTask,
     LambdaOmegaTask,
     NavierStokesTask,
+    HeatEquationTask,
+    NLHeatEquationTask,
 )
 from src.training.maml import MAMLTrainer, MAMLConfig
 
@@ -142,8 +144,14 @@ def main():
     elif pde_type == "ns":
         task_class = NavierStokesTask
         print(f"PDE type: Navier-Stokes")
+    elif pde_type == "heat":
+        task_class = HeatEquationTask
+        print(f"PDE type: Heat Equation")
+    elif pde_type == "nl_heat":
+        task_class = NLHeatEquationTask
+        print(f"PDE type: Nonlinear Heat Equation")
     else:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', or 'ns'.")
+        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', 'ns', 'heat', or 'nl_heat'.")
 
     task_pattern = "*_fourier.npz"
 
@@ -170,8 +178,11 @@ def main():
     hidden_dims = train_cfg.get("hidden_dims", [100, 100])
     activation = train_cfg.get("activation", "tanh")
 
+    input_dim = train_cfg.get("input_dim", 10)
+    output_dim = train_cfg.get("output_dim", 2)
+
     model = PDEOperatorNetwork(
-        input_dim=10, output_dim=2, hidden_dims=hidden_dims, activation=activation
+        input_dim=input_dim, output_dim=output_dim, hidden_dims=hidden_dims, activation=activation
     )
     print(model)
     print()
@@ -192,8 +203,8 @@ def main():
                 "config": {
                     "hidden_dims": hidden_dims,
                     "activation": activation,
-                    "input_dim": 10,
-                    "output_dim": 2,
+                    "input_dim": input_dim,
+                    "output_dim": output_dim,
                 },
                 "timestamp": datetime.now().isoformat(),
             },

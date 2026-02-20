@@ -34,6 +34,8 @@ class PDETask(ABC):
     ny: int
     nx: int
     n_snapshots: int
+    n_features: int = 10  # Override in subclass for scalar PDEs (e.g., heat: 5)
+    n_targets: int = 2    # Override in subclass for scalar PDEs (e.g., heat: 1)
 
 
     def __init__(self, npz_path: Path, device: str = "cuda"):
@@ -171,9 +173,9 @@ class PDETask(ABC):
 
         # Group points by snapshot for efficient evaluation
         all_features = torch.empty(
-            (n_total, 10), dtype=torch.float32, device=self.device
+            (n_total, self.n_features), dtype=torch.float32, device=self.device
         )
-        all_targets = torch.empty((n_total, 2), dtype=torch.float32, device=self.device)
+        all_targets = torch.empty((n_total, self.n_targets), dtype=torch.float32, device=self.device)
 
         unique_snaps = torch.unique(snap_idx)
         for si in unique_snaps:
@@ -248,9 +250,9 @@ class BrusselatorTask(PDETask):
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from src.data.fourier_eval import evaluate_all_features
+        from src.data.fourier_eval import evaluate_br_features
 
-        return evaluate_all_features(
+        return evaluate_br_features(
             self.A_hat[snap_idx],
             self.B_hat[snap_idx],
             self.kx,
@@ -548,6 +550,139 @@ class NavierStokesTask(PDETask):
     @property
     def diffusion_coeffs(self) -> dict:
         return {"nu": self.nu}
+
+
+class HeatEquationTask(PDETask):
+    """
+    Heat equation task (Fourier-native, scalar field).
+
+    u_t = D * nabla^2(u)
+
+    Stores u_hat FFT coefficients only. 5 features, 1 target.
+    Diffusion coefficient: D
+    """
+
+    n_features: int = 5
+    n_targets: int = 1
+
+    def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
+        self.n_snapshots = data["u_hat"].shape[0]
+        self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
+
+    def _extract_pde_params(self) -> None:
+        D = self.simulation_params.get("D")
+        if D is None:
+            D = self.ic_config.get("D_used")
+        if D is None:
+            raise ValueError("Heat equation coefficient D missing from simulation_params and ic_config")
+        self.D = float(D)
+
+    def _evaluate_snapshot(
+        self,
+        snap_idx: int,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        from src.data.fourier_eval import evaluate_heat_features
+
+        return evaluate_heat_features(
+            self.u_hat[snap_idx],
+            self.kx,
+            self.ky,
+            E_x,
+            E_y,
+            self.D,
+        )
+
+    def _inject_noise(
+        self,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        noise_level: float,
+        clean_targets: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        feat_std = features.std(dim=0, keepdim=True)
+        noise = torch.randn_like(features) * (noise_level * feat_std)
+        features = features + noise
+
+        if not clean_targets:
+            u_xx, u_yy = features[:, 3], features[:, 4]
+            u_t = self.D * (u_xx + u_yy)
+            targets = u_t.unsqueeze(1)
+
+        return features, targets
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        return {"D": self.D}
+
+
+class NLHeatEquationTask(PDETask):
+    """
+    Nonlinear heat equation task (Fourier-native, scalar field).
+
+    u_t = K * (1 - u) * nabla^2(u)
+
+    Stores u_hat FFT coefficients only. 5 features, 1 target.
+    Diffusion coefficient: K
+    """
+
+    n_features: int = 5
+    n_targets: int = 1
+
+    def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
+        self.n_snapshots = data["u_hat"].shape[0]
+        self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
+
+    def _extract_pde_params(self) -> None:
+        K = self.simulation_params.get("K")
+        if K is None:
+            K = self.ic_config.get("K_used")
+        if K is None:
+            raise ValueError("Nonlinear heat coefficient K missing from simulation_params and ic_config")
+        self.K = float(K)
+
+    def _evaluate_snapshot(
+        self,
+        snap_idx: int,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        from src.data.fourier_eval import evaluate_nl_heat_features
+
+        return evaluate_nl_heat_features(
+            self.u_hat[snap_idx],
+            self.kx,
+            self.ky,
+            E_x,
+            E_y,
+            self.K,
+        )
+
+    def _inject_noise(
+        self,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        noise_level: float,
+        clean_targets: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        feat_std = features.std(dim=0, keepdim=True)
+        noise = torch.randn_like(features) * (noise_level * feat_std)
+        features = features + noise
+
+        if not clean_targets:
+            u = features[:, 0]
+            u_xx, u_yy = features[:, 3], features[:, 4]
+            u_t = self.K * (1 - u) * (u_xx + u_yy)
+            targets = u_t.unsqueeze(1)
+
+        return features, targets
+
+    @property
+    def diffusion_coeffs(self) -> dict:
+        return {"K": self.K}
 
 
 class MetaLearningDataLoader:

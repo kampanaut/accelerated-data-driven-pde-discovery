@@ -175,8 +175,49 @@ class JacobianResultsBR:
         }
 
 
-# Union type for either result type
-JacobianResultsType = JacobianResultsNS | JacobianResultsBR
+@dataclass
+class JacobianResultsHeat:
+    """
+    Results from Jacobian analysis for heat equation using JVP.
+
+    Heat equation: u_t = D * (u_xx + u_yy)
+
+    Features: [u, u_x, u_y, u_xx, u_yy] (5 inputs, 1 output)
+    D = ∂u_t/∂(u_xx + u_yy) = (∂u_t/∂u_xx + ∂u_t/∂u_yy) / 2
+    """
+
+    D: np.ndarray  # shape: (n_samples,) — D estimate per point
+    D_true: float
+
+    @property
+    def D_recovered(self) -> float:
+        return float(np.mean(self.D))
+
+    @property
+    def error_pct(self) -> float:
+        if self.D_true == 0:
+            return float("inf")
+        return abs(self.D_recovered - self.D_true) / self.D_true * 100
+
+    def to_dict(self) -> Dict:
+        return {
+            "D_true": self.D_true,
+            "D_recovered": self.D_recovered,
+            "error_pct": self.error_pct,
+            "D_mean": float(np.mean(self.D)),
+            "D_std": float(np.std(self.D)),
+        }
+
+    def to_npz_dict(self, prefix: str = "") -> Dict[str, np.ndarray]:
+        p = f"{prefix}/" if prefix else ""
+        return {
+            f"{p}D": self.D,
+            f"{p}D_true": np.array([self.D_true]),
+        }
+
+
+# Union type for all result types
+JacobianResultsType = JacobianResultsNS | JacobianResultsBR | JacobianResultsHeat
 
 
 def compute_laplacian_jacobian_jvp_ns(
@@ -360,4 +401,85 @@ def analyze_jacobian_br(
         D_v=results["D_v"],
         D_u_true=D_u_true,
         D_v_true=D_v_true,
+    )
+
+
+# =========================================================================
+# Heat equation Jacobian (scalar PDE, 5 inputs, 1 output)
+# =========================================================================
+
+# Heat equation feature indices: [u, u_x, u_y, u_xx, u_yy]
+HEAT_IDX_U_XX = 3
+HEAT_IDX_U_YY = 4
+
+
+def compute_laplacian_jacobian_jvp_heat(
+    model: torch.nn.Module, X: torch.Tensor, device: str = "cpu"
+) -> dict:
+    """
+    Compute diffusion coefficient D for heat equation using JVP.
+
+    Heat equation: u_t = D * (u_xx + u_yy)
+    Features: [u, u_x, u_y, u_xx, u_yy] (5 inputs, 1 output)
+
+    D = ∂u_t/∂(u_xx + u_yy) = (∂u_t/∂u_xx + ∂u_t/∂u_yy) / 2
+
+    Args:
+        model: The neural network (input_dim=5, output_dim=1)
+        X: Input tensor of shape (n_samples, 5)
+        device: Device to use
+
+    Returns:
+        dict with 'D' array (n_samples,)
+    """
+    model.eval()
+    model = model.to(device)
+    X = X.to(device)
+
+    # Tangent vector: perturb u_xx (idx 3) and u_yy (idx 4) together
+    tangent = torch.zeros_like(X)
+    tangent[:, HEAT_IDX_U_XX] = 1.0
+    tangent[:, HEAT_IDX_U_YY] = 1.0
+
+    def forward(x):
+        return model(x)
+
+    _, jvp_result = jvp(forward, (X,), (tangent,))
+
+    # Output is (n_samples, 1), squeeze to (n_samples,)
+    # Divide by 2 because we perturbed both u_xx and u_yy by 1
+    D = (jvp_result[:, 0] / 2).detach().cpu().numpy()  # type: ignore[reportCallIssue]
+
+    return {"D": D}
+
+
+def analyze_jacobian_heat(
+    model: torch.nn.Module,
+    features: torch.Tensor,
+    D_true: float,
+    device: str = "cpu",
+    max_samples: Optional[int] = None,
+) -> JacobianResultsHeat:
+    """
+    Analyze Jacobian for heat equation to extract diffusion coefficient.
+
+    Args:
+        model: Trained PDE operator network (input_dim=5, output_dim=1)
+        features: Input features tensor (n_samples, 5) on device
+        D_true: True diffusion coefficient
+        device: Device for computation
+        max_samples: Maximum samples to use (None = use all)
+
+    Returns:
+        JacobianResultsHeat with per-point coefficient estimates
+    """
+    if max_samples is not None and features.shape[0] > max_samples:
+        idx = torch.randperm(features.shape[0])[:max_samples]
+        features = features[idx]
+
+    results = compute_laplacian_jacobian_jvp_heat(model, features, device=device)
+
+    return JacobianResultsHeat(
+        D=results["D"],
+        D_true=D_true,
     )

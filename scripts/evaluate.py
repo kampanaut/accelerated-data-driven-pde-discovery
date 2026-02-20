@@ -39,8 +39,10 @@ from src.training.task_loader import (
     FitzHughNagumoTask,
     LambdaOmegaTask,
     NavierStokesTask,
+    HeatEquationTask,
+    NLHeatEquationTask,
 )
-from src.evaluation.jacobian import analyze_jacobian_ns, analyze_jacobian_br
+from src.evaluation.jacobian import analyze_jacobian_ns, analyze_jacobian_br, analyze_jacobian_heat
 
 
 def load_config(config_path: Path) -> dict:
@@ -281,23 +283,35 @@ def evaluate_task(
                         D_v_true=coeffs["D_v"],
                         device=device,
                     )
+                elif pde_type in ("heat", "nl_heat"):
+                    maml_jacobian = analyze_jacobian_heat(
+                        maml_model, holdout_features, coeffs["D"] if "D" in coeffs else coeffs["K"], device=device
+                    )
+                    baseline_jacobian = analyze_jacobian_heat(
+                        baseline_model, holdout_features, coeffs["D"] if "D" in coeffs else coeffs["K"], device=device
+                    )
                 else:
-                    raise ValueError(f"Unknown pde_type: {pde_type}. Use 'ns', 'br', 'fhn', or 'lo'.")
+                    raise ValueError(f"Unknown pde_type: {pde_type}.")
 
                 # Store Jacobian distributions in curves
-                for key, val in maml_jacobian.to_npz_dict(f"{combo_key}/maml").items():
-                    curves[key] = val
-                for key, val in baseline_jacobian.to_npz_dict(
-                    f"{combo_key}/baseline"
-                ).items():
-                    curves[key] = val
+                if maml_jacobian is not None:
+                    for key, val in maml_jacobian.to_npz_dict(f"{combo_key}/maml").items():
+                        curves[key] = val
+                if baseline_jacobian is not None:
+                    for key, val in baseline_jacobian.to_npz_dict(
+                        f"{combo_key}/baseline"
+                    ).items():
+                        curves[key] = val
 
                 # Store coefficient recovery summary in task_result
                 coeff_key = f"coefficient_recovery_{combo_key}"
-                task_result[coeff_key] = {
-                    "maml": maml_jacobian.to_dict(),
-                    "baseline": baseline_jacobian.to_dict(),
-                }
+                if maml_jacobian is not None and baseline_jacobian is not None:
+                    task_result[coeff_key] = {
+                        "maml": maml_jacobian.to_dict(),
+                        "baseline": baseline_jacobian.to_dict(),
+                    }
+                else:
+                    task_result[coeff_key] = {"maml": None, "baseline": None}
 
                 maml_train_final = maml_result["train_losses"][-1]
                 maml_holdout_final = maml_result["holdout_losses"][-1]
@@ -410,8 +424,8 @@ def main():
     # Get model architecture from training config
     train_cfg = config.get("training", {})
     model_config = {
-        "input_dim": 10,
-        "output_dim": 2,
+        "input_dim": train_cfg.get("input_dim", 10),
+        "output_dim": train_cfg.get("output_dim", 2),
         "hidden_dims": train_cfg.get("hidden_dims", [100, 100]),
         "activation": train_cfg.get("activation", "tanh"),
     }
@@ -442,8 +456,12 @@ def main():
         task_class = LambdaOmegaTask
     elif pde_type == "ns":
         task_class = NavierStokesTask
+    elif pde_type == "heat":
+        task_class = HeatEquationTask
+    elif pde_type == "nl_heat":
+        task_class = NLHeatEquationTask
     else:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', or 'ns'.")
+        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', 'ns', 'heat', or 'nl_heat'.")
 
     task_pattern = "*_fourier.npz"
 
@@ -503,6 +521,7 @@ def main():
                 "fixed_steps": eval_cfg.get("fixed_steps", [50, 100, 200]),
                 "clean_targets": clean_targets,
                 "holdout_size": holdout_size,
+                "pde_type": pde_type,
             },
             "tasks": {},
         }

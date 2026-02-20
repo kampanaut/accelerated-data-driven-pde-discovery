@@ -152,6 +152,17 @@ def load_results_with_curves(results_path: Path) -> dict:
                         "baseline_D_v_true": task_curves.get(
                             f"{combo_key}/baseline/D_v_true"
                         ),
+                        # Heat: D (single diffusion coefficient)
+                        "maml_D": task_curves.get(f"{combo_key}/maml/D"),
+                        "maml_D_true": task_curves.get(
+                            f"{combo_key}/maml/D_true"
+                        ),
+                        "baseline_D": task_curves.get(
+                            f"{combo_key}/baseline/D"
+                        ),
+                        "baseline_D_true": task_curves.get(
+                            f"{combo_key}/baseline/D_true"
+                        ),
                         # Per-point prediction errors for overlay plots
                         "maml_pred_errors": task_curves.get(
                             f"{combo_key}/maml/pred_errors"
@@ -243,6 +254,10 @@ def generate_per_task_figures(
     if pde_type == "ns":
         coeff_configs = [
             ("nu_u", "nu_v", "nu_true"),
+        ]
+    elif pde_type in ("heat", "nl_heat"):
+        coeff_configs = [
+            ("D", "D", "D_true"),
         ]
     else:  # covers 'br', 'fhn', and 'lo'
         # Each coefficient has only one JVP estimate (no secondary),
@@ -486,7 +501,47 @@ def generate_per_task_figures(
                     )
                     plt.close(fig)
 
-                else:  # Brusselator or FitzHugh-Nagumo - separate histograms for D_u and D_v
+                elif pde_type in ("heat", "nl_heat"):
+                    # Heat: single D coefficient histogram
+                    coeff_true_D = combo_data.get("maml_D_true")
+                    maml_D = combo_data.get("maml_D")
+                    baseline_D = combo_data.get("baseline_D")
+
+                    if (
+                        coeff_true_D is not None
+                        and maml_D is not None
+                        and baseline_D is not None
+                    ):
+                        if len(maml_D) > 0 and len(baseline_D) > 0:
+                            fig = plot_jacobian_histogram(
+                                maml_coeff_1=maml_D,
+                                maml_coeff_2=maml_D,
+                                baseline_coeff_1=baseline_D,
+                                baseline_coeff_2=baseline_D,
+                                coeff_true=float(coeff_true_D[0]),
+                                title=f"{task_name}: D Coefficient (K={k}, noise={noise:.0%})",
+                                coeff_name="D",
+                                coeff_1_label="u-eq",
+                                coeff_2_label="u-eq",
+                                save_path=task_dir
+                                / f"jacobian_histogram_D_k{k}_noise{noise:.2f}.png",
+                                dpi=dpi,
+                                maml_pred_errors_1=maml_pe[:, 0]
+                                if maml_pe is not None
+                                else None,
+                                maml_pred_errors_2=maml_pe[:, 0]
+                                if maml_pe is not None
+                                else None,
+                                baseline_pred_errors_1=baseline_pe[:, 0]
+                                if baseline_pe is not None
+                                else None,
+                                baseline_pred_errors_2=baseline_pe[:, 0]
+                                if baseline_pe is not None
+                                else None,
+                            )
+                            plt.close(fig)
+
+                else:  # Brusselator, FitzHugh-Nagumo, Lambda-Omega - separate histograms for D_u and D_v
                     # D_u histogram
                     coeff_true_u = combo_data.get("maml_D_u_true")
                     maml_Du = combo_data.get("maml_D_u")
@@ -745,6 +800,10 @@ def generate_aggregated_figures(
     if pde_type == "ns":
         coeff_configs = [
             ("nu_u", "nu_v", "nu_true"),
+        ]
+    elif pde_type in ("heat", "nl_heat"):
+        coeff_configs = [
+            ("D", "D", "D_true"),
         ]
     else:  # covers 'br', 'fhn', and 'lo'
         coeff_configs = [
@@ -1124,7 +1183,48 @@ def generate_aggregated_figures(
                     )
                     plt.close(fig)
 
-            else:  # Brusselator and FitzHugh-Nagumo
+            elif pde_type in ("heat", "nl_heat"):
+                # Heat: single D coefficient histogram
+                maml_D_all, baseline_D_all = [], []
+                coeff_true_D_val = None
+
+                for task_name in task_names:
+                    task_data = results["tasks"][task_name]["results"].get(
+                        combo_key, {}
+                    )
+                    if coeff_true_D_val is None:
+                        arr = task_data.get("maml_D_true")
+                        if arr is not None:
+                            coeff_true_D_val = float(arr[0])
+                    m = task_data.get("maml_D")
+                    b = task_data.get("baseline_D")
+                    if m is not None:
+                        maml_D_all.extend(m.flatten())
+                    if b is not None:
+                        baseline_D_all.extend(b.flatten())
+
+                if (
+                    len(maml_D_all) > 0
+                    and len(baseline_D_all) > 0
+                    and coeff_true_D_val is not None
+                ):
+                    fig = plot_jacobian_histogram(
+                        maml_coeff_1=np.array(maml_D_all),
+                        maml_coeff_2=np.array(maml_D_all),
+                        baseline_coeff_1=np.array(baseline_D_all),
+                        baseline_coeff_2=np.array(baseline_D_all),
+                        coeff_true=coeff_true_D_val,
+                        title=f"Aggregated D Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_name="D",
+                        coeff_1_label="u-eq",
+                        coeff_2_label="u-eq",
+                        save_path=agg_dir
+                        / f"jacobian_histogram_D_k{k}_noise{noise:.2f}.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
+            else:  # Brusselator, FitzHugh-Nagumo, Lambda-Omega
                 # D_u histogram
                 maml_Du_all, baseline_Du_all = [], []
                 coeff_true_u = None
