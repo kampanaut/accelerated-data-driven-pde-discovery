@@ -721,57 +721,118 @@ def _overlay_pred_errors(
     )
 
 
+# Shared color palette for estimate overlays. Both MAML and Baseline panels
+# use the same colors — panels already distinguish the method.
+# Each tuple is (fill_color, edge/dark_color).
+_ESTIMATE_COLORS = [
+    ("blue", "darkblue"),
+    ("cyan", "darkcyan"),
+    ("mediumpurple", "rebeccapurple"),
+    ("deepskyblue", "dodgerblue"),
+]
+
+
+def _draw_histogram_panel(
+    ax: Any,
+    estimates: list[NDArray[np.floating[Any]]],
+    estimate_labels: list[str],
+    coeff_true: float,
+    panel_title: str,
+    ratio_mode: bool,
+    symbol: str,
+    pred_errors: Optional[list[Optional[NDArray[np.floating[Any]]]]] = None,
+) -> None:
+    """Draw one histogram panel (MAML or Baseline) with N overlaid estimates."""
+    # Shared bins across all estimates
+    all_vals = np.concatenate(estimates)
+    bins = np.linspace(np.min(all_vals), np.max(all_vals), 51)
+    bins_list: list[float] = bins.tolist()
+
+    # Overlaid histograms + per-estimate mean lines
+    for i, (est, label) in enumerate(zip(estimates, estimate_labels)):
+        fill, edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
+        mean, std = float(np.mean(est)), float(np.std(est))
+        ax.hist(
+            est, bins=bins_list, alpha=0.6, color=fill, edgecolor=edge,
+            label=f"{label}: μ={mean:.4f}, σ={std:.4f}",
+        )
+        ax.axvline(mean, color=fill, linestyle="-", linewidth=1.5, alpha=0.8)
+
+    # Truth line
+    truth_label = "Perfect recovery (1.0)" if ratio_mode else f"True {symbol} = {coeff_true:.4f}"
+    ax.axvline(coeff_true, color="red", linestyle="--", linewidth=2, label=truth_label)
+
+    # Combined mean (average of per-estimate means)
+    overall_mean = float(np.mean([np.mean(e) for e in estimates]))
+    ax.axvline(
+        overall_mean, color="black", linestyle="--", linewidth=2, alpha=0.9,
+        label=f"combined: μ={overall_mean:.4f}",
+    )
+
+    ax.set_xlabel("Recovered / True" if ratio_mode else f"{symbol} Jacobian entries")
+    ax.set_ylabel("Count")
+    ax.set_title(panel_title)
+
+    # Prediction error overlay
+    has_pe = pred_errors is not None and any(pe is not None for pe in pred_errors)
+    if has_pe:
+        assert pred_errors is not None
+        ax2 = ax.twinx()
+        for i, (est, pe, label) in enumerate(zip(estimates, pred_errors, estimate_labels)):
+            if pe is not None:
+                _, dark = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
+                _overlay_pred_errors(ax2, est, pe, bins, color=dark, label=f"|err| {label}")
+        ax2.set_ylabel("Mean |pred error|", fontsize=8)
+        ax2.tick_params(axis="y", labelsize=7)
+        # Merge legends from both axes
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc="upper right")
+    else:
+        ax.legend(fontsize=8)
+
+
 def plot_jacobian_histogram(
-    maml_coeff_1: NDArray[np.floating[Any]],
-    maml_coeff_2: NDArray[np.floating[Any]],
-    baseline_coeff_1: NDArray[np.floating[Any]],
-    baseline_coeff_2: NDArray[np.floating[Any]],
+    maml_estimates: list[NDArray[np.floating[Any]]],
+    baseline_estimates: list[NDArray[np.floating[Any]]],
+    estimate_labels: list[str],
     coeff_true: float,
     title: str,
-    coeff_name: str = "nu",
-    coeff_1_label: str = "u-eq",
-    coeff_2_label: str = "v-eq",
+    coeff_name: str = "",
     save_path: Optional[Path] = None,
     figsize: Tuple[int, int] = (14, 5),
     dpi: int = 150,
     ratio_mode: bool = False,
-    maml_pred_errors_1: Optional[NDArray[np.floating[Any]]] = None,
-    maml_pred_errors_2: Optional[NDArray[np.floating[Any]]] = None,
-    baseline_pred_errors_1: Optional[NDArray[np.floating[Any]]] = None,
-    baseline_pred_errors_2: Optional[NDArray[np.floating[Any]]] = None,
+    maml_pred_errors: Optional[list[Optional[NDArray[np.floating[Any]]]]] = None,
+    baseline_pred_errors: Optional[list[Optional[NDArray[np.floating[Any]]]]] = None,
 ) -> pltf.Figure:
     """
     Graph 7: Jacobian Distribution Histogram with prediction error overlay.
 
-    Side-by-side histograms showing the distribution of learned diffusion
-    coefficients compared to true value. Overlays estimates from u-equation
-    and v-equation to reveal if they learned different coefficients.
+    Side-by-side histograms (MAML left, Baseline right) showing the distribution
+    of learned coefficients compared to true value. Supports N overlaid estimate
+    distributions per panel (e.g. nu_u + nu_v for Navier-Stokes).
 
     When pred_errors are provided, a twinx axis shows mean |prediction error|
     per Jacobian bin — colored to match their corresponding histogram.
 
     Args:
-        maml_coeff_1: MAML coefficient from first equation (nu_u or D_u)
-        maml_coeff_2: MAML coefficient from second equation (nu_v or D_v)
-        baseline_coeff_1: Baseline coefficient from first equation
-        baseline_coeff_2: Baseline coefficient from second equation
-        coeff_true: True coefficient value
+        maml_estimates: List of N MAML coefficient arrays, one per estimate
+        baseline_estimates: List of N Baseline coefficient arrays (parallel)
+        estimate_labels: List of N labels for each estimate (e.g. ["nu_u", "nu_v"])
+        coeff_true: True coefficient value (shared by all estimates in group)
         title: Plot title
-        coeff_name: Coefficient name ('nu', 'D_u', or 'D_v') for axis labels
-        coeff_1_label: Label for first equation (default 'u-eq')
-        coeff_2_label: Label for second equation (default 'v-eq')
+        coeff_name: Physical coefficient name for axis labels (e.g. "nu", "D_u")
         save_path: Path to save figure
         figsize: Figure size
         dpi: Resolution
-        maml_pred_errors_1: Per-point |pred error| for eq1 (u_t), shape (n,)
-        maml_pred_errors_2: Per-point |pred error| for eq2 (v_t), shape (n,)
-        baseline_pred_errors_1: Per-point |pred error| for eq1, shape (n,)
-        baseline_pred_errors_2: Per-point |pred error| for eq2, shape (n,)
+        ratio_mode: If True, x-axis shows recovered/true ratio (aggregated mode)
+        maml_pred_errors: Optional list of N per-point |pred error| arrays
+        baseline_pred_errors: Optional list of N per-point |pred error| arrays
 
     Returns:
         matplotlib Figure object
     """
-    # Symbol map for display
     symbol = {"nu": "ν", "D_u": "D_u", "D_v": "D_v"}.get(coeff_name, coeff_name)
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
@@ -780,163 +841,16 @@ def plot_jacobian_histogram(
     else:
         fig.suptitle(f"{title}\nTrue {symbol} = {coeff_true:.6f}", fontsize=12)
 
-    # Compute stats for each
-    maml_1_mean, maml_1_std = np.mean(maml_coeff_1), np.std(maml_coeff_1)
-    maml_2_mean, maml_2_std = np.mean(maml_coeff_2), np.std(maml_coeff_2)
-    baseline_1_mean, baseline_1_std = (
-        np.mean(baseline_coeff_1),
-        np.std(baseline_coeff_1),
+    _draw_histogram_panel(
+        axes[0], maml_estimates, estimate_labels, coeff_true,
+        panel_title="MAML (θ*)", ratio_mode=ratio_mode, symbol=symbol,
+        pred_errors=maml_pred_errors,
     )
-    baseline_2_mean, baseline_2_std = (
-        np.mean(baseline_coeff_2),
-        np.std(baseline_coeff_2),
+    _draw_histogram_panel(
+        axes[1], baseline_estimates, estimate_labels, coeff_true,
+        panel_title="Baseline (θ₀)", ratio_mode=ratio_mode, symbol=symbol,
+        pred_errors=baseline_pred_errors,
     )
-
-    # Compute shared bin edges for fair comparison
-    all_maml = np.concatenate([maml_coeff_1, maml_coeff_2])
-    all_baseline = np.concatenate([baseline_coeff_1, baseline_coeff_2])
-    maml_bins = np.linspace(np.min(all_maml), np.max(all_maml), 51)
-    baseline_bins = np.linspace(np.min(all_baseline), np.max(all_baseline), 51)
-
-    # MAML histogram - overlay both equations
-    ax = axes[0]
-    ax.hist(
-        maml_coeff_1,
-        bins=maml_bins,
-        alpha=0.6,
-        color="blue",
-        edgecolor="darkblue",
-        label=f"{coeff_1_label}: μ={maml_1_mean:.4f}, σ={maml_1_std:.4f}",
-    )
-    ax.hist(
-        maml_coeff_2,
-        bins=maml_bins,
-        alpha=0.6,
-        color="cyan",
-        edgecolor="darkcyan",
-        label=f"{coeff_2_label}: μ={maml_2_mean:.4f}, σ={maml_2_std:.4f}",
-    )
-    truth_label = "Perfect recovery (1.0)" if ratio_mode else f"True {symbol} = {coeff_true:.4f}"
-    ax.axvline(
-        coeff_true,
-        color="red",
-        linestyle="--",
-        linewidth=2,
-        label=truth_label,
-    )
-    ax.axvline(maml_1_mean, color="blue", linestyle="-", linewidth=1.5, alpha=0.8)
-    ax.axvline(maml_2_mean, color="darkcyan", linestyle="-", linewidth=1.5, alpha=0.8)
-    maml_overall_mean = (maml_1_mean + maml_2_mean) / 2
-    ax.axvline(
-        maml_overall_mean,
-        color="black",
-        linestyle="--",
-        linewidth=2,
-        alpha=0.9,
-        label=f"combined: μ={maml_overall_mean:.4f}",
-    )
-    ax.set_xlabel("Recovered / True" if ratio_mode else f"{symbol} Jacobian entries")
-    ax.set_ylabel("Count")
-    ax.set_title("MAML (θ*)")
-
-    # Prediction error overlay on MAML panel
-    if maml_pred_errors_1 is not None:
-        ax2 = ax.twinx()
-        _overlay_pred_errors(
-            ax2,
-            maml_coeff_1,
-            maml_pred_errors_1,
-            maml_bins,
-            color="darkblue",
-            label=f"|err| {coeff_1_label}",
-        )
-        if maml_pred_errors_2 is not None:
-            _overlay_pred_errors(
-                ax2,
-                maml_coeff_2,
-                maml_pred_errors_2,
-                maml_bins,
-                color="darkcyan",
-                label=f"|err| {coeff_2_label}",
-            )
-        ax2.set_ylabel("Mean |pred error|", fontsize=8)
-        ax2.tick_params(axis="y", labelsize=7)
-        # Merge legends
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc="upper right")
-    else:
-        ax.legend(fontsize=8)
-
-    # Baseline histogram - overlay both equations
-    ax = axes[1]
-    ax.hist(
-        baseline_coeff_1,
-        bins=baseline_bins,
-        alpha=0.6,
-        color="orange",
-        edgecolor="darkorange",
-        label=f"{coeff_1_label}: μ={baseline_1_mean:.4f}, σ={baseline_1_std:.4f}",
-    )
-    ax.hist(
-        baseline_coeff_2,
-        bins=baseline_bins,
-        alpha=0.6,
-        color="yellow",
-        edgecolor="gold",
-        label=f"{coeff_2_label}: μ={baseline_2_mean:.4f}, σ={baseline_2_std:.4f}",
-    )
-    ax.axvline(
-        coeff_true,
-        color="red",
-        linestyle="--",
-        linewidth=2,
-        label=truth_label,
-    )
-    ax.axvline(
-        baseline_1_mean, color="darkorange", linestyle="-", linewidth=1.5, alpha=0.8
-    )
-    ax.axvline(baseline_2_mean, color="gold", linestyle="-", linewidth=1.5, alpha=0.8)
-    baseline_overall_mean = (baseline_1_mean + baseline_2_mean) / 2
-    ax.axvline(
-        baseline_overall_mean,
-        color="black",
-        linestyle="--",
-        linewidth=2,
-        alpha=0.9,
-        label=f"combined: μ={baseline_overall_mean:.4f}",
-    )
-    ax.set_xlabel("Recovered / True" if ratio_mode else f"{symbol} Jacobian entries")
-    ax.set_ylabel("Count")
-    ax.set_title("Baseline (θ₀)")
-
-    # Prediction error overlay on Baseline panel
-    if baseline_pred_errors_1 is not None:
-        ax2 = ax.twinx()
-        _overlay_pred_errors(
-            ax2,
-            baseline_coeff_1,
-            baseline_pred_errors_1,
-            baseline_bins,
-            color="darkorange",
-            label=f"|err| {coeff_1_label}",
-        )
-        if baseline_pred_errors_2 is not None:
-            _overlay_pred_errors(
-                ax2,
-                baseline_coeff_2,
-                baseline_pred_errors_2,
-                baseline_bins,
-                color="goldenrod",
-                label=f"|err| {coeff_2_label}",
-            )
-        ax2.set_ylabel("Mean |pred error|", fontsize=8)
-        ax2.tick_params(axis="y", labelsize=7)
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc="upper right")
-    else:
-        ax.legend(fontsize=8)
 
     plt.tight_layout()
 

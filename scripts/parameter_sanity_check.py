@@ -24,7 +24,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.training.task_loader import BrusselatorTask, FitzHughNagumoTask, LambdaOmegaTask, MetaLearningDataLoader, NavierStokesTask
+from src.training.task_loader import MetaLearningDataLoader, TASK_REGISTRY
 from src.networks.pde_operator_network import PDEOperatorNetwork
 
 
@@ -93,17 +93,9 @@ def compute_gradient_check(theta_0, theta_star, config, dataset_dir, pde_type):
 
     model.load_state_dict(theta_0)
 
-    if pde_type not in ["br", "fhn", "lo", "ns"]:
-        raise ValueError("pde_type is invalid")
-
-    task_classes = {
-            "br": BrusselatorTask, 
-            "ns": NavierStokesTask,
-            "fhn": FitzHughNagumoTask,
-            "lo": LambdaOmegaTask
-    }
-
-    pde_class = task_classes[pde_type]
+    pde_class = TASK_REGISTRY.get(pde_type)
+    if pde_class is None:
+        raise ValueError(f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}")
 
     dataset_loader = MetaLearningDataLoader(dataset_dir, pde_class)
 

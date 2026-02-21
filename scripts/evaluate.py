@@ -8,8 +8,8 @@ This script:
 3. For each (task, K, noise) combination:
    - Samples K points ONCE (fair comparison)
    - Fine-tunes from θ* (MAML) and θ₀ (baseline)
-   - Records full loss curves
-4. Saves results.json with all curves
+   - Records loss trajectories, coefficient estimates, prediction errors
+4. Saves results.json (metadata) and samples/*.npz (arrays)
 
 Usage:
     python scripts/evaluate.py --config configs/experiment.yaml
@@ -19,6 +19,7 @@ import sys
 import copy
 import json
 import argparse
+from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
@@ -32,17 +33,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
-from src.training.task_loader import (
-    MetaLearningDataLoader,
-    PDETask,
-    BrusselatorTask,
-    FitzHughNagumoTask,
-    LambdaOmegaTask,
-    NavierStokesTask,
-    HeatEquationTask,
-    NLHeatEquationTask,
-)
-from src.evaluation.jacobian import analyze_jacobian_ns, analyze_jacobian_br, analyze_jacobian_heat
+from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
+from src.evaluation.jacobian import analyze_jacobian
 
 
 def load_config(config_path: Path) -> dict:
@@ -156,7 +148,6 @@ def evaluate_task(
     seed: int,
     clean_targets: bool = False,
     holdout_size: int = 1000,
-    pde_type: str = "ns",
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -175,17 +166,20 @@ def evaluate_task(
         holdout_size: Number of samples for holdout evaluation (disjoint from support)
 
     Returns:
-        Dict with task metadata and curves dict for NPZ storage
+        Dict with task metadata and samples dict for NPZ storage
     """
+    specs = task.coefficient_specs
+
     task_result = {
         "task_name": task.task_name,
-        "coefficients": task.diffusion_coeffs,  # {'nu': X} for NS, {'D_u': X, 'D_v': Y} for BR
+        "coefficients": task.diffusion_coeffs,
+        "coefficient_specs": [asdict(s) for s in specs],
         "ic_type": task.ic_config.get("type", "unknown"),
         "n_samples": task.n_samples,
     }
 
-    # Curves stored separately for NPZ
-    curves = {}
+    # Per-combo arrays stored separately in NPZ
+    samples = {}
 
     for k_idx, k in enumerate(k_values):
         for noise_idx, noise in enumerate(noise_levels):
@@ -235,16 +229,16 @@ def evaluate_task(
                 )
 
                 # Store curves for NPZ
-                curves[f"{combo_key}/maml_train_losses"] = np.array(
+                samples[f"{combo_key}/maml_train_losses"] = np.array(
                     maml_result["train_losses"]
                 )
-                curves[f"{combo_key}/maml_holdout_losses"] = np.array(
+                samples[f"{combo_key}/maml_holdout_losses"] = np.array(
                     maml_result["holdout_losses"]
                 )
-                curves[f"{combo_key}/baseline_train_losses"] = np.array(
+                samples[f"{combo_key}/baseline_train_losses"] = np.array(
                     baseline_result["train_losses"]
                 )
-                curves[f"{combo_key}/baseline_holdout_losses"] = np.array(
+                samples[f"{combo_key}/baseline_holdout_losses"] = np.array(
                     baseline_result["holdout_losses"]
                 )
 
@@ -256,52 +250,22 @@ def evaluate_task(
                     baseline_pred_errors = (
                         (baseline_pred - holdout_targets).abs().cpu().numpy()
                     )
-                curves[f"{combo_key}/maml/pred_errors"] = maml_pred_errors
-                curves[f"{combo_key}/baseline/pred_errors"] = baseline_pred_errors
+                samples[f"{combo_key}/maml/pred_errors"] = maml_pred_errors
+                samples[f"{combo_key}/baseline/pred_errors"] = baseline_pred_errors
 
-                # Jacobian analysis for coefficient recovery (uses task.diffusion_coeffs property)
-                coeffs = task.diffusion_coeffs
-                if pde_type == "ns":
-                    maml_jacobian = analyze_jacobian_ns(
-                        maml_model, holdout_features, coeffs["nu"], device=device
-                    )
-                    baseline_jacobian = analyze_jacobian_ns(
-                        baseline_model, holdout_features, coeffs["nu"], device=device
-                    )
-                elif pde_type in ("br", "fhn", "lo"):
-                    maml_jacobian = analyze_jacobian_br(
-                        maml_model,
-                        holdout_features,
-                        D_u_true=coeffs["D_u"],
-                        D_v_true=coeffs["D_v"],
-                        device=device,
-                    )
-                    baseline_jacobian = analyze_jacobian_br(
-                        baseline_model,
-                        holdout_features,
-                        D_u_true=coeffs["D_u"],
-                        D_v_true=coeffs["D_v"],
-                        device=device,
-                    )
-                elif pde_type in ("heat", "nl_heat"):
-                    maml_jacobian = analyze_jacobian_heat(
-                        maml_model, holdout_features, coeffs["D"] if "D" in coeffs else coeffs["K"], device=device
-                    )
-                    baseline_jacobian = analyze_jacobian_heat(
-                        baseline_model, holdout_features, coeffs["D"] if "D" in coeffs else coeffs["K"], device=device
-                    )
-                else:
-                    raise ValueError(f"Unknown pde_type: {pde_type}.")
+                # Jacobian analysis for coefficient recovery
+                maml_jacobian = analyze_jacobian(maml_model, holdout_features, specs, device=device)
+                baseline_jacobian = analyze_jacobian(baseline_model, holdout_features, specs, device=device)
 
-                # Store Jacobian distributions in curves
+                # Store Jacobian distributions
                 if maml_jacobian is not None:
-                    for key, val in maml_jacobian.to_npz_dict(f"{combo_key}/maml").items():
-                        curves[key] = val
+                    for key, arr in maml_jacobian.to_npz_dict(f"{combo_key}/maml").items():
+                        samples[key] = arr
                 if baseline_jacobian is not None:
-                    for key, val in baseline_jacobian.to_npz_dict(
+                    for key, arr in baseline_jacobian.to_npz_dict(
                         f"{combo_key}/baseline"
                     ).items():
-                        curves[key] = val
+                        samples[key] = arr
 
                 # Store coefficient recovery summary in task_result
                 coeff_key = f"coefficient_recovery_{combo_key}"
@@ -325,31 +289,43 @@ def evaluate_task(
                     and baseline_jacobian is not None
                     and maml_jacobian.error_pct > baseline_jacobian.error_pct
                 )
-                flag = " !!!" if loss_worse else ""
+                flags = []
+                if loss_worse:
+                    flags.append("loss")
                 if coeff_worse:
-                    flag += " [coeff worse]"
+                    flags.append("coeff")
+
+                flag_str = ""
+                if len(flags) > 0:
+                    flag_str = f"!!! [{",".join(flags)}]"
+
                 print(
                     f"MAML(train={maml_train_final:.2e}, holdout={maml_holdout_final:.2e}) "
-                    f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag}"
+                    f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag_str}"
                 )
 
                 # Track if ANY combo has MAML worse for this task (for directory naming)
-                if "any_maml_worse" not in task_result:
-                    task_result["any_maml_worse"] = False
-                if loss_worse or coeff_worse:
-                    task_result["any_maml_worse"] = True
+                if loss_worse:
+                    task_result["loss_maml_worse"] = True
+                else:
+                    task_result["loss_maml_worse"] = False
+
+                if coeff_worse:
+                    task_result["coeff_maml_worse"] = True
+                else:
+                    task_result["coeff_maml_worse"] = False
 
             except FileNotFoundError as e:
                 # Noisy file doesn't exist for this task
                 print(f"SKIPPED ({e})")
-                # Store error info in metadata (no curves)
+                # Store error info in metadata (no samples)
                 task_result[f"error_{combo_key}"] = str(e)
 
             except Exception as e:
                 print(f"ERROR ({e})")
                 task_result[f"error_{combo_key}"] = str(e)
 
-    return task_result, curves
+    return task_result, samples
 
 
 def main():
@@ -456,20 +432,9 @@ def main():
     if not test_dir.exists():
         raise FileNotFoundError(f"Meta-test directory not found: {test_dir}")
 
-    if pde_type == "br":
-        task_class = BrusselatorTask
-    elif pde_type == "fhn":
-        task_class = FitzHughNagumoTask
-    elif pde_type == "lo":
-        task_class = LambdaOmegaTask
-    elif pde_type == "ns":
-        task_class = NavierStokesTask
-    elif pde_type == "heat":
-        task_class = HeatEquationTask
-    elif pde_type == "nl_heat":
-        task_class = NLHeatEquationTask
-    else:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', 'ns', 'heat', or 'nl_heat'.")
+    task_class = TASK_REGISTRY.get(pde_type)
+    if task_class is None:
+        raise ValueError(f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}")
 
     task_pattern = "*_fourier.npz"
 
@@ -534,10 +499,10 @@ def main():
             "tasks": {},
         }
 
-        # Create curves directory
+        # Create samples directory
         eval_dir = exp_dir / "evaluation" / mode_name
-        curves_dir = eval_dir / "curves"
-        curves_dir.mkdir(parents=True, exist_ok=True)
+        samples_dir = eval_dir / "samples"
+        samples_dir.mkdir(parents=True, exist_ok=True)
 
         # Track holdout losses by IC type for summary
         holdout_by_ic = {}  # ic_type -> list of (maml_final, baseline_final, task_name, combo_key)
@@ -545,7 +510,7 @@ def main():
         for task_idx, task in enumerate(test_loader.tasks):
             print(f"[{task_idx + 1}/{len(test_loader)}] Task: {task.task_name}")
 
-            task_result, task_curves = evaluate_task(
+            task_result, task_samples = evaluate_task(
                 task=task,
                 theta_star=theta_star,
                 theta_0=theta_0,
@@ -557,23 +522,22 @@ def main():
                 seed=seed + task_idx * 10000,
                 clean_targets=clean_targets,
                 holdout_size=holdout_size,
-                pde_type=pde_type,
             )
 
             # Save task metadata to results dict
             results["tasks"][task.task_name] = task_result
 
-            # Save curves to NPZ
-            if task_curves:
-                curves_path = curves_dir / f"{task.task_name}.npz"
-                np.savez_compressed(curves_path, **task_curves)
+            # Save samples to NPZ
+            if task_samples:
+                samples_path = samples_dir / f"{task.task_name}.npz"
+                np.savez_compressed(samples_path, **task_samples)
 
             # Collect holdout losses by IC type
             ic_type = task_result.get("ic_type", "unknown")
             if ic_type not in holdout_by_ic:
                 holdout_by_ic[ic_type] = []
 
-            for key in task_curves.keys():
+            for key in task_samples.keys():
                 if not key.endswith("/maml_holdout_losses"):
                     continue
                 combo = key.rsplit("/", 1)[0]  # e.g., "k_100_noise_0.01"
@@ -582,8 +546,8 @@ def main():
                 k_val = int(parts[1])
                 noise_val = float(parts[3])
 
-                maml_holdout = task_curves.get(f"{combo}/maml_holdout_losses")
-                baseline_holdout = task_curves.get(f"{combo}/baseline_holdout_losses")
+                maml_holdout = task_samples.get(f"{combo}/maml_holdout_losses")
+                baseline_holdout = task_samples.get(f"{combo}/baseline_holdout_losses")
                 if maml_holdout is not None and baseline_holdout is not None:
                     holdout_by_ic[ic_type].append(
                         {
@@ -603,7 +567,7 @@ def main():
             json.dump(results, f, indent=2)
 
         print(f"Saved metadata to: {results_path}")
-        print(f"Saved curves to: {curves_dir}")
+        print(f"Saved samples to: {samples_dir}")
         print()
 
         # Print holdout summary by IC type
@@ -649,7 +613,7 @@ def main():
     for mode_name, _ in target_modes:
         print(f"  {exp_dir / 'evaluation' / mode_name}/")
         print("    - results.json (metadata)")
-        print("    - curves/*.npz (loss curves)")
+        print("    - samples/*.npz (per-combo arrays)")
     print()
     print("Next steps:")
     print(f"  python scripts/visualize.py --config {args.config}")

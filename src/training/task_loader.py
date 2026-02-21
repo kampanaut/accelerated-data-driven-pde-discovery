@@ -10,12 +10,41 @@ features/targets at random collocation points on-the-fly on GPU. This gives:
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple, List, Optional, Type
 import numpy as np
 import torch
 
 from src.data.fourier_eval import build_wavenumbers
+
+
+@dataclass
+class CoefficientSpec:
+    """Specification for one coefficient to extract via JVP.
+
+    Attributes:
+        name: Human-readable name for this coefficient (e.g. "D_u", "nu_v").
+              Used as key in results dicts and npz files.
+        perturb_indices: Which input features to perturb together.
+                         E.g. [4, 5] for u_xx + u_yy in a 10-input PDE.
+        output_index: Which output component to read the response from.
+                      E.g. 0 for u_t, 1 for v_t.
+        true_value: Ground-truth coefficient for error computation.
+        coeff_name: The physical coefficient being recovered (e.g. "nu", "D_u").
+                    Specs sharing a coeff_name are overlaid in histograms.
+                    Defaults to name (each estimate is its own coefficient).
+    """
+
+    name: str
+    perturb_indices: list[int]
+    output_index: int
+    true_value: float
+    coeff_name: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.coeff_name:
+            self.coeff_name = self.name
 
 
 class PDETask(ABC):
@@ -133,6 +162,12 @@ class PDETask(ABC):
     @abstractmethod
     def diffusion_coeffs(self) -> dict:
         """Return diffusion coefficients as dict."""
+        pass
+
+    @property
+    @abstractmethod
+    def coefficient_specs(self) -> list[CoefficientSpec]:
+        """Return CoefficientSpec list for JVP-based coefficient extraction."""
         pass
 
     def get_support_query_split(
@@ -293,6 +328,13 @@ class BrusselatorTask(PDETask):
     def diffusion_coeffs(self) -> dict:
         return {"D_u": self.D_u, "D_v": self.D_v}
 
+    @property
+    def coefficient_specs(self) -> list[CoefficientSpec]:
+        return [
+            CoefficientSpec(name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u),
+            CoefficientSpec(name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v),
+        ]
+
 
 class FitzHughNagumoTask(PDETask):
     """
@@ -391,6 +433,13 @@ class FitzHughNagumoTask(PDETask):
     def diffusion_coeffs(self) -> dict:
         return {"D_u": self.D_u, "D_v": self.D_v}
 
+    @property
+    def coefficient_specs(self) -> list[CoefficientSpec]:
+        return [
+            CoefficientSpec(name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u),
+            CoefficientSpec(name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v),
+        ]
+
 
 class LambdaOmegaTask(PDETask):
     """
@@ -481,6 +530,13 @@ class LambdaOmegaTask(PDETask):
     def diffusion_coeffs(self) -> dict:
         return {"D_u": self.D_u, "D_v": self.D_v}
 
+    @property
+    def coefficient_specs(self) -> list[CoefficientSpec]:
+        return [
+            CoefficientSpec(name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u),
+            CoefficientSpec(name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v),
+        ]
+
 
 class NavierStokesTask(PDETask):
     """
@@ -551,6 +607,13 @@ class NavierStokesTask(PDETask):
     def diffusion_coeffs(self) -> dict:
         return {"nu": self.nu}
 
+    @property
+    def coefficient_specs(self) -> list[CoefficientSpec]:
+        return [
+            CoefficientSpec(name="nu_u", perturb_indices=[4, 5], output_index=0, true_value=self.nu, coeff_name="nu"),
+            CoefficientSpec(name="nu_v", perturb_indices=[8, 9], output_index=1, true_value=self.nu, coeff_name="nu"),
+        ]
+
 
 class HeatEquationTask(PDETask):
     """
@@ -616,6 +679,12 @@ class HeatEquationTask(PDETask):
     @property
     def diffusion_coeffs(self) -> dict:
         return {"D": self.D}
+
+    @property
+    def coefficient_specs(self) -> list[CoefficientSpec]:
+        return [
+            CoefficientSpec(name="D", perturb_indices=[3, 4], output_index=0, true_value=self.D),
+        ]
 
 
 class NLHeatEquationTask(PDETask):
@@ -683,6 +752,22 @@ class NLHeatEquationTask(PDETask):
     @property
     def diffusion_coeffs(self) -> dict:
         return {"K": self.K}
+
+    @property
+    def coefficient_specs(self) -> list[CoefficientSpec]:
+        return [
+            CoefficientSpec(name="K", perturb_indices=[3, 4], output_index=0, true_value=self.K),
+        ]
+
+
+TASK_REGISTRY: dict[str, type[PDETask]] = {
+    "br": BrusselatorTask,
+    "fhn": FitzHughNagumoTask,
+    "lo": LambdaOmegaTask,
+    "ns": NavierStokesTask,
+    "heat": HeatEquationTask,
+    "nl_heat": NLHeatEquationTask,
+}
 
 
 class MetaLearningDataLoader:

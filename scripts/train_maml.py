@@ -28,15 +28,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
-from src.training.task_loader import (
-    MetaLearningDataLoader,
-    BrusselatorTask,
-    FitzHughNagumoTask,
-    LambdaOmegaTask,
-    NavierStokesTask,
-    HeatEquationTask,
-    NLHeatEquationTask,
-)
+from src.training.task_loader import MetaLearningDataLoader, TASK_REGISTRY
 from src.training.maml import MAMLTrainer, MAMLConfig
 
 
@@ -131,27 +123,10 @@ def main():
 
     # Select task class based on PDE type
     pde_type = config["experiment"].get("pde_type", "ns")
-
-    if pde_type == "br":
-        task_class = BrusselatorTask
-        print(f"PDE type: Brusselator")
-    elif pde_type == "fhn":
-        task_class = FitzHughNagumoTask
-        print(f"PDE type: FitzHugh-Nagumo")
-    elif pde_type == "lo":
-        task_class = LambdaOmegaTask
-        print(f"PDE type: Lambda-Omega")
-    elif pde_type == "ns":
-        task_class = NavierStokesTask
-        print(f"PDE type: Navier-Stokes")
-    elif pde_type == "heat":
-        task_class = HeatEquationTask
-        print(f"PDE type: Heat Equation")
-    elif pde_type == "nl_heat":
-        task_class = NLHeatEquationTask
-        print(f"PDE type: Nonlinear Heat Equation")
-    else:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Use 'br', 'fhn', 'lo', 'ns', 'heat', or 'nl_heat'.")
+    task_class = TASK_REGISTRY.get(pde_type)
+    if task_class is None:
+        raise ValueError(f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}")
+    print(f"PDE type: {pde_type} ({task_class.__name__})")
 
     task_pattern = "*_fourier.npz"
 
