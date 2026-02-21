@@ -4,9 +4,12 @@ SVD and correlation analysis of PDE input features.
 Usage:
     uv run scripts/dataset_analyser.py <directory> [--n_points 500] [--k_snapshots 5] [--seed 42]
 
-Loads all *_fourier.npz files from the given directory, evaluates the 10
-input features [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy] at
-random spatial points across multiple timesteps, then runs SVD and correlation analysis.
+Loads all *_fourier.npz files from the given directory, evaluates input
+features at random spatial points across multiple timesteps, then runs
+SVD and correlation analysis.
+
+Two-field PDEs (BR, NS, FHN, LO): 10 features [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy]
+Single-field PDEs (heat, nl_heat):  5 features [u, u_x, u_y, u_xx, u_yy]
 """
 
 import argparse
@@ -19,38 +22,55 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data import fourier_eval
 from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
-FEATURE_NAMES = ["u", "v", "u_x", "u_y", "u_xx", "u_yy", "v_x", "v_y", "v_xx", "v_yy"]
+FEATURE_NAMES_2F = ["u", "v", "u_x", "u_y", "u_xx", "u_yy", "v_x", "v_y", "v_xx", "v_yy"]
+FEATURE_NAMES_1F = ["u", "u_x", "u_y", "u_xx", "u_yy"]
 
 
 def load_fourier_fields(npz_path: Path) -> dict:
-    """Load a fourier .npz and return the two coefficient fields + metadata."""
+    """Load a fourier .npz and return coefficient fields + metadata.
+
+    Returns dict with 'field1_hat', optional 'field2_hat', 'n_fields',
+    'sim_params', 'times'.
+    """
     data = np.load(npz_path, allow_pickle=True)
     keys = list(data.keys())
 
+    result: dict = {
+        "sim_params": data["simulation_params"].item(),
+        "times": data["times"],
+    }
+
     if "A_hat" in keys:
-        field1_hat = data["A_hat"]
-        field2_hat = data["B_hat"]
+        result["field1_hat"] = data["A_hat"]
+        result["field2_hat"] = data["B_hat"]
+        result["n_fields"] = 2
+    elif "u_hat" in keys and "v_hat" in keys:
+        result["field1_hat"] = data["u_hat"]
+        result["field2_hat"] = data["v_hat"]
+        result["n_fields"] = 2
     elif "u_hat" in keys:
-        field1_hat = data["u_hat"]
-        field2_hat = data["v_hat"]
+        result["field1_hat"] = data["u_hat"]
+        result["n_fields"] = 1
     else:
         raise ValueError(f"Unknown .npz format in {npz_path}: keys = {keys}")
 
-    sim_params = data["simulation_params"].item()
-    times = data["times"]
-
-    return {
-        "field1_hat": field1_hat,
-        "field2_hat": field2_hat,
-        "sim_params": sim_params,
-        "times": times,
-    }
+    return result
 
 
-def evaluate_features(field1_hat, field2_hat, kx, ky, E_x, E_y):
+def evaluate_features_1f(field1_hat, kx, ky, E_x, E_y):
+    """Evaluate 5 features for a single-field PDE: [u, u_x, u_y, u_xx, u_yy]."""
+    u = fourier_eval_2d(field1_hat, E_x, E_y)
+    u_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field1_hat, E_x, E_y)
+    u_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field1_hat, E_x, E_y)
+    u_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field1_hat, E_x, E_y)
+    u_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field1_hat, E_x, E_y)
+    return torch.stack([u, u_x, u_y, u_xx, u_yy], dim=1)
+
+
+def evaluate_features_2f(field1_hat, field2_hat, kx, ky, E_x, E_y):
+    """Evaluate 10 features for a two-field PDE."""
     u = fourier_eval_2d(field1_hat, E_x, E_y)
     v = fourier_eval_2d(field2_hat, E_x, E_y)
 
@@ -82,7 +102,7 @@ def build_phase_matrices(n_points, nx, ny, Lx, Ly, seed, device="cuda"):
     return kx, ky, E_x, E_y
 
 
-def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int = 1) -> torch.Tensor:
+def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int = 1) -> tuple[torch.Tensor, int]:
     """Load all fourier .npz files and collect features into one big matrix.
 
     Args:
@@ -90,6 +110,9 @@ def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int
         n_points: Random spatial points per snapshot
         seed: Random seed for spatial point sampling
         k_snapshots: Number of evenly-spaced timesteps to sample per task
+
+    Returns:
+        (features, n_fields) — features tensor and number of solution fields (1 or 2).
     """
     files = sorted(directory.glob("*_fourier.npz"))
     if not files:
@@ -101,10 +124,19 @@ def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int
 
     all_features = []
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    n_fields: int | None = None
 
     for f in files:
         loaded = load_fourier_fields(f)
         sim = loaded["sim_params"]
+
+        # Detect field count from first file, enforce consistency
+        if n_fields is None:
+            n_fields = loaded["n_fields"]
+            label = "two-field (10 features)" if n_fields == 2 else "single-field (5 features)"
+            print(f"Detected {label} PDE")
+        elif loaded["n_fields"] != n_fields:
+            raise ValueError(f"Mixed field counts in {directory}: expected {n_fields}, got {loaded['n_fields']} in {f.name}")
 
         domain_size = sim.get("domain_size", sim.get("Lx", 2 * np.pi))
         if isinstance(domain_size, (list, tuple)):
@@ -125,16 +157,20 @@ def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int
 
         for idx in indices:
             f1 = torch.tensor(loaded["field1_hat"][idx], device=device)
-            f2 = torch.tensor(loaded["field2_hat"][idx], device=device)
-
-            feats = evaluate_features(f1, f2, kx, ky, E_x, E_y)
+            if n_fields == 2:
+                f2 = torch.tensor(loaded["field2_hat"][idx], device=device)
+                feats = evaluate_features_2f(f1, f2, kx, ky, E_x, E_y)
+            else:
+                feats = evaluate_features_1f(f1, kx, ky, E_x, E_y)
             all_features.append(feats.cpu())
 
-    return torch.cat(all_features, dim=0)
+    assert n_fields is not None
+    return torch.cat(all_features, dim=0), n_fields
 
 
-def run_svd_analysis(features: torch.Tensor):
+def run_svd_analysis(features: torch.Tensor, feature_names: list[str]):
     """Run SVD on the standardized feature matrix and print results."""
+    n_feats = len(feature_names)
     X = features.double()
 
     # Standardize: zero mean, unit variance per column
@@ -143,7 +179,7 @@ def run_svd_analysis(features: torch.Tensor):
     std[std == 0] = 1  # avoid division by zero for constant features
     X = (X - mean) / std
 
-    U, S, Vt = torch.linalg.svd(X, full_matrices=False)
+    _U, S, Vt = torch.linalg.svd(X, full_matrices=False)
 
     print("\n=== Singular Values ===")
     for i, s in enumerate(S):
@@ -156,62 +192,64 @@ def run_svd_analysis(features: torch.Tensor):
     for i, c in enumerate(cumulative):
         print(f"  {i+1:2d} components: {c:.4f}")
 
-    print("\n=== Weakest Direction (v_10) ===")
+    print(f"\n=== Weakest Direction (v_{n_feats}) ===")
     v_last = Vt[-1]
-    for name, weight in zip(FEATURE_NAMES, v_last):
+    for name, weight in zip(feature_names, v_last):
         print(f"  {name:>6s}: {weight:+.4f}")
 
     return S, Vt
 
 
-def run_correlation_analysis(features: torch.Tensor):
+def run_correlation_analysis(features: torch.Tensor, feature_names: list[str]):
     """Compute and return the Pearson correlation matrix."""
+    n_feats = len(feature_names)
     corr = torch.corrcoef(features.T.double())
 
     print("\n=== Correlation Matrix ===")
-    header = "        " + "  ".join(f"{n:>6s}" for n in FEATURE_NAMES)
+    header = "        " + "  ".join(f"{n:>6s}" for n in feature_names)
     print(header)
-    for i, name in enumerate(FEATURE_NAMES):
-        row = f"  {name:>5s} " + "  ".join(f"{corr[i,j]:+.3f}" for j in range(10))
+    for i, name in enumerate(feature_names):
+        row = f"  {name:>5s} " + "  ".join(f"{corr[i,j]:+.3f}" for j in range(n_feats))
         print(row)
 
     return corr
 
 
-def plot_results(S, Vt, corr, output_dir: Path):
+def plot_results(S, Vt, corr, feature_names: list[str], output_dir: Path):
     """Generate plots for singular values, weakest direction, and correlation."""
+    n_feats = len(feature_names)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
     # 1. Singular value bar chart
-    axes[0].bar(range(1, 11), S.numpy(), color="steelblue")
+    axes[0].bar(range(1, n_feats + 1), S.numpy(), color="steelblue")
     axes[0].set_xlabel("Component")
     axes[0].set_ylabel("Singular Value")
     axes[0].set_title("Singular Value Spectrum")
-    axes[0].set_xticks(range(1, 11))
+    axes[0].set_xticks(range(1, n_feats + 1))
 
     # 2. Weakest direction weights
     v_last = Vt[-1].numpy()
     colors = ["tab:red" if abs(w) > 0.2 else "tab:gray" for w in v_last]
-    axes[1].barh(range(10), v_last, color=colors)
-    axes[1].set_yticks(range(10))
-    axes[1].set_yticklabels(FEATURE_NAMES)
+    axes[1].barh(range(n_feats), v_last, color=colors)
+    axes[1].set_yticks(range(n_feats))
+    axes[1].set_yticklabels(feature_names)
     axes[1].set_xlabel("Weight")
-    axes[1].set_title("Weakest Direction (v_10)")
+    axes[1].set_title(f"Weakest Direction (v_{n_feats})")
     axes[1].axvline(x=0, color="black", linewidth=0.5)
 
     # 3. Correlation heatmap
     im = axes[2].imshow(corr.numpy(), cmap="RdBu_r", vmin=-1, vmax=1)
-    axes[2].set_xticks(range(10))
-    axes[2].set_xticklabels(FEATURE_NAMES, rotation=45, ha="right")
-    axes[2].set_yticks(range(10))
-    axes[2].set_yticklabels(FEATURE_NAMES)
+    axes[2].set_xticks(range(n_feats))
+    axes[2].set_xticklabels(feature_names, rotation=45, ha="right")
+    axes[2].set_yticks(range(n_feats))
+    axes[2].set_yticklabels(feature_names)
     axes[2].set_title("Pearson Correlation")
     fig.colorbar(im, ax=axes[2], shrink=0.8)
 
     plt.tight_layout()
-    out_path = output_dir / "svd_correlation_analysis.png"
+    out_path = output_dir / f"svd_correlation_analysis[{output_dir.stem}].png"
     plt.savefig(out_path, dpi=150)
     print(f"\nFigure saved to {out_path}")
     plt.close()
@@ -229,12 +267,13 @@ def main():
     if args.output_dir is None:
         args.output_dir = args.directory
 
-    features = collect_features(args.directory, args.n_points, args.seed, args.k_snapshots)
-    print(f"\nFeature matrix shape: {features.shape}  (samples x features)")
+    features, n_fields = collect_features(args.directory, args.n_points, args.seed, args.k_snapshots)
+    feature_names = FEATURE_NAMES_2F if n_fields == 2 else FEATURE_NAMES_1F
+    print(f"\nFeature matrix shape: {features.shape}  (samples x {len(feature_names)} features)")
 
-    S, Vt = run_svd_analysis(features)
-    corr = run_correlation_analysis(features)
-    plot_results(S, Vt, corr, args.output_dir)
+    S, Vt = run_svd_analysis(features, feature_names)
+    corr = run_correlation_analysis(features, feature_names)
+    plot_results(S, Vt, corr, feature_names, args.output_dir)
 
 
 if __name__ == "__main__":

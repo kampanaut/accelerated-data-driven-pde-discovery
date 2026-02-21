@@ -18,27 +18,28 @@ training:
   inner_lr: 0.0001
   outer_lr: 0.00001
   inner_steps: 8
-  meta_batch_size: 30       # Small batch for quick test
-  k_shot: 100 # Small K for speed
-  query_size: 1000         # Small query for speed
-  max_iterations: 1000       # Just 5 iterations for dry run
+  meta_batch_size: 20
+  k_shot: 100 # support set size
+  query_size: 1000
+  max_iterations: 1000
   patience: 60
   log_interval: 1
-  hidden_dims: [100, 100]   # Smaller network for speed
+  hidden_dims: [100, 100]
   activation: "silu"
-  first_order: false # FOMAML for speed
-  # LR scheduler
+  T_0: 500
+  T_mult: 2
+  first_order: false
   warmup_iterations: 100
   use_scheduler: true
   scheduler_type: "warm_restarts"
   min_lr: 0.000001
 
 evaluation:
-  k_values: [10, 50, 100, 500, 1000]     # Support set sizes
-  noise_levels: [0.0, 0.01, 0.05, 0.10]  # 0%, 1%, 5%, 10% noise
+  k_values: [10, 50, 100, 500, 1000]
+  noise_levels: [0.0, 0.01, 0.05, 0.10]
   fine_tune_lr: 0.001
-  max_steps: 1000 # Just 20 steps
-  deriv_threshold: 0.0005   # Relative threshold: <0.1% change per step = plateau
+  max_steps: 1000
+  deriv_threshold: 0.0005
   fixed_steps: [50, 100, 150, 200, 250, 300, 350, 400, 450, 500]
   holdout_size: 1500
 
