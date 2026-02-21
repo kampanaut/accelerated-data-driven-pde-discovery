@@ -175,7 +175,7 @@ def evaluate_task(
         "ic_type": task.ic_config.get("type", "unknown"),
         "n_samples": task.n_samples,
         "loss_maml_worse": False,
-        "coeff_maml_worse": False,
+        "coeff_maml_worse": [],
     }
 
     # Per-combo arrays stored separately in NPZ
@@ -291,30 +291,30 @@ def evaluate_task(
 
                 # Flag if MAML worse on holdout or coefficient recovery
                 loss_worse = maml_holdout_final > baseline_holdout_final
-                coeff_worse = (
-                    maml_jacobian is not None
-                    and baseline_jacobian is not None
-                    and any(
-                        maml_jacobian.coeff_error_pct(n) > baseline_jacobian.coeff_error_pct(n)
-                        for n in maml_jacobian.true_values.keys()
-                    )
-                )
+                worse_coeffs = []
+                if maml_jacobian is not None and baseline_jacobian is not None:
+                    worse_coeffs = [
+                        n for n in maml_jacobian.true_values.keys()
+                        if maml_jacobian.coeff_error_pct(n) > baseline_jacobian.coeff_error_pct(n)
+                    ]
 
                 # Store per-combo flags
                 task_result[f"worse_{combo_key}"] = {
                     "loss": loss_worse,
-                    "coeff": coeff_worse,
+                    "coeff": worse_coeffs,
                 }
 
                 # Accumulate task-level flags (any combo triggers — used for directory naming)
                 task_result["loss_maml_worse"] |= loss_worse
-                task_result["coeff_maml_worse"] |= coeff_worse
+                for c in worse_coeffs:
+                    if c not in task_result["coeff_maml_worse"]:
+                        task_result["coeff_maml_worse"].append(c)
 
                 flags = []
                 if loss_worse:
                     flags.append("loss")
-                if coeff_worse:
-                    flags.append("coeff")
+                if worse_coeffs:
+                    flags.append(f"coeff:{','.join(worse_coeffs)}")
 
                 flag_str = ""
                 if len(flags) > 0:

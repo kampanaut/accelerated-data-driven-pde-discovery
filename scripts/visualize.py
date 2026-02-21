@@ -90,8 +90,9 @@ def _combo_worse_suffix(task_data: dict, combo_key: str) -> str:
     flags = []
     if worse.get("loss", False):
         flags.append("LOSS")
-    if worse.get("coeff", False):
-        flags.append("COEFF")
+    worse_coeffs = worse.get("coeff", [])
+    if worse_coeffs:
+        flags.append(f"COEFF:{','.join(worse_coeffs)}")
     if flags:
         return f"_WORSE[{','.join(flags)}]"
     return ""
@@ -220,16 +221,13 @@ def generate_per_task_figures(
     """Generate all per-task figures."""
 
     for task_name, task_data in results["tasks"].items():
-        suffix = ""
+        worse_flags = []
         if task_data.get("loss_maml_worse", False):
-            suffix += "_WORSE[LOSS"
-        if task_data.get("coeff_maml_worse", False):
-            if suffix == "":
-                suffix += "_WORSE[COEFF"
-            else:
-                suffix += ",COEFF"
-        if suffix != "": 
-            suffix += "]"
+            worse_flags.append("LOSS")
+        worse_coeffs = task_data.get("coeff_maml_worse", [])
+        if worse_coeffs:
+            worse_flags.append(f"COEFF:{','.join(worse_coeffs)}")
+        suffix = f"_WORSE[{','.join(worse_flags)}]" if worse_flags else ""
 
         task_dir = output_dir / "per_task" / f"{task_name}{suffix}"
         task_dir.mkdir(parents=True, exist_ok=True)
