@@ -84,6 +84,19 @@ def load_samples(samples_dir: Path, task_name: str) -> Dict[str, np.ndarray]:
     return dict(np.load(npz_path))
 
 
+def _combo_worse_suffix(task_data: dict, combo_key: str) -> str:
+    """Build WORSE suffix for a specific (K, noise) combo's image filename."""
+    worse = task_data.get(f"worse_{combo_key}", {})
+    flags = []
+    if worse.get("loss", False):
+        flags.append("LOSS")
+    if worse.get("coeff", False):
+        flags.append("COEFF")
+    if flags:
+        return f"_WORSE[{','.join(flags)}]"
+    return ""
+
+
 def load_results_with_samples(results_path: Path) -> dict:
     """
     Load evaluation results with per-combo arrays from NPZ files.
@@ -98,9 +111,13 @@ def load_results_with_samples(results_path: Path) -> dict:
 
     samples_dir = results_path.parent / "samples"
 
+    if not samples_dir.exists():
+        raise ValueError("`samples_dir` directory path does not exist.")
+
+    # Each .npz file about to be loaded by `load_samples()` is a task. A task
+    # contains combos (K × noise level), ranging from few-shot clean data to
+    # large-sample noisy data.
     for task_name, task_data in results["tasks"].items():
-        if not samples_dir.exists():
-            continue
         raw = load_samples(samples_dir, task_name)
         if not raw:
             continue
@@ -249,7 +266,7 @@ def generate_per_task_figures(
                     maml_losses=maml_losses,
                     baseline_losses=baseline_losses,
                     title=f"{task_name}: K={k}, noise={noise:.0%}",
-                    save_path=task_dir / f"convergence_k{k}_noise{noise:.2f}.png",
+                    save_path=task_dir / f"convergence_k{k}_noise{noise:.2f}{_combo_worse_suffix(task_data, combo_key)}.png",
                     dpi=dpi,
                     deriv_threshold=deriv_threshold,
                     k_shot=k,
@@ -266,7 +283,7 @@ def generate_per_task_figures(
                         baseline_train=baseline_losses,
                         baseline_holdout=baseline_holdout,
                         title=f"{task_name}: K={k}, noise={noise:.0%} (Train vs Holdout)",
-                        save_path=task_dir / f"train_holdout_k{k}_noise{noise:.2f}.png",
+                        save_path=task_dir / f"train_holdout_k{k}_noise{noise:.2f}{_combo_worse_suffix(task_data, combo_key)}.png",
                         dpi=dpi,
                         k_shot=k,
                         holdout_size=holdout_size,
@@ -435,7 +452,7 @@ def generate_per_task_figures(
                         title=f"{task_name}: {coeff_name} Coefficient (K={k}, noise={noise:.0%})",
                         coeff_name=coeff_name,
                         save_path=task_dir
-                        / f"jacobian_histogram_{coeff_name}_k{k}_noise{noise:.2f}.png",
+                        / f"jacobian_histogram_{coeff_name}_k{k}_noise{noise:.2f}{_combo_worse_suffix(task_data, combo_key)}.png",
                         dpi=dpi,
                         maml_pred_errors=maml_pe_list,
                         baseline_pred_errors=baseline_pe_list,
@@ -1269,7 +1286,7 @@ def main():
     print("=" * 60)
     print()
     print("Output directory:")
-    print("\t" + output_dir)
+    print("\t" + str(output_dir))
     print()
 
 

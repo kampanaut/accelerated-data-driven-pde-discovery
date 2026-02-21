@@ -42,7 +42,7 @@ class JacobianResults:
         true = self.true_values[name]
         if true == 0:
             return float("inf")
-        return abs(self.recovered(name) - true) / true * 100
+        return (abs(self.recovered(name) - true) / true) * 100
 
     @property
     def error_pct(self) -> float:

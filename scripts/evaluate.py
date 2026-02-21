@@ -174,6 +174,8 @@ def evaluate_task(
         "coefficient_specs": [asdict(s) for s in specs],
         "ic_type": task.ic_config.get("type", "unknown"),
         "n_samples": task.n_samples,
+        "loss_maml_worse": False,
+        "coeff_maml_worse": False,
     }
 
     # Per-combo arrays stored separately in NPZ
@@ -292,8 +294,22 @@ def evaluate_task(
                 coeff_worse = (
                     maml_jacobian is not None
                     and baseline_jacobian is not None
-                    and maml_jacobian.error_pct > baseline_jacobian.error_pct
+                    and any(
+                        maml_jacobian.coeff_error_pct(n) > baseline_jacobian.coeff_error_pct(n)
+                        for n in maml_jacobian.true_values.keys()
+                    )
                 )
+
+                # Store per-combo flags
+                task_result[f"worse_{combo_key}"] = {
+                    "loss": loss_worse,
+                    "coeff": coeff_worse,
+                }
+
+                # Accumulate task-level flags (any combo triggers — used for directory naming)
+                task_result["loss_maml_worse"] |= loss_worse
+                task_result["coeff_maml_worse"] |= coeff_worse
+
                 flags = []
                 if loss_worse:
                     flags.append("loss")
@@ -302,23 +318,12 @@ def evaluate_task(
 
                 flag_str = ""
                 if len(flags) > 0:
-                    flag_str = f"!!! [{",".join(flags)}]"
+                    flag_str = f" !!! [{','.join(flags)}]"
 
                 print(
                     f"MAML(train={maml_train_final:.2e}, holdout={maml_holdout_final:.2e}) "
                     f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag_str}"
                 )
-
-                # Track if ANY combo has MAML worse for this task (for directory naming)
-                if loss_worse:
-                    task_result["loss_maml_worse"] = True
-                else:
-                    task_result["loss_maml_worse"] = False
-
-                if coeff_worse:
-                    task_result["coeff_maml_worse"] = True
-                else:
-                    task_result["coeff_maml_worse"] = False
 
             except FileNotFoundError as e:
                 # Noisy file doesn't exist for this task
@@ -501,8 +506,8 @@ def main():
     samples_dir = eval_dir / "samples"
     samples_dir.mkdir(parents=True, exist_ok=True)
 
-    # Track holdout losses by IC type for summary
-    holdout_by_ic: Dict[str, list] = {}
+    # Track per-combo stats by IC type for summary
+    combo_stats_by_ic: Dict[str, list] = {}
 
     for task_idx, task in enumerate(test_loader.tasks):
         print(f"[{task_idx + 1}/{len(test_loader)}] Task: {task.task_name}")
@@ -528,32 +533,41 @@ def main():
             samples_path = samples_dir / f"{task.task_name}.npz"
             np.savez_compressed(samples_path, **task_samples)
 
-        # Collect holdout losses by IC type
+        # Collect per-combo stats by IC type (loss + coefficient recovery)
         ic_type = task_result.get("ic_type", "unknown")
-        if ic_type not in holdout_by_ic:
-            holdout_by_ic[ic_type] = []
+        if ic_type not in combo_stats_by_ic:
+            combo_stats_by_ic[ic_type] = []
 
-        for key in task_samples.keys():
-            if not key.endswith("/maml_holdout_losses"):
-                continue
-            combo = key.rsplit("/", 1)[0]  # e.g., "k_100_noise_0.01"
-            # Parse K and noise from combo key
-            parts = combo.split("_")  # ['k', '100', 'noise', '0.01']
-            k_val = int(parts[1])
-            noise_val = float(parts[3])
+        for k in k_values:
+            for noise in noise_levels:
+                combo_key = f"k_{k}_noise_{noise:.2f}"
 
-            maml_holdout = task_samples.get(f"{combo}/maml_holdout_losses")
-            baseline_holdout = task_samples.get(f"{combo}/baseline_holdout_losses")
-            if maml_holdout is not None and baseline_holdout is not None:
-                holdout_by_ic[ic_type].append(
-                    {
-                        "maml_final": float(maml_holdout[-1]),
-                        "baseline_final": float(baseline_holdout[-1]),
-                        "task": task.task_name,
-                        "k": k_val,
-                        "noise": noise_val,
-                    }
-                )
+                maml_holdout = task_samples.get(f"{combo_key}/maml_holdout_losses")
+                baseline_holdout = task_samples.get(f"{combo_key}/baseline_holdout_losses")
+                if maml_holdout is None or baseline_holdout is None:
+                    continue
+
+                worse = task_result.get(f"worse_{combo_key}", {})
+                coeff_recovery = task_result.get(f"coefficient_recovery_{combo_key}", {})
+
+                entry: Dict[str, Any] = {
+                    "task": task.task_name,
+                    "k": k,
+                    "noise": noise,
+                    "maml_loss": float(maml_holdout[-1]),
+                    "baseline_loss": float(baseline_holdout[-1]),
+                    "loss_worse": worse.get("loss", False),
+                    "coeff_worse": worse.get("coeff", False),
+                }
+
+                maml_coeff = coeff_recovery.get("maml")
+                baseline_coeff = coeff_recovery.get("baseline")
+                if maml_coeff is not None:
+                    entry["maml_coeff_error"] = maml_coeff["error_pct"]
+                if baseline_coeff is not None:
+                    entry["baseline_coeff_error"] = baseline_coeff["error_pct"]
+
+                combo_stats_by_ic[ic_type].append(entry)
 
         print()
 
@@ -566,34 +580,36 @@ def main():
     print(f"Saved samples to: {samples_dir}")
     print()
 
-    # Print holdout summary by IC type
+    # Print evaluation summary by IC type (loss + coefficient recovery)
     print("-" * 60)
-    print("Holdout Loss Summary by IC Type")
+    print("Evaluation Summary by IC Type")
     print("-" * 60)
-    for ic_type, entries in sorted(holdout_by_ic.items()):
-        maml_losses = [e["maml_final"] for e in entries]
-        baseline_losses = [e["baseline_final"] for e in entries]
-        maml_mean = np.mean(maml_losses)
-        baseline_mean = np.mean(baseline_losses)
+    for ic_type, entries in sorted(combo_stats_by_ic.items()):
+        n = len(entries)
+        loss_worse_n = sum(1 for e in entries if e["loss_worse"])
+        coeff_worse_n = sum(1 for e in entries if e["coeff_worse"])
 
-        # Flag if MAML worse than baseline on average
-        flag = " *** MAML WORSE ***" if maml_mean > baseline_mean else ""
-        print(
-            f"  {ic_type}: MAML={maml_mean:.2e}, Baseline={baseline_mean:.2e}{flag}"
-        )
+        maml_loss_avg = np.mean([e["maml_loss"] for e in entries])
+        bl_loss_avg = np.mean([e["baseline_loss"] for e in entries])
 
-        # List individual cases where MAML underperforms
-        underperformers = [
-            e for e in entries if e["maml_final"] > e["baseline_final"]
-        ]
+        maml_cerrs = [e["maml_coeff_error"] for e in entries if "maml_coeff_error" in e]
+        bl_cerrs = [e["baseline_coeff_error"] for e in entries if "baseline_coeff_error" in e]
+
+        print(f"\n  {ic_type} ({n} combos):")
+        print(f"    Loss:  MAML={maml_loss_avg:.2e}  BL={bl_loss_avg:.2e}  MAML worse: {loss_worse_n}/{n}")
+        if maml_cerrs:
+            print(f"    Coeff: MAML={np.mean(maml_cerrs):.1f}%  BL={np.mean(bl_cerrs):.1f}%  MAML worse: {coeff_worse_n}/{n}")
+
+        underperformers = [e for e in entries if e["loss_worse"] or e["coeff_worse"]]
         if underperformers:
-            print(
-                f"    Underperforming cases ({len(underperformers)}/{len(entries)}):"
-            )
-            for e in underperformers[:5]:  # Show at most 5
-                print(
-                    f"      {e['task']} K={e['k']} noise={e['noise']:.0%}: MAML={e['maml_final']:.2e} > Baseline={e['baseline_final']:.2e}"
-                )
+            print(f"    Underperforming ({len(underperformers)}/{n}):")
+            for e in underperformers[:5]:
+                flags = []
+                if e["loss_worse"]:
+                    flags.append("loss")
+                if e["coeff_worse"]:
+                    flags.append("coeff")
+                print(f"      {e['task']} K={e['k']} noise={e['noise']:.0%} [{','.join(flags)}]")
             if len(underperformers) > 5:
                 print(f"      ... and {len(underperformers) - 5} more")
     print()
