@@ -318,8 +318,16 @@ def evaluate_task(
                 baseline_train_final = baseline_result["train_losses"][-1]
                 baseline_holdout_final = baseline_result["holdout_losses"][-1]
 
-                # Flag if MAML worse on holdout
-                flag = " !!!" if maml_holdout_final > baseline_holdout_final else ""
+                # Flag if MAML worse on holdout or coefficient recovery
+                loss_worse = maml_holdout_final > baseline_holdout_final
+                coeff_worse = (
+                    maml_jacobian is not None
+                    and baseline_jacobian is not None
+                    and maml_jacobian.error_pct > baseline_jacobian.error_pct
+                )
+                flag = " !!!" if loss_worse else ""
+                if coeff_worse:
+                    flag += " [coeff worse]"
                 print(
                     f"MAML(train={maml_train_final:.2e}, holdout={maml_holdout_final:.2e}) "
                     f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag}"
@@ -328,7 +336,7 @@ def evaluate_task(
                 # Track if ANY combo has MAML worse for this task (for directory naming)
                 if "any_maml_worse" not in task_result:
                     task_result["any_maml_worse"] = False
-                if maml_holdout_final > baseline_holdout_final:
+                if loss_worse or coeff_worse:
                     task_result["any_maml_worse"] = True
 
             except FileNotFoundError as e:

@@ -1126,20 +1126,21 @@ def generate_aggregated_figures(
             combo_key = f"k_{k}_noise_{noise:.2f}"
 
             if pde_type == "ns":
-                # Collect nu_u and nu_v separately across all tasks
+                # Collect nu_u and nu_v separately (ratio-normalized per task)
                 maml_1_all, maml_2_all = [], []
                 baseline_1_all, baseline_2_all = [], []
-                coeff_true_val = None
+                has_ns_data = False
 
                 for task_name in task_names:
                     task_data = results["tasks"][task_name]["results"].get(
                         combo_key, {}
                     )
-
-                    if coeff_true_val is None:
-                        coeff_arr = task_data.get("maml_nu_true")
-                        if coeff_arr is not None:
-                            coeff_true_val = float(coeff_arr[0])
+                    coeff_arr = task_data.get("maml_nu_true")
+                    if coeff_arr is None:
+                        continue
+                    true_val = float(coeff_arr[0])
+                    if true_val == 0:
+                        continue
 
                     m1 = task_data.get("maml_nu_u")
                     m2 = task_data.get("maml_nu_v")
@@ -1147,16 +1148,18 @@ def generate_aggregated_figures(
                     b2 = task_data.get("baseline_nu_v")
 
                     if m1 is not None:
-                        maml_1_all.extend(m1.flatten())
+                        has_ns_data = True
+                        maml_1_all.extend(m1.flatten() / true_val)
                     if m2 is not None:
-                        maml_2_all.extend(m2.flatten())
+                        maml_2_all.extend(m2.flatten() / true_val)
                     if b1 is not None:
-                        baseline_1_all.extend(b1.flatten())
+                        baseline_1_all.extend(b1.flatten() / true_val)
                     if b2 is not None:
-                        baseline_2_all.extend(b2.flatten())
+                        baseline_2_all.extend(b2.flatten() / true_val)
 
                 if (
-                    all(
+                    has_ns_data
+                    and all(
                         len(x) > 0
                         for x in [
                             maml_1_all,
@@ -1165,143 +1168,155 @@ def generate_aggregated_figures(
                             baseline_2_all,
                         ]
                     )
-                    and coeff_true_val is not None
                 ):
                     fig = plot_jacobian_histogram(
                         maml_coeff_1=np.array(maml_1_all),
                         maml_coeff_2=np.array(maml_2_all),
                         baseline_coeff_1=np.array(baseline_1_all),
                         baseline_coeff_2=np.array(baseline_2_all),
-                        coeff_true=coeff_true_val,
-                        title=f"Aggregated ν Laplacian Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_true=1.0,
+                        title=f"Aggregated ν Recovery Ratio (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
                         coeff_name="nu",
                         coeff_1_label="u-eq (ν_u)",
                         coeff_2_label="v-eq (ν_v)",
                         save_path=agg_dir
                         / f"jacobian_histogram_nu_k{k}_noise{noise:.2f}.png",
                         dpi=dpi,
+                        ratio_mode=True,
                     )
                     plt.close(fig)
 
             elif pde_type in ("heat", "nl_heat"):
-                # Heat: single D coefficient histogram
+                # Heat: single D coefficient histogram (ratio-normalized)
                 maml_D_all, baseline_D_all = [], []
-                coeff_true_D_val = None
+                has_heat_data = False
 
                 for task_name in task_names:
                     task_data = results["tasks"][task_name]["results"].get(
                         combo_key, {}
                     )
-                    if coeff_true_D_val is None:
-                        arr = task_data.get("maml_D_true")
-                        if arr is not None:
-                            coeff_true_D_val = float(arr[0])
+                    arr = task_data.get("maml_D_true")
+                    if arr is None:
+                        continue
+                    true_val = float(arr[0])
+                    if true_val == 0:
+                        continue
                     m = task_data.get("maml_D")
                     b = task_data.get("baseline_D")
                     if m is not None:
-                        maml_D_all.extend(m.flatten())
+                        has_heat_data = True
+                        maml_D_all.extend(m.flatten() / true_val)
                     if b is not None:
-                        baseline_D_all.extend(b.flatten())
+                        baseline_D_all.extend(b.flatten() / true_val)
 
                 if (
-                    len(maml_D_all) > 0
+                    has_heat_data
+                    and len(maml_D_all) > 0
                     and len(baseline_D_all) > 0
-                    and coeff_true_D_val is not None
                 ):
                     fig = plot_jacobian_histogram(
                         maml_coeff_1=np.array(maml_D_all),
                         maml_coeff_2=np.array(maml_D_all),
                         baseline_coeff_1=np.array(baseline_D_all),
                         baseline_coeff_2=np.array(baseline_D_all),
-                        coeff_true=coeff_true_D_val,
-                        title=f"Aggregated D Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_true=1.0,
+                        title=f"Aggregated D Recovery Ratio (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
                         coeff_name="D",
                         coeff_1_label="u-eq",
                         coeff_2_label="u-eq",
                         save_path=agg_dir
                         / f"jacobian_histogram_D_k{k}_noise{noise:.2f}.png",
                         dpi=dpi,
+                        ratio_mode=True,
                     )
                     plt.close(fig)
 
             else:  # Brusselator, FitzHugh-Nagumo, Lambda-Omega
-                # D_u histogram
+                # D_u histogram (ratio-normalized: each task's estimates / task's true)
                 maml_Du_all, baseline_Du_all = [], []
-                coeff_true_u = None
+                has_Du_data = False
 
                 for task_name in task_names:
                     task_data = results["tasks"][task_name]["results"].get(
                         combo_key, {}
                     )
-                    if coeff_true_u is None:
-                        arr = task_data.get("maml_D_u_true")
-                        if arr is not None:
-                            coeff_true_u = float(arr[0])
+                    arr = task_data.get("maml_D_u_true")
+                    if arr is None:
+                        continue
+                    true_val = float(arr[0])
+                    if true_val == 0:
+                        continue
                     m = task_data.get("maml_D_u")
                     b = task_data.get("baseline_D_u")
                     if m is not None:
-                        maml_Du_all.extend(m.flatten())
+                        has_Du_data = True
+                        maml_Du_all.extend(m.flatten() / true_val)
                     if b is not None:
-                        baseline_Du_all.extend(b.flatten())
+                        baseline_Du_all.extend(b.flatten() / true_val)
 
                 if (
-                    len(maml_Du_all) > 0
+                    has_Du_data
+                    and len(maml_Du_all) > 0
                     and len(baseline_Du_all) > 0
-                    and coeff_true_u is not None
                 ):
                     fig = plot_jacobian_histogram(
                         maml_coeff_1=np.array(maml_Du_all),
                         maml_coeff_2=np.array(maml_Du_all),
                         baseline_coeff_1=np.array(baseline_Du_all),
                         baseline_coeff_2=np.array(baseline_Du_all),
-                        coeff_true=coeff_true_u,
-                        title=f"Aggregated D_u Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_true=1.0,
+                        title=f"Aggregated D_u Recovery Ratio (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
                         coeff_name="D_u",
                         coeff_1_label="u-eq",
                         coeff_2_label="u-eq",
                         save_path=agg_dir
                         / f"jacobian_histogram_D_u_k{k}_noise{noise:.2f}.png",
                         dpi=dpi,
+                        ratio_mode=True,
                     )
                     plt.close(fig)
 
-                # D_v histogram
+                # D_v histogram (ratio-normalized)
                 maml_Dv_all, baseline_Dv_all = [], []
-                coeff_true_v = None
+                has_Dv_data = False
 
                 for task_name in task_names:
                     task_data = results["tasks"][task_name]["results"].get(
                         combo_key, {}
                     )
-                    if coeff_true_v is None:
-                        arr = task_data.get("maml_D_v_true")
-                        if arr is not None:
-                            coeff_true_v = float(arr[0])
+                    arr = task_data.get("maml_D_v_true")
+                    if arr is None:
+                        continue
+                    true_val = float(arr[0])
+                    if true_val == 0:
+                        continue
                     m = task_data.get("maml_D_v")
                     b = task_data.get("baseline_D_v")
                     if m is not None:
-                        maml_Dv_all.extend(m.flatten())
+                        has_Dv_data = True
+                        maml_Dv_all.extend(m.flatten() / true_val)
                     if b is not None:
-                        baseline_Dv_all.extend(b.flatten())
+                        baseline_Dv_all.extend(b.flatten() / true_val)
 
                 if (
-                    len(maml_Dv_all) > 0
+                    has_Dv_data
+                    and len(maml_Dv_all) > 0
                     and len(baseline_Dv_all) > 0
-                    and coeff_true_v is not None
                 ):
                     fig = plot_jacobian_histogram(
                         maml_coeff_1=np.array(maml_Dv_all),
                         maml_coeff_2=np.array(maml_Dv_all),
                         baseline_coeff_1=np.array(baseline_Dv_all),
                         baseline_coeff_2=np.array(baseline_Dv_all),
-                        coeff_true=coeff_true_v,
-                        title=f"Aggregated D_v Coefficient (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
+                        coeff_true=1.0,
+                        title=f"Aggregated D_v Recovery Ratio (K={k}, noise={noise:.0%}, n={n_tasks} tasks)",
                         coeff_name="D_v",
                         coeff_1_label="v-eq",
                         coeff_2_label="v-eq",
                         save_path=agg_dir
                         / f"jacobian_histogram_D_v_k{k}_noise{noise:.2f}.png",
                         dpi=dpi,
+                        ratio_mode=True,
                     )
                     plt.close(fig)
 

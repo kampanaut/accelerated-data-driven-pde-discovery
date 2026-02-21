@@ -734,6 +734,7 @@ def plot_jacobian_histogram(
     save_path: Optional[Path] = None,
     figsize: Tuple[int, int] = (14, 5),
     dpi: int = 150,
+    ratio_mode: bool = False,
     maml_pred_errors_1: Optional[NDArray[np.floating[Any]]] = None,
     maml_pred_errors_2: Optional[NDArray[np.floating[Any]]] = None,
     baseline_pred_errors_1: Optional[NDArray[np.floating[Any]]] = None,
@@ -774,7 +775,10 @@ def plot_jacobian_histogram(
     symbol = {"nu": "ν", "D_u": "D_u", "D_v": "D_v"}.get(coeff_name, coeff_name)
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
-    fig.suptitle(f"{title}\nTrue {symbol} = {coeff_true:.6f}", fontsize=12)
+    if ratio_mode:
+        fig.suptitle(title, fontsize=12)
+    else:
+        fig.suptitle(f"{title}\nTrue {symbol} = {coeff_true:.6f}", fontsize=12)
 
     # Compute stats for each
     maml_1_mean, maml_1_std = np.mean(maml_coeff_1), np.std(maml_coeff_1)
@@ -812,12 +816,13 @@ def plot_jacobian_histogram(
         edgecolor="darkcyan",
         label=f"{coeff_2_label}: μ={maml_2_mean:.4f}, σ={maml_2_std:.4f}",
     )
+    truth_label = "Perfect recovery (1.0)" if ratio_mode else f"True {symbol} = {coeff_true:.4f}"
     ax.axvline(
         coeff_true,
         color="red",
         linestyle="--",
         linewidth=2,
-        label=f"True {symbol} = {coeff_true:.4f}",
+        label=truth_label,
     )
     ax.axvline(maml_1_mean, color="blue", linestyle="-", linewidth=1.5, alpha=0.8)
     ax.axvline(maml_2_mean, color="darkcyan", linestyle="-", linewidth=1.5, alpha=0.8)
@@ -830,7 +835,7 @@ def plot_jacobian_histogram(
         alpha=0.9,
         label=f"combined: μ={maml_overall_mean:.4f}",
     )
-    ax.set_xlabel(f"{symbol} Jacobian entries")
+    ax.set_xlabel("Recovered / True" if ratio_mode else f"{symbol} Jacobian entries")
     ax.set_ylabel("Count")
     ax.set_title("MAML (θ*)")
 
@@ -886,7 +891,7 @@ def plot_jacobian_histogram(
         color="red",
         linestyle="--",
         linewidth=2,
-        label=f"True {symbol} = {coeff_true:.4f}",
+        label=truth_label,
     )
     ax.axvline(
         baseline_1_mean, color="darkorange", linestyle="-", linewidth=1.5, alpha=0.8
@@ -901,7 +906,7 @@ def plot_jacobian_histogram(
         alpha=0.9,
         label=f"combined: μ={baseline_overall_mean:.4f}",
     )
-    ax.set_xlabel(f"{symbol} Jacobian entries")
+    ax.set_xlabel("Recovered / True" if ratio_mode else f"{symbol} Jacobian entries")
     ax.set_ylabel("Count")
     ax.set_title("Baseline (θ₀)")
 
