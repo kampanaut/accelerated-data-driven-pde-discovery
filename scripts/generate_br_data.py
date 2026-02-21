@@ -54,27 +54,27 @@ def generate_fourier_data(
     training via wavenumber multiplication.
 
     Args:
-        concentration_history: List of (A, B) tuples at different times
+        concentration_history: List of (u, v) tuples at different times
         times: Time values for each snapshot
 
     Returns:
-        Dict with keys: A_hat, B_hat (complex128), times (float64)
+        Dict with keys: u_hat, v_hat (complex128), times (float64)
     """
     n_snapshots = len(concentration_history)
     ny, nx = concentration_history[0][0].shape
 
-    A_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
-    B_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
+    u_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
+    v_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
 
-    for i, (A, B) in enumerate(concentration_history):
-        A_hat_stack[i] = np.fft.fft2(A)
-        B_hat_stack[i] = np.fft.fft2(B)
+    for i, (u, v) in enumerate(concentration_history):
+        u_hat_stack[i] = np.fft.fft2(u)
+        v_hat_stack[i] = np.fft.fft2(v)
 
     print(f"  FFT'd {n_snapshots} snapshots, shape ({ny}, {nx})")
 
     return {
-        "A_hat": A_hat_stack,
-        "B_hat": B_hat_stack,
+        "u_hat": u_hat_stack,
+        "v_hat": v_hat_stack,
         "times": times,
     }
 
@@ -104,7 +104,7 @@ def save_brusselator_evolution(
     - Row 4: B concentration (3D surface)
 
     Args:
-        concentration_history: List of (A, B) tuples at different times
+        concentration_history: List of (u, v) tuples at different times
         times: Array of time values
         x, y: Coordinate arrays
         output_path: Path to save the figure
@@ -123,70 +123,70 @@ def save_brusselator_evolution(
         x_grid, y_grid = x, y
 
     # Get global min/max for consistent colorbars
-    all_A = [concentration_history[i][0] for i in indices]
-    all_B = [concentration_history[i][1] for i in indices]
-    A_min, A_max = min(a.min() for a in all_A), max(a.max() for a in all_A)
-    B_min, B_max = min(b.min() for b in all_B), max(b.max() for b in all_B)
+    all_u = [concentration_history[i][0] for i in indices]
+    all_v = [concentration_history[i][1] for i in indices]
+    u_min, u_max = min(a.min() for a in all_u), max(a.max() for a in all_u)
+    v_min, v_max = min(b.min() for b in all_v), max(b.max() for b in all_v)
 
     for col, idx in enumerate(indices):
-        A, B = concentration_history[idx]
+        u, v = concentration_history[idx]
         t = times[idx]
 
-        # Row 1: A concentration (2D)
-        ax_A_2d = plt.subplot(4, n_snapshots, col + 1)
-        contour_A = ax_A_2d.contourf(
-            x_grid, y_grid, A, levels=20, cmap="YlOrRd", vmin=A_min, vmax=A_max
+        # Row 1: u concentration (2D)
+        ax_u_2d = plt.subplot(4, n_snapshots, col + 1)
+        contour_u = ax_u_2d.contourf(
+            x_grid, y_grid, u, levels=20, cmap="YlOrRd", vmin=u_min, vmax=u_max
         )
-        plt.colorbar(contour_A, ax=ax_A_2d, fraction=0.046, pad=0.04)
-        ax_A_2d.set_title(f"t={t:.3f}")
-        ax_A_2d.set_aspect("equal")
+        plt.colorbar(contour_u, ax=ax_u_2d, fraction=0.046, pad=0.04)
+        ax_u_2d.set_title(f"t={t:.3f}")
+        ax_u_2d.set_aspect("equal")
 
-        # Row 2: B concentration (2D)
-        ax_B_2d = plt.subplot(4, n_snapshots, n_snapshots + col + 1)
-        contour_B = ax_B_2d.contourf(
-            x_grid, y_grid, B, levels=20, cmap="YlGnBu", vmin=B_min, vmax=B_max
+        # Row 2: v concentration (2D)
+        ax_v_2d = plt.subplot(4, n_snapshots, n_snapshots + col + 1)
+        contour_v = ax_v_2d.contourf(
+            x_grid, y_grid, v, levels=20, cmap="YlGnBu", vmin=v_min, vmax=v_max
         )
-        plt.colorbar(contour_B, ax=ax_B_2d, fraction=0.046, pad=0.04)
-        ax_B_2d.set_aspect("equal")
+        plt.colorbar(contour_v, ax=ax_v_2d, fraction=0.046, pad=0.04)
+        ax_v_2d.set_aspect("equal")
 
-        # Row 3: A concentration (3D surface)
-        ax_A_3d = plt.subplot(
+        # Row 3: u concentration (3D surface)
+        ax_u_3d = plt.subplot(
             4, n_snapshots, 2 * n_snapshots + col + 1, projection="3d"
         )
 
-        assert isinstance(ax_A_3d, Axes3D)
+        assert isinstance(ax_u_3d, Axes3D)
 
-        surf_A = ax_A_3d.plot_surface(
-            x_grid, y_grid, A, cmap="YlOrRd", linewidth=0, antialiased=True, alpha=0.9
+        surf_u = ax_u_3d.plot_surface(
+            x_grid, y_grid, u, cmap="YlOrRd", linewidth=0, antialiased=True, alpha=0.9
         )
 
-        ax_A_3d.set_xlabel("x")
-        ax_A_3d.set_ylabel("y")
-        ax_A_3d.set_zlabel("A")
-        ax_A_3d.view_init(elev=30, azim=45)
-        fig.colorbar(surf_A, ax=ax_A_3d, fraction=0.03, pad=0.1, shrink=0.5)
+        ax_u_3d.set_xlabel("x")
+        ax_u_3d.set_ylabel("y")
+        ax_u_3d.set_zlabel("u")
+        ax_u_3d.view_init(elev=30, azim=45)
+        fig.colorbar(surf_u, ax=ax_u_3d, fraction=0.03, pad=0.1, shrink=0.5)
 
-        # Row 4: B concentration (3D surface)
-        ax_B_3d = plt.subplot(
+        # Row 4: v concentration (3D surface)
+        ax_v_3d = plt.subplot(
             4, n_snapshots, 3 * n_snapshots + col + 1, projection="3d"
         )
 
-        assert isinstance(ax_B_3d, Axes3D)
+        assert isinstance(ax_v_3d, Axes3D)
 
-        surf_B = ax_B_3d.plot_surface(
-            x_grid, y_grid, B, cmap="YlGnBu", linewidth=0, antialiased=True, alpha=0.9
+        surf_v = ax_v_3d.plot_surface(
+            x_grid, y_grid, v, cmap="YlGnBu", linewidth=0, antialiased=True, alpha=0.9
         )
-        ax_B_3d.set_xlabel("x")
-        ax_B_3d.set_ylabel("y")
-        ax_B_3d.set_zlabel("B")
-        ax_B_3d.view_init(elev=30, azim=45)
-        fig.colorbar(surf_B, ax=ax_B_3d, fraction=0.03, pad=0.1, shrink=0.5)
+        ax_v_3d.set_xlabel("x")
+        ax_v_3d.set_ylabel("y")
+        ax_v_3d.set_zlabel("v")
+        ax_v_3d.view_init(elev=30, azim=45)
+        fig.colorbar(surf_v, ax=ax_v_3d, fraction=0.03, pad=0.1, shrink=0.5)
 
     # Add row labels
     fig.text(
         0.02,
         0.88,
-        "A conc (2D)",
+        "u conc (2D)",
         va="center",
         rotation="vertical",
         fontsize=11,
@@ -195,7 +195,7 @@ def save_brusselator_evolution(
     fig.text(
         0.02,
         0.65,
-        "B conc (2D)",
+        "v conc (2D)",
         va="center",
         rotation="vertical",
         fontsize=11,
@@ -204,7 +204,7 @@ def save_brusselator_evolution(
     fig.text(
         0.02,
         0.42,
-        "A conc (3D)",
+        "u conc (3D)",
         va="center",
         rotation="vertical",
         fontsize=11,
@@ -213,7 +213,7 @@ def save_brusselator_evolution(
     fig.text(
         0.02,
         0.18,
-        "B conc (3D)",
+        "v conc (3D)",
         va="center",
         rotation="vertical",
         fontsize=11,
@@ -254,9 +254,9 @@ def process_single_ic(args_tuple):
     task_sim_params = simulation_params.copy()
 
     # Handle parameter sampling from ranges
-    # Single RNG per task — draws are sequential so D_A, D_B, k1, k2 get distinct values
+    # Single RNG per task — draws are sequential so D_u, D_v, k1, k2 get distinct values
     param_rng = np.random.default_rng(ic_config.get("seed"))
-    for param in ["D_A", "D_B", "k1", "k2"]:
+    for param in ["D_u", "D_v", "k1", "k2"]:
         raw_val = ic_config.get(param, task_sim_params[param])
         if isinstance(raw_val, list):
             if len(raw_val) != 2:
@@ -276,8 +276,8 @@ def process_single_ic(args_tuple):
     if k2_delta_range is not None:
         k2_c = compute_turing_threshold(
             k1=task_sim_params["k1"],
-            D_A=task_sim_params["D_A"],
-            D_B=task_sim_params["D_B"],
+            D_u=task_sim_params["D_u"],
+            D_v=task_sim_params["D_v"],
         )
         delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
         task_sim_params["k2"] = k2_c + delta
@@ -298,15 +298,15 @@ def process_single_ic(args_tuple):
 
         try:
             # Create initial condition
-            A_init, B_init, _ = create_brusselator_ic( # A_init, B_init, generated_params
+            u_init, v_init, _ = create_brusselator_ic( # u_init, v_init, generated_params
                 ic_config_attempt, x, y
             )
 
             # Solve Brusselator
             concentration_history, times, x_result, y_result = solve_brusselator(
-                initial_concentration=(A_init, B_init),
-                D_A=task_sim_params["D_A"],
-                D_B=task_sim_params["D_B"],
+                initial_concentration=(u_init, v_init),
+                D_u=task_sim_params["D_u"],
+                D_v=task_sim_params["D_v"],
                 k1=task_sim_params["k1"],
                 k2=task_sim_params["k2"],
                 domain_size=task_sim_params["domain_size"],
@@ -317,8 +317,8 @@ def process_single_ic(args_tuple):
 
             # Validate raw concentrations for divergence
             max_magnitude = 1e6
-            last_A, last_B = concentration_history[-1]
-            for label, arr in [("A", last_A), ("B", last_B)]:
+            last_u, last_v = concentration_history[-1]
+            for label, arr in [("u", last_u), ("v", last_v)]:
                 max_val = np.abs(arr).max()
                 if (
                     max_val > max_magnitude
@@ -332,8 +332,8 @@ def process_single_ic(args_tuple):
             ic_config_to_save = ic_config.copy()
             ic_config_to_save["k1_used"] = task_sim_params["k1"]
             ic_config_to_save["k2_used"] = task_sim_params["k2"]
-            ic_config_to_save["D_A_used"] = task_sim_params["D_A"]
-            ic_config_to_save["D_B_used"] = task_sim_params["D_B"]
+            ic_config_to_save["D_u_used"] = task_sim_params["D_u"]
+            ic_config_to_save["D_v_used"] = task_sim_params["D_v"]
             ic_config_to_save["seed_used"] = ic_config_attempt.get("seed")
             ic_config_to_save["retry_attempt"] = attempt
             if k2_delta_range is not None:
@@ -412,8 +412,8 @@ def main():
     # Extract simulation parameters
     sim_params = config["simulation"]
     simulation_params = {
-        "D_A": sim_params["D_A"],
-        "D_B": sim_params["D_B"],
+        "D_u": sim_params["D_u"],
+        "D_v": sim_params["D_v"],
         "k1": sim_params["k1"],
         "k2": sim_params["k2"],
         "domain_size": tuple(sim_params["domain_size"]),
@@ -427,7 +427,7 @@ def main():
     for key, value in simulation_params.items():
         print(f"  {key}: {value}")
     print(
-        f"  Steady state: A* = {simulation_params['k1']:.4f}, B* = {simulation_params['k2'] / simulation_params['k1']:.4f}"
+        f"  Steady state: u* = {simulation_params['k1']:.4f}, v* = {simulation_params['k2'] / simulation_params['k1']:.4f}"
     )
 
     # Extract IC configurations
@@ -520,9 +520,9 @@ def main():
             task_sim_params = simulation_params.copy()
 
             # Handle parameter sampling from ranges
-            # Single RNG per task — draws are sequential so D_A, D_B, k1, k2 get distinct values
+            # Single RNG per task — draws are sequential so D_u, D_v, k1, k2 get distinct values
             param_rng = np.random.default_rng(ic_config.get("seed"))
-            for param in ["D_A", "D_B", "k1", "k2"]:
+            for param in ["D_u", "D_v", "k1", "k2"]:
                 raw_val = ic_config.get(param, task_sim_params[param])
                 if isinstance(raw_val, list):
                     if len(raw_val) != 2:
@@ -543,8 +543,8 @@ def main():
             if k2_delta_range is not None:
                 k2_c = compute_turing_threshold(
                     k1=task_sim_params["k1"],
-                    D_A=task_sim_params["D_A"],
-                    D_B=task_sim_params["D_B"],
+                    D_u=task_sim_params["D_u"],
+                    D_v=task_sim_params["D_v"],
                 )
                 delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
                 task_sim_params["k2"] = k2_c + delta
@@ -572,16 +572,16 @@ def main():
 
                 try:
                     # Create initial condition
-                    A_init, B_init, _ = create_brusselator_ic( # A_init, B_init, generated_params
+                    u_init, v_init, _ = create_brusselator_ic( # u_init, v_init, generated_params
                         ic_config_attempt, x, y
                     )
 
                     # Solve Brusselator
                     concentration_history, times, x_result, y_result = (
                         solve_brusselator(
-                            initial_concentration=(A_init, B_init),
-                            D_A=task_sim_params["D_A"],
-                            D_B=task_sim_params["D_B"],
+                            initial_concentration=(u_init, v_init),
+                            D_u=task_sim_params["D_u"],
+                            D_v=task_sim_params["D_v"],
                             k1=task_sim_params["k1"],
                             k2=task_sim_params["k2"],
                             domain_size=task_sim_params["domain_size"],
@@ -593,8 +593,8 @@ def main():
 
                     # Validate raw concentrations for divergence
                     max_magnitude = 1e6
-                    last_A, last_B = concentration_history[-1]
-                    for label, arr in [("A", last_A), ("B", last_B)]:
+                    last_u, last_v = concentration_history[-1]
+                    for label, arr in [("u", last_u), ("v", last_v)]:
                         max_val = np.abs(arr).max()
                         if (
                             max_val > max_magnitude
@@ -608,8 +608,8 @@ def main():
                     ic_config_to_save = ic_config.copy()
                     ic_config_to_save["k1_used"] = task_sim_params["k1"]
                     ic_config_to_save["k2_used"] = task_sim_params["k2"]
-                    ic_config_to_save["D_A_used"] = task_sim_params["D_A"]
-                    ic_config_to_save["D_B_used"] = task_sim_params["D_B"]
+                    ic_config_to_save["D_u_used"] = task_sim_params["D_u"]
+                    ic_config_to_save["D_v_used"] = task_sim_params["D_v"]
                     ic_config_to_save["seed_used"] = ic_config_attempt.get("seed")
                     ic_config_to_save["retry_attempt"] = attempt
                     if k2_delta_range is not None:
@@ -691,7 +691,7 @@ def main():
 
     if successful > 0:
         print("\nEach successful dataset contains:")
-        print("  - Fourier coefficients: A_hat, B_hat (complex128)")
+        print("  - Fourier coefficients: u_hat, v_hat (complex128)")
         print("  - Metadata: ic_config, simulation_params")
 
 

@@ -2,16 +2,16 @@
 Brusselator reaction-diffusion solver using PhiFlow.
 
 The Brusselator model:
-    ∂A/∂t = D_A ∇²A + k₁ - (k₂ + 1)A + A²B
-    ∂B/∂t = D_B ∇²B + k₂A - A²B
+    ∂u/∂t = D_u ∇²u + k₁ - (k₂ + 1)u + u²v
+    ∂v/∂t = D_v ∇²v + k₂u - u²v
 
 where:
-    A, B: concentrations
-    D_A, D_B: diffusion coefficients
+    u, v: concentrations
+    D_u, D_v: diffusion coefficients
     k₁, k₂: reaction rate constants
 
-Steady state: A = k₁, B = k₂/k₁
-Turing instability requires D_B > D_A and specific parameter relationships.
+Steady state: u* = k₁, v* = k₂/k₁
+Turing instability requires D_v > D_u and specific parameter relationships.
 """
 
 import numpy as np
@@ -35,10 +35,10 @@ from phi import math
 class BrusselatorSimParams:
     """Simulation parameters for Brusselator solver."""
 
-    D_A: float  # Diffusion coefficient for A
-    D_B: float  # Diffusion coefficient for B
-    k1: float  # Reaction rate (A* = k1)
-    k2: float  # Reaction rate (B* = k2/k1)
+    D_u: float  # Diffusion coefficient for u
+    D_v: float  # Diffusion coefficient for v
+    k1: float  # Reaction rate (u* = k1)
+    k2: float  # Reaction rate (v* = k2/k1)
     domain_size: Tuple[float, float]  # (Lx, Ly)
     resolution: Tuple[int, int]  # (ny, nx)
     t_end: float  # Final simulation time
@@ -56,8 +56,8 @@ class BrusselatorICBase:
     k2: float
     seed: Optional[int] = None
     # Optional overrides for simulation params
-    D_A: Optional[float] = None
-    D_B: Optional[float] = None
+    D_u: Optional[float] = None
+    D_v: Optional[float] = None
 
 
 @dataclass
@@ -128,30 +128,30 @@ class SolverResult(TypedDict):
     generated_params: dict[str, Any]
 
 
-def brusselator_reaction(A, B, k1: float, k2: float):
+def brusselator_reaction(u, v, k1: float, k2: float):
     """
     Compute reaction terms for Brusselator.
 
-    R_A = k₁ - (k₂ + 1)A + A²B
-    R_B = k₂A - A²B
+    R_u = k₁ - (k₂ + 1)u + u²v
+    R_v = k₂u - u²v
 
     Args:
-        A, B: Concentration fields (numpy or JAX arrays)
+        u, v: Concentration fields (numpy or JAX arrays)
         k1, k2: Reaction rate constants
 
     Returns:
-        (R_A, R_B): Reaction terms for each species (same type as input)
+        (R_u, R_v): Reaction terms for each species (same type as input)
     """
-    A_squared_B = A * A * B
-    R_A = k1 - (k2 + 1) * A + A_squared_B
-    R_B = k2 * A - A_squared_B
-    return R_A, R_B
+    u_squared_v = u * u * v
+    R_u = k1 - (k2 + 1) * u + u_squared_v
+    R_v = k2 * u - u_squared_v
+    return R_u, R_v
 
 
 def solve_brusselator(
     initial_concentration: Tuple[np.ndarray, np.ndarray],
-    D_A: float,
-    D_B: float,
+    D_u: float,
+    D_v: float,
     k1: float,
     k2: float,
     domain_size: Tuple[float, float],
@@ -165,9 +165,9 @@ def solve_brusselator(
     Uses operator splitting: diffusion (implicit, unconditionally stable) then reaction (explicit Euler).
 
     Args:
-        initial_concentration: Tuple of (A, B) numpy arrays, shape (ny, nx)
-        D_A: Diffusion coefficient for species A
-        D_B: Diffusion coefficient for species B
+        initial_concentration: Tuple of (u, v) numpy arrays, shape (ny, nx)
+        D_u: Diffusion coefficient for species u
+        D_v: Diffusion coefficient for species v
         k1: Reaction rate constant (feed rate)
         k2: Reaction rate constant
         domain_size: (Lx, Ly) physical domain size
@@ -177,13 +177,13 @@ def solve_brusselator(
 
     Returns:
         Tuple of:
-        - concentration_history: List of (A, B) tuples at saved timesteps
+        - concentration_history: List of (u, v) tuples at saved timesteps
         - times: Array of time values for saved snapshots
         - x: 1D array of x-coordinates
         - y: 1D array of y-coordinates
     """
-    A_init, B_init = initial_concentration
-    ny, nx = A_init.shape
+    u_init, v_init = initial_concentration
+    ny, nx = u_init.shape
     Lx, Ly = domain_size
 
     # Create coordinate arrays
@@ -194,11 +194,11 @@ def solve_brusselator(
     domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[call-arg]
 
     # Initialize concentration fields as CenteredGrids
-    A_field = math.tensor(A_init, spatial("y,x"))
-    B_field = math.tensor(B_init, spatial("y,x"))
+    u_field = math.tensor(u_init, spatial("y,x"))
+    v_field = math.tensor(v_init, spatial("y,x"))
 
-    A = CenteredGrid(A_field, extrapolation.PERIODIC, bounds=domain)
-    B = CenteredGrid(B_field, extrapolation.PERIODIC, bounds=domain)
+    u = CenteredGrid(u_field, extrapolation.PERIODIC, bounds=domain)
+    v = CenteredGrid(v_field, extrapolation.PERIODIC, bounds=domain)
 
     # Initialize storage
     concentration_history = []
@@ -212,17 +212,17 @@ def solve_brusselator(
     save_every = max(1, int(save_interval / dt))
 
     # Save initial condition
-    A_data = math.reshaped_native(A.values, ["y", "x"])
-    B_data = math.reshaped_native(B.values, ["y", "x"])
-    concentration_history.append((np.array(A_data), np.array(B_data)))
+    u_data = math.reshaped_native(u.values, ["y", "x"])
+    v_data = math.reshaped_native(v.values, ["y", "x"])
+    concentration_history.append((np.array(u_data), np.array(v_data)))
     times.append(0.0)
 
     print("Starting Brusselator simulation:")
     print(f"  Domain: {Lx} × {Ly}")
     print(f"  Resolution: {nx} × {ny}")
-    print(f"  Diffusion: D_A = {D_A}, D_B = {D_B}")
+    print(f"  Diffusion: D_u = {D_u}, D_v = {D_v}")
     print(f"  Reaction: k₁ = {k1}, k₂ = {k2}")
-    print(f"  Steady state: A* = {k1:.4f}, B* = {k2 / k1:.4f}")
+    print(f"  Steady state: u* = {k1:.4f}, v* = {k2 / k1:.4f}")
     print(f"  Time: [0, {t_end}] with dt = {dt}")
     print(f"  Total steps: {n_steps}, saving every {save_every} steps")
 
@@ -231,39 +231,39 @@ def solve_brusselator(
         t = step * dt
 
         # Step 1: Half-step reaction (explicit Euler, dt/2)
-        A_val = A.values
-        B_val = B.values
-        R_A, R_B = brusselator_reaction(A_val, B_val, k1, k2)
-        A_val = math.maximum(A_val + (dt / 2) * R_A, 0.0)
-        B_val = math.maximum(B_val + (dt / 2) * R_B, 0.0)
-        A = CenteredGrid(A_val, extrapolation.PERIODIC, bounds=domain)
-        B = CenteredGrid(B_val, extrapolation.PERIODIC, bounds=domain)
+        u_val = u.values
+        v_val = v.values
+        R_u, R_v = brusselator_reaction(u_val, v_val, k1, k2)
+        u_val = math.maximum(u_val + (dt / 2) * R_u, 0.0)
+        v_val = math.maximum(v_val + (dt / 2) * R_v, 0.0)
+        u = CenteredGrid(u_val, extrapolation.PERIODIC, bounds=domain)
+        v = CenteredGrid(v_val, extrapolation.PERIODIC, bounds=domain)
 
         # Step 2: Full-step diffusion (implicit, unconditionally stable)
-        A = diffuse.implicit(A, D_A, dt, solve=Solve("CG", 1e-5, x0=None))
-        B = diffuse.implicit(B, D_B, dt, solve=Solve("CG", 1e-5, x0=None))
+        u = diffuse.implicit(u, D_u, dt, solve=Solve("CG", 1e-5, x0=None))
+        v = diffuse.implicit(v, D_v, dt, solve=Solve("CG", 1e-5, x0=None))
 
         # Step 3: Half-step reaction (explicit Euler, dt/2)
-        A_val = A.values
-        B_val = B.values
-        R_A, R_B = brusselator_reaction(A_val, B_val, k1, k2)
-        A_val = math.maximum(A_val + (dt / 2) * R_A, 0.0)
-        B_val = math.maximum(B_val + (dt / 2) * R_B, 0.0)
-        A = CenteredGrid(A_val, extrapolation.PERIODIC, bounds=domain)
-        B = CenteredGrid(B_val, extrapolation.PERIODIC, bounds=domain)
+        u_val = u.values
+        v_val = v.values
+        R_u, R_v = brusselator_reaction(u_val, v_val, k1, k2)
+        u_val = math.maximum(u_val + (dt / 2) * R_u, 0.0)
+        v_val = math.maximum(v_val + (dt / 2) * R_v, 0.0)
+        u = CenteredGrid(u_val, extrapolation.PERIODIC, bounds=domain)
+        v = CenteredGrid(v_val, extrapolation.PERIODIC, bounds=domain)
 
         # Save snapshot at specified intervals (only transfer to CPU here)
         if step % save_every == 0:
-            A_data = math.reshaped_native(A.values, ["y", "x"])
-            B_data = math.reshaped_native(B.values, ["y", "x"])
-            concentration_history.append((np.array(A_data), np.array(B_data)))
+            u_data = math.reshaped_native(u.values, ["y", "x"])
+            v_data = math.reshaped_native(v.values, ["y", "x"])
+            concentration_history.append((np.array(u_data), np.array(v_data)))
             times.append(t)
 
             if step % (save_every * 10) == 0:  # Progress update
-                A_mean = float(math.mean(A_val))
-                B_mean = float(math.mean(B_val))
+                u_mean = float(math.mean(u_val))
+                v_mean = float(math.mean(v_val))
                 print(
-                    f"  t = {t:.3f} / {t_end}  |  <A> = {A_mean:.4f}, <B> = {B_mean:.4f}"
+                    f"  t = {t:.3f} / {t_end}  |  <u> = {u_mean:.4f}, <v> = {v_mean:.4f}"
                 )
 
     print(f"Simulation complete. Saved {len(concentration_history)} snapshots.")
@@ -282,10 +282,10 @@ def solve_brusselator_with_params(
         ic_params: Dataclass or dict with keys:
             - 'type': IC type name
             - type-specific parameters
-            - OR 'A_init', 'B_init' for custom IC
+            - OR 'u_init', 'v_init' for custom IC
         simulation_params: Dataclass or dict with keys:
-            - 'D_A': Diffusion coefficient for A
-            - 'D_B': Diffusion coefficient for B
+            - 'D_u': Diffusion coefficient for u
+            - 'D_v': Diffusion coefficient for v
             - 'k1': Reaction rate constant
             - 'k2': Reaction rate constant
             - 'domain_size': (Lx, Ly)
@@ -296,7 +296,7 @@ def solve_brusselator_with_params(
 
     Returns:
         Dict containing:
-        - 'concentration_history': List of (A, B) tuples
+        - 'concentration_history': List of (u, v) tuples
         - 'times': Time values
         - 'x', 'y': Coordinate arrays
         - 'ic_params': Copy of IC parameters
@@ -327,17 +327,17 @@ def solve_brusselator_with_params(
 
     # Generate initial condition
     if ic_dict.get("type") == "custom":
-        A_init = ic_dict["A_init"]
-        B_init = ic_dict["B_init"]
+        u_init = ic_dict["u_init"]
+        v_init = ic_dict["v_init"]
         generated_params = {}
     else:
-        A_init, B_init, generated_params = create_brusselator_ic(ic_dict, x, y)
+        u_init, v_init, generated_params = create_brusselator_ic(ic_dict, x, y)
 
     # Solve Brusselator
     concentration_history, times, x_out, y_out = solve_brusselator(
-        initial_concentration=(A_init, B_init),
-        D_A=sim_dict["D_A"],
-        D_B=sim_dict["D_B"],
+        initial_concentration=(u_init, v_init),
+        D_u=sim_dict["D_u"],
+        D_v=sim_dict["D_v"],
         k1=sim_dict["k1"],
         k2=sim_dict["k2"],
         domain_size=sim_dict["domain_size"],

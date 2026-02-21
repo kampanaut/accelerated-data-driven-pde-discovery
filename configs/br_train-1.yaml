@@ -3,18 +3,18 @@
 #
 # NEW DESIGN: Tasks defined by IC (type + seed), parameters sampled randomly
 # - k2: sampled from [6.8, 7.6] (spans spots→stripes regimes)
-# - D_A: sampled from [1.5, 2.5] (±25% variation around standard 2.0)
-# - D_B: fixed at 16.0 (keep diffusion ratio stable)
+# - D_u: sampled from [1.5, 2.5] (±25% variation around standard 2.0)
+# - D_v: fixed at 16.0 (keep diffusion ratio stable)
 #
-# Turing threshold varies with D_A: k2_c = (1 + k1 * sqrt(D_A/D_B))^2
-# For D_A ∈ [1.5, 2.5], k2_c ∈ [6.43, 6.90], so k2 ∈ [6.8, 7.6] is always above threshold
+# Turing threshold varies with D_u: k2_c = (1 + k1 * sqrt(D_u/D_v))^2
+# For D_u ∈ [1.5, 2.5], k2_c ∈ [6.43, 6.90], so k2 ∈ [6.8, 7.6] is always above threshold
 
 simulation:
   name: "br_train-1"
 
   # Default parameters (may be overridden per-task)
-  D_A: 2.0
-  D_B: 16.0
+  D_u: 2.0
+  D_v: 16.0
   k1: 4.5
   k2: 7.0
 
@@ -32,80 +32,80 @@ output:
 
 # ============================================================================
 # Initial Conditions: 5 types × 12 seeds = 60 tasks
-# Each task samples k2 and D_A randomly from ranges (seeded for reproducibility)
+# Each task samples k2 and D_u randomly from ranges (seeded for reproducibility)
 # ============================================================================
 initial_conditions:
   # ========== perturbed_uniform (pu) - 12 tasks ==========
   # Canonical IC: uniform steady state + small random noise
-  - {name: "br_pu_001", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100001}
-  - {name: "br_pu_002", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100002}
-  - {name: "br_pu_003", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100003}
-  - {name: "br_pu_004", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100004}
-  - {name: "br_pu_005", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100005}
-  - {name: "br_pu_006", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100006}
-  - {name: "br_pu_007", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100007}
-  - {name: "br_pu_008", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100008}
-  - {name: "br_pu_009", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100009}
-  - {name: "br_pu_010", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100010}
-  - {name: "br_pu_011", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100011}
-  - {name: "br_pu_012", type: "perturbed_uniform", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100012}
+  - {name: "br_pu_001", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100001}
+  - {name: "br_pu_002", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100002}
+  - {name: "br_pu_003", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100003}
+  - {name: "br_pu_004", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100004}
+  - {name: "br_pu_005", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100005}
+  - {name: "br_pu_006", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100006}
+  - {name: "br_pu_007", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100007}
+  - {name: "br_pu_008", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100008}
+  - {name: "br_pu_009", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100009}
+  - {name: "br_pu_010", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100010}
+  - {name: "br_pu_011", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100011}
+  - {name: "br_pu_012", type: "perturbed_uniform", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, seed: 100012}
 
   # ========== random_smooth (rs) - 12 tasks ==========
   # Spatially correlated perturbations (Gaussian smoothed noise)
-  - {name: "br_rs_001", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200001}
-  - {name: "br_rs_002", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200002}
-  - {name: "br_rs_003", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200003}
-  - {name: "br_rs_004", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200004}
-  - {name: "br_rs_005", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200005}
-  - {name: "br_rs_006", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200006}
-  - {name: "br_rs_007", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200007}
-  - {name: "br_rs_008", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200008}
-  - {name: "br_rs_009", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200009}
-  - {name: "br_rs_010", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200010}
-  - {name: "br_rs_011", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200011}
-  - {name: "br_rs_012", type: "random_smooth", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200012}
+  - {name: "br_rs_001", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200001}
+  - {name: "br_rs_002", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200002}
+  - {name: "br_rs_003", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200003}
+  - {name: "br_rs_004", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200004}
+  - {name: "br_rs_005", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200005}
+  - {name: "br_rs_006", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200006}
+  - {name: "br_rs_007", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200007}
+  - {name: "br_rs_008", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200008}
+  - {name: "br_rs_009", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200009}
+  - {name: "br_rs_010", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200010}
+  - {name: "br_rs_011", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200011}
+  - {name: "br_rs_012", type: "random_smooth", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.05, smoothing_scale: 3.0, seed: 200012}
 
   # ========== localized_perturbation (lp) - 12 tasks ==========
   # Single circular patch of perturbation at domain center
-  - {name: "br_lp_001", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300001}
-  - {name: "br_lp_002", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300002}
-  - {name: "br_lp_003", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300003}
-  - {name: "br_lp_004", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300004}
-  - {name: "br_lp_005", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300005}
-  - {name: "br_lp_006", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300006}
-  - {name: "br_lp_007", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300007}
-  - {name: "br_lp_008", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300008}
-  - {name: "br_lp_009", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300009}
-  - {name: "br_lp_010", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300010}
-  - {name: "br_lp_011", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300011}
-  - {name: "br_lp_012", type: "localized_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300012}
+  - {name: "br_lp_001", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300001}
+  - {name: "br_lp_002", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300002}
+  - {name: "br_lp_003", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300003}
+  - {name: "br_lp_004", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300004}
+  - {name: "br_lp_005", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300005}
+  - {name: "br_lp_006", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300006}
+  - {name: "br_lp_007", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300007}
+  - {name: "br_lp_008", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300008}
+  - {name: "br_lp_009", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300009}
+  - {name: "br_lp_010", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300010}
+  - {name: "br_lp_011", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300011}
+  - {name: "br_lp_012", type: "localized_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, patch_center: [25.0, 25.0], patch_radius: 8.0, seed: 300012}
 
   # ========== multi_patch_perturbation (mp) - 12 tasks ==========
   # Multiple circular patches at random locations (analogous to NS multi_vortex)
-  - {name: "br_mp_001", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 400001}
-  - {name: "br_mp_002", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 400002}
-  - {name: "br_mp_003", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 400003}
-  - {name: "br_mp_004", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 400004}
-  - {name: "br_mp_005", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 400005}
-  - {name: "br_mp_006", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 400006}
-  - {name: "br_mp_007", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 400007}
-  - {name: "br_mp_008", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 400008}
-  - {name: "br_mp_009", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 400009}
-  - {name: "br_mp_010", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 6, patch_radius: 4.0, seed: 400010}
-  - {name: "br_mp_011", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 6, patch_radius: 4.0, seed: 400011}
-  - {name: "br_mp_012", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 6, patch_radius: 4.0, seed: 400012}
+  - {name: "br_mp_001", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 400001}
+  - {name: "br_mp_002", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 400002}
+  - {name: "br_mp_003", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 3, patch_radius: 6.0, seed: 400003}
+  - {name: "br_mp_004", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 400004}
+  - {name: "br_mp_005", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 400005}
+  - {name: "br_mp_006", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 4, patch_radius: 5.0, seed: 400006}
+  - {name: "br_mp_007", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 400007}
+  - {name: "br_mp_008", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 400008}
+  - {name: "br_mp_009", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 5, patch_radius: 4.5, seed: 400009}
+  - {name: "br_mp_010", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 6, patch_radius: 4.0, seed: 400010}
+  - {name: "br_mp_011", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 6, patch_radius: 4.0, seed: 400011}
+  - {name: "br_mp_012", type: "multi_patch_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], perturbation_amplitude: 0.10, n_patches: 6, patch_radius: 4.0, seed: 400012}
 
   # ========== gradient_perturbation (gp) - 12 tasks ==========
   # Sinusoidal gradient overlays (structured spatial variation)
-  - {name: "br_gp_001", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 2, seed: 500001}
-  - {name: "br_gp_002", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 2, seed: 500002}
-  - {name: "br_gp_003", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 2, seed: 500003}
-  - {name: "br_gp_004", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 3, seed: 500004}
-  - {name: "br_gp_005", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 3, seed: 500005}
-  - {name: "br_gp_006", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 3, seed: 500006}
-  - {name: "br_gp_007", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.12, n_modes: 4, seed: 500007}
-  - {name: "br_gp_008", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.12, n_modes: 4, seed: 500008}
-  - {name: "br_gp_009", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.12, n_modes: 4, seed: 500009}
-  - {name: "br_gp_010", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.10, n_modes: 5, seed: 500010}
-  - {name: "br_gp_011", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.10, n_modes: 5, seed: 500011}
-  - {name: "br_gp_012", type: "gradient_perturbation", k2: [6.8, 7.6], D_A: [1.5, 2.5], gradient_amplitude: 0.10, n_modes: 5, seed: 500012}
+  - {name: "br_gp_001", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 2, seed: 500001}
+  - {name: "br_gp_002", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 2, seed: 500002}
+  - {name: "br_gp_003", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 2, seed: 500003}
+  - {name: "br_gp_004", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 3, seed: 500004}
+  - {name: "br_gp_005", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 3, seed: 500005}
+  - {name: "br_gp_006", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.15, n_modes: 3, seed: 500006}
+  - {name: "br_gp_007", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.12, n_modes: 4, seed: 500007}
+  - {name: "br_gp_008", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.12, n_modes: 4, seed: 500008}
+  - {name: "br_gp_009", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.12, n_modes: 4, seed: 500009}
+  - {name: "br_gp_010", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.10, n_modes: 5, seed: 500010}
+  - {name: "br_gp_011", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.10, n_modes: 5, seed: 500011}
+  - {name: "br_gp_012", type: "gradient_perturbation", k2: [6.8, 7.6], D_u: [1.5, 2.5], gradient_amplitude: 0.10, n_modes: 5, seed: 500012}

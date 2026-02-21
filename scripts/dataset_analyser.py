@@ -42,11 +42,7 @@ def load_fourier_fields(npz_path: Path) -> dict:
         "times": data["times"],
     }
 
-    if "A_hat" in keys:
-        result["field1_hat"] = data["A_hat"]
-        result["field2_hat"] = data["B_hat"]
-        result["n_fields"] = 2
-    elif "u_hat" in keys and "v_hat" in keys:
+    if "u_hat" in keys and "v_hat" in keys:
         result["field1_hat"] = data["u_hat"]
         result["field2_hat"] = data["v_hat"]
         result["n_fields"] = 2

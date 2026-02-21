@@ -215,22 +215,22 @@ class BrusselatorTask(PDETask):
     """
     Brusselator PDE task (Fourier-native).
 
-    Stores A_hat/B_hat FFT coefficients. Targets computed from PDE RHS
+    Stores u_hat/v_hat FFT coefficients. Targets computed from PDE RHS
     (self-consistent with features).
 
-    Diffusion coefficients: D_u (for species A/u), D_v (for species B/v)
+    Diffusion coefficients: D_u, D_v
     Reaction coefficients: k1, k2
     """
 
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
-        self.n_snapshots = data["A_hat"].shape[0]
-        self.ny, self.nx = data["A_hat"].shape[1], data["A_hat"].shape[2]
-        self.A_hat = torch.tensor(data["A_hat"], dtype=torch.complex128, device=self.device)
-        self.B_hat = torch.tensor(data["B_hat"], dtype=torch.complex128, device=self.device)
+        self.n_snapshots = data["u_hat"].shape[0]
+        self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.device)
 
     def _extract_pde_params(self) -> None:
-        self.D_u = self.simulation_params.get("D_A") or self.ic_config.get("D_A_used")
-        self.D_v = self.simulation_params.get("D_B") or self.ic_config.get("D_B_used")
+        self.D_u = self.simulation_params.get("D_u") or self.ic_config.get("D_u_used")
+        self.D_v = self.simulation_params.get("D_v") or self.ic_config.get("D_v_used")
         self.k1 = self.simulation_params.get("k1")
         self.k2 = self.simulation_params.get("k2")
 
@@ -253,8 +253,8 @@ class BrusselatorTask(PDETask):
         from src.data.fourier_eval import evaluate_br_features
 
         return evaluate_br_features(
-            self.A_hat[snap_idx],
-            self.B_hat[snap_idx],
+            self.u_hat[snap_idx],
+            self.v_hat[snap_idx],
             self.kx,
             self.ky,
             E_x,

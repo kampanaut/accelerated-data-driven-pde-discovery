@@ -5,8 +5,8 @@
 simulation:
   name: "br_val-1"
 
-  D_A: 2.0
-  D_B: 16.0
+  D_u: 2.0
+  D_v: 16.0
   k1: 4.5
   k2: 7.0
 

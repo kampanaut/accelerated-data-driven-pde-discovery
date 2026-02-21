@@ -3,7 +3,7 @@ Initial conditions for Brusselator reaction-diffusion system.
 
 Based on literature review:
 - Turing patterns emerge from small random perturbations around steady state
-- The IC shape matters less than the parameter regime (k1, k2, D_A, D_B)
+- The IC shape matters less than the parameter regime (k1, k2, D_u, D_v)
 - Canonical approach: u = a + ε*noise, v = b/a + ε*noise
 
 References:
@@ -11,12 +11,12 @@ References:
 - Peña & Pérez-García (2001) "Stability of Turing patterns in the Brusselator model"
 - PMC4006638: Simulations of pattern dynamics for reaction-diffusion systems
 
-All ICs return (A, B, params_dict) where:
-- A, B: 2D numpy arrays of shape (ny, nx)
+All ICs return (u, v, params_dict) where:
+- u, v: 2D numpy arrays of shape (ny, nx)
 - params_dict: Dictionary of generated parameters (for reproducibility logging)
 
-Brusselator steady state: A* = k1, B* = k2/k1
-Turing threshold: k2_c = (1 + k1 * sqrt(D_A/D_B))^2
+Brusselator steady state: u* = k1, v* = k2/k1
+Turing threshold: k2_c = (1 + k1 * sqrt(D_u/D_v))^2
 Pattern forms when k2 > k2_c
 """
 
@@ -25,21 +25,21 @@ from typing import Tuple, Dict, Optional
 from scipy.ndimage import gaussian_filter
 
 
-def compute_turing_threshold(k1: float, D_A: float, D_B: float) -> float:
+def compute_turing_threshold(k1: float, D_u: float, D_v: float) -> float:
     """
     Compute the Turing bifurcation threshold for k2.
 
     Pattern formation occurs when k2 > threshold.
 
     Args:
-        k1: Reaction parameter (steady state A* = k1)
-        D_A: Diffusion coefficient for A
-        D_B: Diffusion coefficient for B
+        k1: Reaction parameter (steady state u* = k1)
+        D_u: Diffusion coefficient for u
+        D_v: Diffusion coefficient for v
 
     Returns:
         k2_threshold: Critical value of k2 for Turing instability
     """
-    return (1 + k1 * np.sqrt(D_A / D_B)) ** 2
+    return (1 + k1 * np.sqrt(D_u / D_v)) ** 2
 
 
 def perturbed_uniform_ic(
@@ -58,20 +58,20 @@ def perturbed_uniform_ic(
     any small random perturbation will do"
 
     Args:
-        k1, k2: Reaction parameters (define steady state A*=k1, B*=k2/k1)
+        k1, k2: Reaction parameters (define steady state u*=k1, v*=k2/k1)
         perturbation_amplitude: Amplitude of random perturbations (fraction of steady state)
                                Literature uses ~0.05-0.10 (5-10%)
         x, y: Coordinate arrays
         seed: Random seed for reproducibility
 
     Returns:
-        (A, B, params_dict)
+        (u, v, params_dict)
     """
     rng = np.random.default_rng(seed)
 
     # Steady state values
-    A_star = k1
-    B_star = k2 / k1
+    u_star = k1
+    v_star = k2 / k1
 
     # Create meshgrid
     X, _ = np.meshgrid(x, y) # X, Y
@@ -79,24 +79,24 @@ def perturbed_uniform_ic(
 
     # Add small random perturbations around steady state
     # Literature form: u = a + ε * random(-1, 1)
-    A = A_star + perturbation_amplitude * A_star * (2 * rng.random((ny, nx)) - 1)
-    B = B_star + perturbation_amplitude * B_star * (2 * rng.random((ny, nx)) - 1)
+    u = u_star + perturbation_amplitude * u_star * (2 * rng.random((ny, nx)) - 1)
+    v = v_star + perturbation_amplitude * v_star * (2 * rng.random((ny, nx)) - 1)
 
     # Ensure non-negative
-    A = np.maximum(A, 1e-6)
-    B = np.maximum(B, 1e-6)
+    u = np.maximum(u, 1e-6)
+    v = np.maximum(v, 1e-6)
 
     params = {
         'type': 'perturbed_uniform',
         'k1': k1,
         'k2': k2,
-        'A_star': A_star,
-        'B_star': B_star,
+        'u_star': u_star,
+        'v_star': v_star,
         'perturbation_amplitude': perturbation_amplitude,
         'seed': seed
     }
 
-    return A, B, params
+    return u, v, params
 
 
 def random_smooth_ic(
@@ -122,49 +122,49 @@ def random_smooth_ic(
         seed: Random seed for reproducibility
 
     Returns:
-        (A, B, params_dict)
+        (u, v, params_dict)
     """
     rng = np.random.default_rng(seed)
 
     # Steady state values
-    A_star = k1
-    B_star = k2 / k1
+    u_star = k1
+    v_star = k2 / k1
 
     # Create meshgrid
     X, _ = np.meshgrid(x, y) # X, Y
     ny, nx = X.shape
 
     # Generate smooth random fields
-    noise_A = rng.standard_normal((ny, nx))
-    noise_B = rng.standard_normal((ny, nx))
+    noise_u = rng.standard_normal((ny, nx))
+    noise_v = rng.standard_normal((ny, nx))
 
-    smooth_A = gaussian_filter(noise_A, sigma=smoothing_scale, mode='wrap')
-    smooth_B = gaussian_filter(noise_B, sigma=smoothing_scale, mode='wrap')
+    smooth_u = gaussian_filter(noise_u, sigma=smoothing_scale, mode='wrap')
+    smooth_v = gaussian_filter(noise_v, sigma=smoothing_scale, mode='wrap')
 
     # Normalize to unit variance then scale
-    smooth_A = smooth_A / (np.std(smooth_A) + 1e-8) * perturbation_amplitude * A_star
-    smooth_B = smooth_B / (np.std(smooth_B) + 1e-8) * perturbation_amplitude * B_star
+    smooth_u = smooth_u / (np.std(smooth_u) + 1e-8) * perturbation_amplitude * u_star
+    smooth_v = smooth_v / (np.std(smooth_v) + 1e-8) * perturbation_amplitude * v_star
 
     # Add to steady state
-    A = A_star + smooth_A
-    B = B_star + smooth_B
+    u = u_star + smooth_u
+    v = v_star + smooth_v
 
     # Ensure non-negative
-    A = np.maximum(A, 1e-6)
-    B = np.maximum(B, 1e-6)
+    u = np.maximum(u, 1e-6)
+    v = np.maximum(v, 1e-6)
 
     params = {
         'type': 'random_smooth',
         'k1': k1,
         'k2': k2,
-        'A_star': A_star,
-        'B_star': B_star,
+        'u_star': u_star,
+        'v_star': v_star,
         'perturbation_amplitude': perturbation_amplitude,
         'smoothing_scale': smoothing_scale,
         'seed': seed
     }
 
-    return A, B, params
+    return u, v, params
 
 
 def localized_perturbation_ic(
@@ -192,13 +192,13 @@ def localized_perturbation_ic(
         seed: Random seed
 
     Returns:
-        (A, B, params_dict)
+        (u, v, params_dict)
     """
     rng = np.random.default_rng(seed)
 
     # Steady state values
-    A_star = k1
-    B_star = k2 / k1
+    u_star = k1
+    v_star = k2 / k1
 
     # Create meshgrid
     X, Y = np.meshgrid(x, y)
@@ -206,8 +206,8 @@ def localized_perturbation_ic(
     cx, cy = patch_center
 
     # Start at exact steady state
-    A = np.full((ny, nx), A_star)
-    B = np.full((ny, nx), B_star)
+    u = np.full((ny, nx), u_star)
+    v = np.full((ny, nx), v_star)
 
     # Create mask for perturbation region
     r = np.sqrt((X - cx)**2 + (Y - cy)**2)
@@ -215,26 +215,26 @@ def localized_perturbation_ic(
 
     # Add perturbations only inside the patch
     n_perturbed = int(np.sum(mask))
-    A[mask] += perturbation_amplitude * A_star * (2 * rng.random(n_perturbed) - 1)
-    B[mask] += perturbation_amplitude * B_star * (2 * rng.random(n_perturbed) - 1)
+    u[mask] += perturbation_amplitude * u_star * (2 * rng.random(n_perturbed) - 1)
+    v[mask] += perturbation_amplitude * v_star * (2 * rng.random(n_perturbed) - 1)
 
     # Ensure non-negative
-    A = np.maximum(A, 1e-6)
-    B = np.maximum(B, 1e-6)
+    u = np.maximum(u, 1e-6)
+    v = np.maximum(v, 1e-6)
 
     params = {
         'type': 'localized_perturbation',
         'k1': k1,
         'k2': k2,
-        'A_star': A_star,
-        'B_star': B_star,
+        'u_star': u_star,
+        'v_star': v_star,
         'perturbation_amplitude': perturbation_amplitude,
         'patch_center': patch_center,
         'patch_radius': patch_radius,
         'seed': seed
     }
 
-    return A, B, params
+    return u, v, params
 
 
 def multi_patch_perturbation_ic(
@@ -262,13 +262,13 @@ def multi_patch_perturbation_ic(
         seed: Random seed
 
     Returns:
-        (A, B, params_dict)
+        (u, v, params_dict)
     """
     rng = np.random.default_rng(seed)
 
     # Steady state values
-    A_star = k1
-    B_star = k2 / k1
+    u_star = k1
+    v_star = k2 / k1
 
     # Create meshgrid
     X, Y = np.meshgrid(x, y)
@@ -276,8 +276,8 @@ def multi_patch_perturbation_ic(
     # Lx, Ly = x[-1] - x[0], y[-1] - y[0]
 
     # Start at exact steady state
-    A = np.full((ny, nx), A_star)
-    B = np.full((ny, nx), B_star)
+    u = np.full((ny, nx), u_star)
+    v = np.full((ny, nx), v_star)
 
     # Generate random patch centers (avoid edges)
     margin = patch_radius * 1.5
@@ -294,19 +294,19 @@ def multi_patch_perturbation_ic(
         mask = r < patch_radius
 
         n_perturbed = int(np.sum(mask))
-        A[mask] += perturbation_amplitude * A_star * (2 * rng.random(n_perturbed) - 1)
-        B[mask] += perturbation_amplitude * B_star * (2 * rng.random(n_perturbed) - 1)
+        u[mask] += perturbation_amplitude * u_star * (2 * rng.random(n_perturbed) - 1)
+        v[mask] += perturbation_amplitude * v_star * (2 * rng.random(n_perturbed) - 1)
 
     # Ensure non-negative
-    A = np.maximum(A, 1e-6)
-    B = np.maximum(B, 1e-6)
+    u = np.maximum(u, 1e-6)
+    v = np.maximum(v, 1e-6)
 
     params = {
         'type': 'multi_patch_perturbation',
         'k1': k1,
         'k2': k2,
-        'A_star': A_star,
-        'B_star': B_star,
+        'u_star': u_star,
+        'v_star': v_star,
         'perturbation_amplitude': perturbation_amplitude,
         'n_patches': n_patches,
         'patch_radius': patch_radius,
@@ -314,7 +314,7 @@ def multi_patch_perturbation_ic(
         'seed': seed
     }
 
-    return A, B, params
+    return u, v, params
 
 
 def gradient_perturbation_ic(
@@ -334,7 +334,7 @@ def gradient_perturbation_ic(
     ICs that may bias toward certain pattern modes.
 
     The perturbation is a sum of random sinusoidal modes:
-        δA = Σ a_i * sin(k_xi * x + k_yi * y + φ_i)
+        δu = Σ a_i * sin(k_xi * x + k_yi * y + φ_i)
 
     Args:
         k1, k2: Reaction parameters
@@ -344,13 +344,13 @@ def gradient_perturbation_ic(
         seed: Random seed
 
     Returns:
-        (A, B, params_dict)
+        (u, v, params_dict)
     """
     rng = np.random.default_rng(seed)
 
     # Steady state values
-    A_star = k1
-    B_star = k2 / k1
+    u_star = k1
+    v_star = k2 / k1
 
     # Create meshgrid
     X, Y = np.meshgrid(x, y)
@@ -358,8 +358,8 @@ def gradient_perturbation_ic(
     Lx, Ly = x[-1] - x[0], y[-1] - y[0]
 
     # Initialize perturbations
-    delta_A = np.zeros((ny, nx))
-    delta_B = np.zeros((ny, nx))
+    delta_u = np.zeros((ny, nx))
+    delta_v = np.zeros((ny, nx))
 
     # Generate random modes
     modes = []
@@ -371,48 +371,48 @@ def gradient_perturbation_ic(
         ky = 2 * np.pi * n_waves_y / Ly
 
         # Random phases and amplitudes
-        phase_A = rng.uniform(0, 2 * np.pi)
-        phase_B = rng.uniform(0, 2 * np.pi)
-        amp_A = rng.uniform(0.5, 1.5)  # Relative amplitude variation
-        amp_B = rng.uniform(0.5, 1.5)
+        phase_u = rng.uniform(0, 2 * np.pi)
+        phase_v = rng.uniform(0, 2 * np.pi)
+        amp_u = rng.uniform(0.5, 1.5)  # Relative amplitude variation
+        amp_v = rng.uniform(0.5, 1.5)
 
-        delta_A += amp_A * np.sin(kx * X + ky * Y + phase_A)
-        delta_B += amp_B * np.sin(kx * X + ky * Y + phase_B)
+        delta_u += amp_u * np.sin(kx * X + ky * Y + phase_u)
+        delta_v += amp_v * np.sin(kx * X + ky * Y + phase_v)
 
         modes.append({
             'n_waves_x': int(n_waves_x),
             'n_waves_y': int(n_waves_y),
-            'phase_A': phase_A,
-            'phase_B': phase_B,
-            'amp_A': amp_A,
-            'amp_B': amp_B
+            'phase_u': phase_u,
+            'phase_v': phase_v,
+            'amp_u': amp_u,
+            'amp_v': amp_v
         })
 
     # Normalize and scale
-    delta_A = delta_A / n_modes * gradient_amplitude * A_star
-    delta_B = delta_B / n_modes * gradient_amplitude * B_star
+    delta_u = delta_u / n_modes * gradient_amplitude * u_star
+    delta_v = delta_v / n_modes * gradient_amplitude * v_star
 
     # Apply to steady state
-    A = A_star + delta_A
-    B = B_star + delta_B
+    u = u_star + delta_u
+    v = v_star + delta_v
 
     # Ensure non-negative
-    A = np.maximum(A, 1e-6)
-    B = np.maximum(B, 1e-6)
+    u = np.maximum(u, 1e-6)
+    v = np.maximum(v, 1e-6)
 
     params = {
         'type': 'gradient_perturbation',
         'k1': k1,
         'k2': k2,
-        'A_star': A_star,
-        'B_star': B_star,
+        'u_star': u_star,
+        'v_star': v_star,
         'gradient_amplitude': gradient_amplitude,
         'n_modes': n_modes,
         'modes': modes,
         'seed': seed
     }
 
-    return A, B, params
+    return u, v, params
 
 
 def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict]:
@@ -424,7 +424,7 @@ def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tupl
         x, y: Coordinate arrays
 
     Returns:
-        (A, B, params_dict)
+        (u, v, params_dict)
     """
     ic_type = ic_config['type']
 
