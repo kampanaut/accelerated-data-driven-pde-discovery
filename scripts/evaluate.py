@@ -146,7 +146,6 @@ def evaluate_task(
     max_steps: int,
     device: str,
     seed: int,
-    clean_targets: bool = False,
     holdout_size: int = 1000,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
@@ -162,7 +161,6 @@ def evaluate_task(
         max_steps: Number of fine-tuning steps
         device: Device to run on
         seed: Base random seed
-        clean_targets: If True, use clean targets with noisy features
         holdout_size: Number of samples for holdout evaluation (disjoint from support)
 
     Returns:
@@ -182,27 +180,34 @@ def evaluate_task(
     samples = {}
 
     for k_idx, k in enumerate(k_values):
+        # Evaluate Fourier ONCE per (task, K) — same collocation points for all noise levels
+        k_seed = seed + k_idx * 100
+        available_for_holdout = task.n_samples - k
+        actual_holdout = min(holdout_size, available_for_holdout)
+
+        support_clean, holdout_clean = task.get_support_query_split(
+            K_shot=k, query_size=actual_holdout, seed=k_seed,
+        )
+
         for noise_idx, noise in enumerate(noise_levels):
             combo_key = f"k_{k}_noise_{noise:.2f}"
-            combo_seed = seed + k_idx * 100 + noise_idx
 
             print(f"    K={k:4d}, noise={noise:.0%}...", end=" ", flush=True)
 
             try:
-                # Determine holdout size (cap at available samples minus K)
-                available_for_holdout = task.n_samples - k
-                actual_holdout = min(holdout_size, available_for_holdout)
-
-                # Sample K support points + holdout set (disjoint)
-                support, holdout = task.get_support_query_split(
-                    K_shot=k,
-                    query_size=actual_holdout,
-                    seed=combo_seed,
-                    noise_level=noise,
-                    clean_targets=clean_targets,
-                )
-                features, targets = support
-                holdout_features, holdout_targets = holdout
+                # Inject noise (or use clean data directly)
+                if noise == 0.0:
+                    features, targets = support_clean
+                    holdout_features, holdout_targets = holdout_clean
+                else:
+                    noise_gen = torch.Generator(device=device)
+                    noise_gen.manual_seed(k_seed + noise_idx)
+                    feat_s, tgt_s = support_clean[0].clone(), support_clean[1].clone()
+                    feat_h, tgt_h = holdout_clean[0].clone(), holdout_clean[1].clone()
+                    feat_s, tgt_s = task.inject_noise(feat_s, tgt_s, noise, generator=noise_gen)
+                    feat_h, tgt_h = task.inject_noise(feat_h, tgt_h, noise, generator=noise_gen)
+                    features, targets = feat_s, tgt_s
+                    holdout_features, holdout_targets = feat_h, tgt_h
 
                 # Fine-tune from θ* (MAML)
                 maml_model = copy.deepcopy(theta_star)
@@ -466,141 +471,132 @@ def main():
     print()
 
     # =========================================================================
-    # Run evaluation (both noisy and clean target modes)
+    # Run evaluation
     # =========================================================================
-    target_modes = [
-        ("noisy_targets", False),  # Noisy features + noisy targets
-        # ("clean_targets", True),    # Noisy features + clean targets
-    ]
+    print("=" * 60)
+    print("Running evaluation: w/ noisy targets on noise injected holdouts")
+    print("=" * 60)
+    print()
 
-    for mode_name, clean_targets in target_modes:
-        print("=" * 60)
-        print(f"Running evaluation: {mode_name}")
-        print("=" * 60)
-        print()
+    holdout_size = eval_cfg.get("holdout_size", 1000)
 
-        holdout_size = eval_cfg.get("holdout_size", 1000)
+    results: Dict[str, Any] = {
+        "experiment_name": exp_name,
+        "timestamp": datetime.now().isoformat(),
+        "config": {
+            "k_values": k_values,
+            "noise_levels": noise_levels,
+            "fine_tune_lr": fine_tune_lr,
+            "max_steps": max_steps,
+            "threshold": eval_cfg.get("threshold", 1e-6),
+            "fixed_steps": eval_cfg.get("fixed_steps", [50, 100, 200]),
+            "holdout_size": holdout_size,
+            "pde_type": pde_type,
+        },
+        "tasks": {},
+    }
 
-        results = {
-            "experiment_name": exp_name,
-            "timestamp": datetime.now().isoformat(),
-            "target_mode": mode_name,
-            "config": {
-                "k_values": k_values,
-                "noise_levels": noise_levels,
-                "fine_tune_lr": fine_tune_lr,
-                "max_steps": max_steps,
-                "threshold": eval_cfg.get("threshold", 1e-6),
-                "fixed_steps": eval_cfg.get("fixed_steps", [50, 100, 200]),
-                "clean_targets": clean_targets,
-                "holdout_size": holdout_size,
-                "pde_type": pde_type,
-            },
-            "tasks": {},
-        }
+    # Create samples directory
+    eval_dir = exp_dir / "evaluation"
+    samples_dir = eval_dir / "samples"
+    samples_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create samples directory
-        eval_dir = exp_dir / "evaluation" / mode_name
-        samples_dir = eval_dir / "samples"
-        samples_dir.mkdir(parents=True, exist_ok=True)
+    # Track holdout losses by IC type for summary
+    holdout_by_ic: Dict[str, list] = {}
 
-        # Track holdout losses by IC type for summary
-        holdout_by_ic = {}  # ic_type -> list of (maml_final, baseline_final, task_name, combo_key)
+    for task_idx, task in enumerate(test_loader.tasks):
+        print(f"[{task_idx + 1}/{len(test_loader)}] Task: {task.task_name}")
 
-        for task_idx, task in enumerate(test_loader.tasks):
-            print(f"[{task_idx + 1}/{len(test_loader)}] Task: {task.task_name}")
+        task_result, task_samples = evaluate_task(
+            task=task,
+            theta_star=theta_star,
+            theta_0=theta_0,
+            k_values=k_values,
+            noise_levels=noise_levels,
+            fine_tune_lr=fine_tune_lr,
+            max_steps=max_steps,
+            device=device,
+            seed=seed + task_idx * 10000,
+            holdout_size=holdout_size,
+        )
 
-            task_result, task_samples = evaluate_task(
-                task=task,
-                theta_star=theta_star,
-                theta_0=theta_0,
-                k_values=k_values,
-                noise_levels=noise_levels,
-                fine_tune_lr=fine_tune_lr,
-                max_steps=max_steps,
-                device=device,
-                seed=seed + task_idx * 10000,
-                clean_targets=clean_targets,
-                holdout_size=holdout_size,
-            )
+        # Save task metadata to results dict
+        results["tasks"][task.task_name] = task_result
 
-            # Save task metadata to results dict
-            results["tasks"][task.task_name] = task_result
+        # Save samples to NPZ
+        if task_samples:
+            samples_path = samples_dir / f"{task.task_name}.npz"
+            np.savez_compressed(samples_path, **task_samples)
 
-            # Save samples to NPZ
-            if task_samples:
-                samples_path = samples_dir / f"{task.task_name}.npz"
-                np.savez_compressed(samples_path, **task_samples)
+        # Collect holdout losses by IC type
+        ic_type = task_result.get("ic_type", "unknown")
+        if ic_type not in holdout_by_ic:
+            holdout_by_ic[ic_type] = []
 
-            # Collect holdout losses by IC type
-            ic_type = task_result.get("ic_type", "unknown")
-            if ic_type not in holdout_by_ic:
-                holdout_by_ic[ic_type] = []
+        for key in task_samples.keys():
+            if not key.endswith("/maml_holdout_losses"):
+                continue
+            combo = key.rsplit("/", 1)[0]  # e.g., "k_100_noise_0.01"
+            # Parse K and noise from combo key
+            parts = combo.split("_")  # ['k', '100', 'noise', '0.01']
+            k_val = int(parts[1])
+            noise_val = float(parts[3])
 
-            for key in task_samples.keys():
-                if not key.endswith("/maml_holdout_losses"):
-                    continue
-                combo = key.rsplit("/", 1)[0]  # e.g., "k_100_noise_0.01"
-                # Parse K and noise from combo key
-                parts = combo.split("_")  # ['k', '100', 'noise', '0.01']
-                k_val = int(parts[1])
-                noise_val = float(parts[3])
-
-                maml_holdout = task_samples.get(f"{combo}/maml_holdout_losses")
-                baseline_holdout = task_samples.get(f"{combo}/baseline_holdout_losses")
-                if maml_holdout is not None and baseline_holdout is not None:
-                    holdout_by_ic[ic_type].append(
-                        {
-                            "maml_final": float(maml_holdout[-1]),
-                            "baseline_final": float(baseline_holdout[-1]),
-                            "task": task.task_name,
-                            "k": k_val,
-                            "noise": noise_val,
-                        }
-                    )
-
-            print()
-
-        # Save metadata JSON
-        results_path = eval_dir / "results.json"
-        with open(results_path, "w") as f:
-            json.dump(results, f, indent=2)
-
-        print(f"Saved metadata to: {results_path}")
-        print(f"Saved samples to: {samples_dir}")
-        print()
-
-        # Print holdout summary by IC type
-        print("-" * 60)
-        print("Holdout Loss Summary by IC Type")
-        print("-" * 60)
-        for ic_type, entries in sorted(holdout_by_ic.items()):
-            maml_losses = [e["maml_final"] for e in entries]
-            baseline_losses = [e["baseline_final"] for e in entries]
-            maml_mean = np.mean(maml_losses)
-            baseline_mean = np.mean(baseline_losses)
-
-            # Flag if MAML worse than baseline on average
-            flag = " *** MAML WORSE ***" if maml_mean > baseline_mean else ""
-            print(
-                f"  {ic_type}: MAML={maml_mean:.2e}, Baseline={baseline_mean:.2e}{flag}"
-            )
-
-            # List individual cases where MAML underperforms
-            underperformers = [
-                e for e in entries if e["maml_final"] > e["baseline_final"]
-            ]
-            if underperformers:
-                print(
-                    f"    Underperforming cases ({len(underperformers)}/{len(entries)}):"
+            maml_holdout = task_samples.get(f"{combo}/maml_holdout_losses")
+            baseline_holdout = task_samples.get(f"{combo}/baseline_holdout_losses")
+            if maml_holdout is not None and baseline_holdout is not None:
+                holdout_by_ic[ic_type].append(
+                    {
+                        "maml_final": float(maml_holdout[-1]),
+                        "baseline_final": float(baseline_holdout[-1]),
+                        "task": task.task_name,
+                        "k": k_val,
+                        "noise": noise_val,
+                    }
                 )
-                for e in underperformers[:5]:  # Show at most 5
-                    print(
-                        f"      {e['task']} K={e['k']} noise={e['noise']:.0%}: MAML={e['maml_final']:.2e} > Baseline={e['baseline_final']:.2e}"
-                    )
-                if len(underperformers) > 5:
-                    print(f"      ... and {len(underperformers) - 5} more")
+
         print()
+
+    # Save metadata JSON
+    results_path = eval_dir / "results.json"
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2)
+
+    print(f"Saved metadata to: {results_path}")
+    print(f"Saved samples to: {samples_dir}")
+    print()
+
+    # Print holdout summary by IC type
+    print("-" * 60)
+    print("Holdout Loss Summary by IC Type")
+    print("-" * 60)
+    for ic_type, entries in sorted(holdout_by_ic.items()):
+        maml_losses = [e["maml_final"] for e in entries]
+        baseline_losses = [e["baseline_final"] for e in entries]
+        maml_mean = np.mean(maml_losses)
+        baseline_mean = np.mean(baseline_losses)
+
+        # Flag if MAML worse than baseline on average
+        flag = " *** MAML WORSE ***" if maml_mean > baseline_mean else ""
+        print(
+            f"  {ic_type}: MAML={maml_mean:.2e}, Baseline={baseline_mean:.2e}{flag}"
+        )
+
+        # List individual cases where MAML underperforms
+        underperformers = [
+            e for e in entries if e["maml_final"] > e["baseline_final"]
+        ]
+        if underperformers:
+            print(
+                f"    Underperforming cases ({len(underperformers)}/{len(entries)}):"
+            )
+            for e in underperformers[:5]:  # Show at most 5
+                print(
+                    f"      {e['task']} K={e['k']} noise={e['noise']:.0%}: MAML={e['maml_final']:.2e} > Baseline={e['baseline_final']:.2e}"
+                )
+            if len(underperformers) > 5:
+                print(f"      ... and {len(underperformers) - 5} more")
+    print()
 
     # =========================================================================
     # Summary
@@ -609,11 +605,9 @@ def main():
     print("Evaluation complete!")
     print("=" * 60)
     print()
-    print("Results saved to:")
-    for mode_name, _ in target_modes:
-        print(f"  {exp_dir / 'evaluation' / mode_name}/")
-        print("    - results.json (metadata)")
-        print("    - samples/*.npz (per-combo arrays)")
+    print(f"Results saved to: {eval_dir}/")
+    print("  - results.json (metadata)")
+    print("  - samples/*.npz (per-combo arrays)")
     print()
     print("Next steps:")
     print(f"  python scripts/visualize.py --config {args.config}")

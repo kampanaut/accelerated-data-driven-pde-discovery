@@ -137,24 +137,29 @@ class PDETask(ABC):
         pass
 
     @abstractmethod
-    def _inject_noise(
+    def inject_noise(
         self,
         features: torch.Tensor,
         targets: torch.Tensor,
         noise_level: float,
-        clean_targets: bool,
+        generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Inject noise into features (and optionally targets).
+        Inject proportional noise into features and recompute targets.
+
+        Targets are recomputed from noisy features via the PDE RHS so that
+        noise propagates self-consistently through the physics. For PDEs
+        where targets can't be recomputed (e.g. NS with implicit pressure),
+        independent proportional noise is added to targets instead.
 
         Args:
-            features: (N, 10) float32
-            targets: (N, 2) float32
+            features: (N, n_features) float32
+            targets: (N, n_targets) float32
             noise_level: Proportional noise level
-            clean_targets: If True, don't modify targets
+            generator: Optional seeded generator for reproducibility
 
         Returns:
-            (noisy_features, noisy_or_clean_targets)
+            (noisy_features, recomputed_targets)
         """
         pass
 
@@ -175,11 +180,10 @@ class PDETask(ABC):
         K_shot: int,
         query_size: int,
         seed: Optional[int] = None,
-        noise_level: float = 0.0,
-        clean_targets: bool = False,
     ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
         """
         Generate support/query data at random collocation points.
+        Returns clean data — noise injection is the caller's responsibility.
         Everything stays on GPU — no numpy, no host transfers.
         """
         n_total = K_shot + query_size
@@ -222,12 +226,6 @@ class PDETask(ABC):
             )
             all_features[mask_idx] = feats
             all_targets[mask_idx] = tgts
-
-        # Inject noise if requested
-        if noise_level > 0.0:
-            all_features, all_targets = self._inject_noise(
-                all_features, all_targets, noise_level, clean_targets
-            )
 
         support = (all_features[:K_shot], all_targets[:K_shot])
         query = (all_features[K_shot:], all_targets[K_shot:])
@@ -300,27 +298,25 @@ class BrusselatorTask(PDETask):
             self.k2,
         )
 
-    def _inject_noise(
+    def inject_noise(
         self,
         features: torch.Tensor,
         targets: torch.Tensor,
         noise_level: float,
-        clean_targets: bool,
+        generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Proportional noise on features
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn_like(features) * (noise_level * feat_std)
+        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
         features = features + noise
 
-        if not clean_targets:
-            # Recompute targets from noisy features via PDE RHS (self-consistent)
-            u, v = features[:, 0], features[:, 1]
-            u_xx, u_yy = features[:, 4], features[:, 5]
-            v_xx, v_yy = features[:, 8], features[:, 9]
-            a_sq_b = u**2 * v
-            u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + a_sq_b
-            v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - a_sq_b
-            targets = torch.stack([u_t, v_t], dim=1)
+        # Recompute targets from noisy features via PDE RHS (self-consistent)
+        u, v = features[:, 0], features[:, 1]
+        u_xx, u_yy = features[:, 4], features[:, 5]
+        v_xx, v_yy = features[:, 8], features[:, 9]
+        a_sq_b = u**2 * v
+        u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + a_sq_b
+        v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - a_sq_b
+        targets = torch.stack([u_t, v_t], dim=1)
 
         return features, targets
 
@@ -407,25 +403,24 @@ class FitzHughNagumoTask(PDETask):
             self.b,
         )
 
-    def _inject_noise(
+    def inject_noise(
         self,
         features: torch.Tensor,
         targets: torch.Tensor,
         noise_level: float,
-        clean_targets: bool,
+        generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn_like(features) * (noise_level * feat_std)
+        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
         features = features + noise
 
-        if not clean_targets:
-            # Recompute targets from noisy features via FHN RHS
-            u, v = features[:, 0], features[:, 1]
-            u_xx, u_yy = features[:, 4], features[:, 5]
-            v_xx, v_yy = features[:, 8], features[:, 9]
-            u_t = self.D_u * (u_xx + u_yy) + u - u ** 3 - v
-            v_t = self.D_v * (v_xx + v_yy) + self.eps * (u - self.a * v - self.b)
-            targets = torch.stack([u_t, v_t], dim=1)
+        # Recompute targets from noisy features via FHN RHS
+        u, v = features[:, 0], features[:, 1]
+        u_xx, u_yy = features[:, 4], features[:, 5]
+        v_xx, v_yy = features[:, 8], features[:, 9]
+        u_t = self.D_u * (u_xx + u_yy) + u - u ** 3 - v
+        v_t = self.D_v * (v_xx + v_yy) + self.eps * (u - self.a * v - self.b)
+        targets = torch.stack([u_t, v_t], dim=1)
 
         return features, targets
 
@@ -503,26 +498,25 @@ class LambdaOmegaTask(PDETask):
             self.c,
         )
 
-    def _inject_noise(
+    def inject_noise(
         self,
         features: torch.Tensor,
         targets: torch.Tensor,
         noise_level: float,
-        clean_targets: bool,
+        generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn_like(features) * (noise_level * feat_std)
+        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
         features = features + noise
 
-        if not clean_targets:
-            # Recompute targets from noisy features via Lambda-Omega RHS
-            u, v = features[:, 0], features[:, 1]
-            u_xx, u_yy = features[:, 4], features[:, 5]
-            v_xx, v_yy = features[:, 8], features[:, 9]
-            r2 = u ** 2 + v ** 2
-            u_t = self.D_u * (u_xx + u_yy) + self.a * u - (u + self.c * v) * r2
-            v_t = self.D_v * (v_xx + v_yy) + self.a * v + (self.c * u - v) * r2
-            targets = torch.stack([u_t, v_t], dim=1)
+        # Recompute targets from noisy features via Lambda-Omega RHS
+        u, v = features[:, 0], features[:, 1]
+        u_xx, u_yy = features[:, 4], features[:, 5]
+        v_xx, v_yy = features[:, 8], features[:, 9]
+        r2 = u ** 2 + v ** 2
+        u_t = self.D_u * (u_xx + u_yy) + self.a * u - (u + self.c * v) * r2
+        v_t = self.D_v * (v_xx + v_yy) + self.a * v + (self.c * u - v) * r2
+        targets = torch.stack([u_t, v_t], dim=1)
 
         return features, targets
 
@@ -582,24 +576,23 @@ class NavierStokesTask(PDETask):
             E_y,
         )
 
-    def _inject_noise(
+    def inject_noise(
         self,
         features: torch.Tensor,
         targets: torch.Tensor,
         noise_level: float,
-        clean_targets: bool,
+        generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Proportional noise on features
         feat_std = features.std(dim=0, keepdim=True)
-        feat_noise = torch.randn_like(features) * (noise_level * feat_std)
+        feat_noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
         features = features + feat_noise
 
-        if not clean_targets:
-            # Can't recompute targets from noisy features (pressure is implicit).
-            # Add proportional noise to targets independently.
-            tgt_std = targets.std(dim=0, keepdim=True)
-            tgt_noise = torch.randn_like(targets) * (noise_level * tgt_std)
-            targets = targets + tgt_noise
+        # Can't recompute targets from noisy features (pressure is implicit).
+        # Add proportional noise to targets independently.
+        tgt_std = targets.std(dim=0, keepdim=True)
+        tgt_noise = torch.randn(targets.shape, dtype=targets.dtype, device=targets.device, generator=generator) * (noise_level * tgt_std)
+        targets = targets + tgt_noise
 
         return features, targets
 
@@ -658,21 +651,21 @@ class HeatEquationTask(PDETask):
             self.D,
         )
 
-    def _inject_noise(
+    def inject_noise(
         self,
         features: torch.Tensor,
         targets: torch.Tensor,
         noise_level: float,
-        clean_targets: bool,
+        generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn_like(features) * (noise_level * feat_std)
+        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
         features = features + noise
 
-        if not clean_targets:
-            u_xx, u_yy = features[:, 3], features[:, 4]
-            u_t = self.D * (u_xx + u_yy)
-            targets = u_t.unsqueeze(1)
+        # Recompute targets from noisy features
+        u_xx, u_yy = features[:, 3], features[:, 4]
+        u_t = self.D * (u_xx + u_yy)
+        targets = u_t.unsqueeze(1)
 
         return features, targets
 
@@ -730,22 +723,22 @@ class NLHeatEquationTask(PDETask):
             self.K,
         )
 
-    def _inject_noise(
+    def inject_noise(
         self,
         features: torch.Tensor,
         targets: torch.Tensor,
         noise_level: float,
-        clean_targets: bool,
+        generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn_like(features) * (noise_level * feat_std)
+        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
         features = features + noise
 
-        if not clean_targets:
-            u = features[:, 0]
-            u_xx, u_yy = features[:, 3], features[:, 4]
-            u_t = self.K * (1 - u) * (u_xx + u_yy)
-            targets = u_t.unsqueeze(1)
+        # Recompute targets from noisy features
+        u = features[:, 0]
+        u_xx, u_yy = features[:, 3], features[:, 4]
+        u_t = self.K * (1 - u) * (u_xx + u_yy)
+        targets = u_t.unsqueeze(1)
 
         return features, targets
 

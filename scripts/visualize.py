@@ -1164,140 +1164,102 @@ def main():
     print()
 
     # =========================================================================
-    # Discover target modes (noisy_targets, clean_targets)
-    # =========================================================================
-    eval_base_dir = exp_dir / "evaluation"
-
-    if args.results is not None:
-        # User specified a specific results file
-        target_modes = [("custom", args.results, exp_dir / "figures")]
-    else:
-        # Auto-detect target mode directories
-        target_modes = []
-
-        # Check for new structure (separate subdirs)
-        # modes: List[str] = ["noisy_targets", "clean_targets"]
-        modes: List[str] = ["noisy_targets"]
-        for mode_name in modes:
-            mode_dir = eval_base_dir / mode_name
-            results_path = mode_dir / "results.json"
-            if results_path.exists():
-                target_modes.append(
-                    (mode_name, results_path, exp_dir / "figures" / mode_name)
-                )
-
-        # Fallback to old structure (single results.json)
-        if not target_modes:
-            old_results_path = eval_base_dir / "results.json"
-            if old_results_path.exists():
-                target_modes.append(("default", old_results_path, exp_dir / "figures"))
-
-        if not target_modes:
-            raise FileNotFoundError(
-                f"No results found in: {eval_base_dir}\nRun evaluate.py first."
-            )
-
-    print(f"Found {len(target_modes)} evaluation mode(s)")
-    print()
-
-    # =========================================================================
-    # Process each target mode
+    # Start processing
     # =========================================================================
     eval_cfg = config.get("evaluation", {})
     viz_cfg = config.get("visualization", {})
     dpi = viz_cfg.get("dpi", 150)
 
-    for mode_name, results_path, output_dir in target_modes:
-        print("=" * 60)
-        print(f"Processing: {mode_name}")
-        print("=" * 60)
+    eval_base_dir = exp_dir / "evaluation"
+    results_path = eval_base_dir / "results.json"
+    output_dir = exp_dir / "figures"
+
+    if not results_path.exists():
+        raise ValueError("Results doesn't exist!")
+
+
+    print("=" * 60)
+    print(f"Processing {results_path}")
+    print("=" * 60)
+    print()
+
+    # Load results
+    print("-" * 60)
+    print("Loading results...")
+    print("-" * 60)
+
+    results = load_results_with_samples(results_path)
+    print(f"Loaded from: {results_path}")
+    print(f"Tasks: {len(results['tasks'])}")
+    print()
+
+    # Get parameters
+    k_values: NDArray[np.integer[Any]] = np.array(
+        results["config"].get(
+            "k_values", eval_cfg.get("k_values", np.array([10, 50, 100, 500, 1000]))
+        )
+    )
+    noise_levels: NDArray[np.floating[Any]] = np.array(
+        results["config"].get(
+            "noise_levels",
+            eval_cfg.get("noise_levels", np.array([0.0, 0.01, 0.05, 0.10])),
+        )
+    )
+    fixed_steps: NDArray[np.integer[Any]] = np.array(
+        results["config"].get(
+            "fixed_steps", eval_cfg.get("fixed_steps", np.array([50, 100, 200]))
+        )
+    )
+    deriv_threshold = float(eval_cfg.get("deriv_threshold", 1e-7))
+    holdout_size = int(
+        results["config"].get("holdout_size", eval_cfg.get("holdout_size", 1000))
+    )
+    # Compute metrics
+    print("-" * 60)
+    print("Computing metrics...")
+    print("-" * 60)
+
+    all_metrics = compute_all_metrics(results, fixed_steps, deriv_threshold)
+    print(f"Computed metrics for {len(all_metrics)} tasks")
+    print()
+
+    # Generate figures
+    if not args.no_per_task:
+        print("-" * 60)
+        print("Generating per-task figures...")
+        print("-" * 60)
+        generate_per_task_figures(
+            results=results,
+            all_metrics=all_metrics,
+            k_values=k_values,
+            noise_levels=noise_levels,
+            fixed_steps=fixed_steps,
+            output_dir=output_dir,
+            dpi=dpi,
+            deriv_threshold=deriv_threshold,
+            holdout_size=holdout_size,
+        )
         print()
 
-        # Load results
+    if not args.no_aggregated:
         print("-" * 60)
-        print("Loading results...")
+        print("Generating aggregated figures...")
         print("-" * 60)
-
-        results = load_results_with_samples(results_path)
-        print(f"Loaded from: {results_path}")
-        print(f"Tasks: {len(results['tasks'])}")
+        generate_aggregated_figures(
+            results=results,
+            all_metrics=all_metrics,
+            k_values=k_values,
+            noise_levels=noise_levels,
+            fixed_steps=fixed_steps,
+            output_dir=output_dir,
+            dpi=dpi,
+            deriv_threshold=deriv_threshold,
+            holdout_size=holdout_size,
+        )
         print()
 
-        # Get parameters
-        k_values: NDArray[np.integer[Any]] = np.array(
-            results["config"].get(
-                "k_values", eval_cfg.get("k_values", np.array([10, 50, 100, 500, 1000]))
-            )
-        )
-        noise_levels: NDArray[np.floating[Any]] = np.array(
-            results["config"].get(
-                "noise_levels",
-                eval_cfg.get("noise_levels", np.array([0.0, 0.01, 0.05, 0.10])),
-            )
-        )
-        fixed_steps: NDArray[np.integer[Any]] = np.array(
-            results["config"].get(
-                "fixed_steps", eval_cfg.get("fixed_steps", np.array([50, 100, 200]))
-            )
-        )
-        deriv_threshold = float(eval_cfg.get("deriv_threshold", 1e-7))
-        holdout_size = int(
-            results["config"].get("holdout_size", eval_cfg.get("holdout_size", 1000))
-        )
-        # Format mode label for titles
-        # if mode_name == "noisy_targets":
-        #     mode_label = " [Noisy Targets]"
-        # elif mode_name == "clean_targets":
-        #     mode_label = " [Clean Targets]"
-        # else:
-        #     mode_label = ""
-
-        # Compute metrics
-        print("-" * 60)
-        print("Computing metrics...")
-        print("-" * 60)
-
-        all_metrics = compute_all_metrics(results, fixed_steps, deriv_threshold)
-        print(f"Computed metrics for {len(all_metrics)} tasks")
-        print()
-
-        # Generate figures
-        if not args.no_per_task:
-            print("-" * 60)
-            print("Generating per-task figures...")
-            print("-" * 60)
-            generate_per_task_figures(
-                results=results,
-                all_metrics=all_metrics,
-                k_values=k_values,
-                noise_levels=noise_levels,
-                fixed_steps=fixed_steps,
-                output_dir=output_dir,
-                dpi=dpi,
-                deriv_threshold=deriv_threshold,
-                holdout_size=holdout_size,
-            )
-            print()
-
-        if not args.no_aggregated:
-            print("-" * 60)
-            print("Generating aggregated figures...")
-            print("-" * 60)
-            generate_aggregated_figures(
-                results=results,
-                all_metrics=all_metrics,
-                k_values=k_values,
-                noise_levels=noise_levels,
-                fixed_steps=fixed_steps,
-                output_dir=output_dir,
-                dpi=dpi,
-                deriv_threshold=deriv_threshold,
-                holdout_size=holdout_size,
-            )
-            print()
-
-        print(f"Figures saved to: {output_dir}")
-        print()
+    print(f"Figures saved to: {output_dir}")
+    print()
 
     # =========================================================================
     # Summary
@@ -1306,9 +1268,8 @@ def main():
     print("Visualization complete!")
     print("=" * 60)
     print()
-    print("Output directories:")
-    for mode_name, _, output_dir in target_modes:
-        print(f"  {mode_name}: {output_dir}")
+    print("Output directory:")
+    print("\t" + output_dir)
     print()
 
 

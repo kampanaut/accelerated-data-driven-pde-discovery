@@ -42,9 +42,6 @@ class MAMLConfig:
     k_shot: int = 100  # Support set size for inner loop
     query_size: int = 1000  # Query set size for meta-gradient
 
-    # Noise (for robustness experiments)
-    noise_level: float = 0.0  # 0.0 = clean data
-
     # Training loop
     max_outer_iterations: int = 10000
     patience: int = 50  # Iterations before validation check
@@ -182,7 +179,6 @@ class MAMLTrainer:
             K_shot=self.config.k_shot,
             query_size=self.config.query_size,
             seed=seed,
-            noise_level=self.config.noise_level,
         )
 
         # Unpack tensors (already on device from task loader)
@@ -373,7 +369,6 @@ class MAMLTrainer:
         print(f"  Meta batch size: {self.config.meta_batch_size}")
         print(f"  K-shot: {self.config.k_shot}")
         print(f"  Query size: {self.config.query_size}")
-        print(f"  Noise level: {self.config.noise_level}")
         print(f"  FOMAML: {self.config.first_order}")
         if self.config.warmup_iterations > 0:
             print(f"  Warmup: {self.config.warmup_iterations} iterations")
