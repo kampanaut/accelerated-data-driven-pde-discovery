@@ -1,8 +1,11 @@
 """
-Nonlinear heat equation solver using PhiFlow.
+Nonlinear heat equation solver using Dedalus spectral methods.
 
 The nonlinear heat equation:
     u_t = K * (1 - u) * nabla^2(u)
+
+Rewritten as:
+    u_t = K * nabla^2(u) - K * u * nabla^2(u)
 
 where:
     u: scalar field
@@ -13,33 +16,18 @@ The (1 - u) factor makes diffusion state-dependent:
     - Where u approaches 1, diffusion shuts off
     - Where u > 1, diffusion reverses sign (anti-diffusion, can cause instabilities)
 
-Chris called this "deceptively hard" — same simplicity as the heat equation
-but the nonlinearity creates richer dynamics.
-
-Solver uses Strang splitting:
-    1. Half-step: apply the nonlinear correction factor (1 - u) as a "reaction"
-    2. Full-step: linear diffusion with coefficient K (implicit, stable)
-    3. Half-step: apply the nonlinear correction factor again
-
-More precisely, we split u_t = K*(1-u)*nabla^2(u) as:
-    - Diffusion part: u_t = K * nabla^2(u)
-    - Correction part: multiply the Laplacian contribution by (1-u)
-
-This is handled by doing linear diffusion then correcting, rather than
-a clean reaction/diffusion split. An alternative is to use small explicit
-timesteps for the full nonlinear equation.
+IMEX splitting:
+    LHS (implicit): K * nabla^2(u) — linear diffusion
+    RHS (explicit): -K * u * nabla^2(u) — nonlinear correction
 """
 
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
+import dedalus.public as d3
 from dataclasses import dataclass, asdict
 from typing import Tuple, List, Optional, Any, cast
-
-from phi.field import CenteredGrid
-from phi.geom import Box
-from phi.math import spatial, extrapolation
-from phi.physics import diffuse
-from phiml.math._optimize import Solve
-from phi import math
 
 
 @dataclass
@@ -63,18 +51,16 @@ def solve_nl_heat(
     save_interval: Optional[float] = None,
 ) -> Tuple[List[np.ndarray], np.ndarray, np.ndarray, np.ndarray]:
     """
-    Solve 2D nonlinear heat equation u_t = K*(1-u)*nabla^2(u) using PhiFlow.
+    Solve 2D nonlinear heat equation u_t = K*(1-u)*nabla^2(u) using Dedalus.
 
-    Uses explicit Euler for the full nonlinear equation.
-    Small dt required for stability since the effective diffusion coefficient
-    K*(1-u) varies spatially.
+    IMEX: linear diffusion implicit (LHS), nonlinear correction explicit (RHS).
 
     Args:
         initial_field: 2D numpy array, shape (ny, nx)
         K: Diffusion coefficient
         domain_size: (Lx, Ly) physical domain size
         t_end: Final simulation time
-        dt: Timestep (keep small for stability)
+        dt: Timestep
         save_interval: Snapshot interval (None = every step)
 
     Returns:
@@ -87,26 +73,41 @@ def solve_nl_heat(
     ny, nx = initial_field.shape
     Lx, Ly = domain_size
 
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
-    domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[call-arg]
+    # --- Dedalus setup ---
+    coords = d3.CartesianCoordinates('x', 'y')
+    dist = d3.Distributor(coords, dtype=np.float64)
+    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
+    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
 
-    u_field = math.tensor(initial_field, spatial("y,x"))
-    u = CenteredGrid(u_field, extrapolation.PERIODIC, bounds=domain)
+    u = dist.Field(name='u', bases=(xbasis, ybasis))
+    u['g'] = initial_field
 
+    # IMEX: LHS = implicit linear, RHS = explicit nonlinear
+    #   u_t = K*lap(u) - K*u*lap(u)
+    #
+    # Rearranged:
+    #   dt(u) - K*lap(u) = -K*u*lap(u)
+    problem = d3.IVP([u], namespace={'u': u, 'K': K})
+    problem.add_equation("dt(u) - K*lap(u) = -K*u*lap(u)")
+    solver = problem.build_solver(d3.RK222)
+    solver.stop_sim_time = t_end
+
+    # --- Snapshot loop ---
     field_history: List[np.ndarray] = []
     times: List[float] = []
 
     if save_interval is None:
         save_interval = dt
 
-    n_steps = int(t_end / dt)
     save_every = max(1, int(save_interval / dt))
+    step = 0
 
     # Save initial condition
-    u_data = math.reshaped_native(u.values, ["y", "x"])
-    field_history.append(np.array(u_data))
+    u.change_scales(1)
+    field_history.append(np.array(u['g']).copy())
     times.append(0.0)
 
     print("Starting nonlinear heat equation simulation:")
@@ -114,42 +115,19 @@ def solve_nl_heat(
     print(f"  Resolution: {nx} x {ny}")
     print(f"  Coefficient: K = {K}")
     print(f"  Time: [0, {t_end}] with dt = {dt}")
-    print(f"  Total steps: {n_steps}, saving every {save_every} steps")
 
-    # Strang splitting:
-    #   Half-step reaction: u -> u (no change, but we record u for the correction)
-    #   Full-step linear diffusion: u_t = K * nabla^2(u)
-    #   Apply correction: scale the diffusion increment by (1 - u_before)
-    #
-    # More precisely:
-    #   u_diffused = diffuse(u, K, dt)       # what linear diffusion would give
-    #   delta_u = u_diffused - u             # the diffusion increment
-    #   u_new = u + (1 - u) * delta_u        # scale by (1 - u)
-
-    for step in range(1, n_steps + 1):
-        t = step * dt
-
-        # Store current state
-        u_before = u
-
-        # Full-step linear diffusion
-        u_diffused = diffuse.implicit(u, K, dt, solve=Solve("CG", 1e-5, x0=None))
-
-        # Compute diffusion increment and apply nonlinear correction
-        delta_u = u_diffused.values - u_before.values
-        correction = (1.0 - u_before.values) * delta_u
-        u_new = u_before.values + correction
-
-        u = CenteredGrid(u_new, extrapolation.PERIODIC, bounds=domain)
+    while solver.proceed:
+        solver.step(dt)
+        step += 1
 
         if step % save_every == 0:
-            u_data = math.reshaped_native(u.values, ["y", "x"])
-            field_history.append(np.array(u_data))
-            times.append(t)
+            u.change_scales(1)
+            field_history.append(np.array(u['g']).copy())
+            times.append(solver.sim_time)
 
             if step % (save_every * 10) == 0:
-                u_mean = float(math.mean(u.values))
-                print(f"  t = {t:.3f} / {t_end}  |  <u> = {u_mean:.6f}")
+                u_mean = np.mean(u['g'])
+                print(f"  t = {solver.sim_time:.3f} / {t_end}  |  <u> = {u_mean:.6f}")
 
     print(f"Simulation complete. Saved {len(field_history)} snapshots.")
 
@@ -182,8 +160,8 @@ def solve_nl_heat_with_params(
     ny, nx = sim_dict["resolution"]
     Lx, Ly = sim_dict["domain_size"]
 
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
     generated_params: dict[str, Any]
     if ic_params.get("type") == "custom":

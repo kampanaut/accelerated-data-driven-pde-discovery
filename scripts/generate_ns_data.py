@@ -17,14 +17,7 @@ import sys
 import os
 from pathlib import Path
 
-# Default to CPU for stability (PhiFlow iterative solvers diverge more on GPU)
-# Use --gpu to opt into GPU execution
-if "--gpu" in sys.argv:
-    sys.argv.remove("--gpu")
-    # Clear JAX_PLATFORMS to let JAX auto-detect GPU
-    os.environ.pop("JAX_PLATFORMS", None)
-else:
-    os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
 import argparse
@@ -36,13 +29,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.pde.navier_stokes import solve_navier_stokes_with_params
 from src.utils.visualization import save_flow_evolution
 from src.data import initial_conditions_ns
-
-# Import for catching divergence errors
-try:
-    from phiml.math._optimize import Diverged
-except ImportError:
-    # Fallback if phiml structure changes
-    Diverged = Exception
 
 
 def generate_fourier_data(
@@ -356,7 +342,7 @@ def process_single_ic(args_tuple):
 
             return ("success", ic_name, None, attempt)
 
-        except Diverged:
+        except RuntimeError:
             print(f"{ic_name} Diverged")
             if attempt < max_retries - 1:
                 continue
@@ -600,7 +586,7 @@ def main():
                     successful += 1
                     break  # Success, exit retry loop
 
-                except Diverged as e:
+                except RuntimeError as e:
                     if attempt < max_retries - 1:
                         print("  ⚠️  Diverged, will retry...")
                         continue

@@ -1,29 +1,30 @@
 """
-Brusselator reaction-diffusion solver using PhiFlow.
+Brusselator reaction-diffusion solver using Dedalus spectral methods.
 
 The Brusselator model:
-    ∂u/∂t = D_u ∇²u + k₁ - (k₂ + 1)u + u²v
-    ∂v/∂t = D_v ∇²v + k₂u - u²v
+    u_t = D_u nabla^2(u) + k1 - (k2 + 1)*u + u^2*v
+    v_t = D_v nabla^2(v) + k2*u - u^2*v
 
 where:
     u, v: concentrations
     D_u, D_v: diffusion coefficients
-    k₁, k₂: reaction rate constants
+    k1, k2: reaction rate constants
 
-Steady state: u* = k₁, v* = k₂/k₁
+Steady state: u* = k1, v* = k2/k1
 Turing instability requires D_v > D_u and specific parameter relationships.
+
+IMEX splitting:
+    LHS (implicit): diffusion + linear reaction terms
+    RHS (explicit): nonlinear reaction terms (u^2*v)
 """
 
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
+import dedalus.public as d3
 from dataclasses import dataclass, asdict
 from typing import Tuple, List, Optional, TypedDict, Any, Union, cast
-
-from phi.field import CenteredGrid
-from phi.geom import Box
-from phi.math import spatial, extrapolation
-from phi.physics import diffuse
-from phiml.math._optimize import Solve
-from phi import math
 
 
 # =============================================================================
@@ -128,26 +129,6 @@ class SolverResult(TypedDict):
     generated_params: dict[str, Any]
 
 
-def brusselator_reaction(u, v, k1: float, k2: float):
-    """
-    Compute reaction terms for Brusselator.
-
-    R_u = k₁ - (k₂ + 1)u + u²v
-    R_v = k₂u - u²v
-
-    Args:
-        u, v: Concentration fields (numpy or JAX arrays)
-        k1, k2: Reaction rate constants
-
-    Returns:
-        (R_u, R_v): Reaction terms for each species (same type as input)
-    """
-    u_squared_v = u * u * v
-    R_u = k1 - (k2 + 1) * u + u_squared_v
-    R_v = k2 * u - u_squared_v
-    return R_u, R_v
-
-
 def solve_brusselator(
     initial_concentration: Tuple[np.ndarray, np.ndarray],
     D_u: float,
@@ -160,9 +141,9 @@ def solve_brusselator(
     save_interval: Optional[float] = None,
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """
-    Solve 2D Brusselator reaction-diffusion equations using PhiFlow.
+    Solve 2D Brusselator reaction-diffusion equations using Dedalus.
 
-    Uses operator splitting: diffusion (implicit, unconditionally stable) then reaction (explicit Euler).
+    IMEX splitting: linear terms implicit (LHS), nonlinear terms explicit (RHS).
 
     Args:
         initial_concentration: Tuple of (u, v) numpy arrays, shape (ny, nx)
@@ -186,84 +167,74 @@ def solve_brusselator(
     ny, nx = u_init.shape
     Lx, Ly = domain_size
 
-    # Create coordinate arrays
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
-    # Create domain box (PhiFlow uses **kwargs for dimension names)
-    domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[call-arg]
+    # --- Dedalus setup ---
+    coords = d3.CartesianCoordinates('x', 'y')
+    dist = d3.Distributor(coords, dtype=np.float64)
+    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
+    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
 
-    # Initialize concentration fields as CenteredGrids
-    u_field = math.tensor(u_init, spatial("y,x"))
-    v_field = math.tensor(v_init, spatial("y,x"))
+    u = dist.Field(name='u', bases=(xbasis, ybasis))
+    v = dist.Field(name='v', bases=(xbasis, ybasis))
+    u['g'] = u_init
+    v['g'] = v_init
 
-    u = CenteredGrid(u_field, extrapolation.PERIODIC, bounds=domain)
-    v = CenteredGrid(v_field, extrapolation.PERIODIC, bounds=domain)
+    # IMEX: LHS = implicit linear, RHS = explicit nonlinear
+    #   u_t = D_u*lap(u) + k1 - (k2+1)*u + u^2*v
+    #   v_t = D_v*lap(v) + k2*u - u^2*v
+    #
+    # Rearranged:
+    #   dt(u) - D_u*lap(u) + (k2+1)*u = k1 + u*u*v
+    #   dt(v) - D_v*lap(v)             = k2*u - u*u*v
+    problem = d3.IVP([u, v], namespace={'u': u, 'v': v, 'D_u': D_u, 'D_v': D_v, 'k1': k1, 'k2': k2})
+    problem.add_equation("dt(u) - D_u*lap(u) + (k2+1)*u = k1 + u*u*v")
+    problem.add_equation("dt(v) - D_v*lap(v) = k2*u - u*u*v")
+    solver = problem.build_solver(d3.RK222)
+    solver.stop_sim_time = t_end
 
-    # Initialize storage
-    concentration_history = []
-    times = []
+    # --- Snapshot loop ---
+    concentration_history: List[Tuple[np.ndarray, np.ndarray]] = []
+    times: List[float] = []
 
-    # Determine save frequency
     if save_interval is None:
         save_interval = dt
 
-    n_steps = int(t_end / dt)
     save_every = max(1, int(save_interval / dt))
+    step = 0
 
     # Save initial condition
-    u_data = math.reshaped_native(u.values, ["y", "x"])
-    v_data = math.reshaped_native(v.values, ["y", "x"])
-    concentration_history.append((np.array(u_data), np.array(v_data)))
+    u.change_scales(1)
+    v.change_scales(1)
+    concentration_history.append((np.array(u['g']).copy(), np.array(v['g']).copy()))
     times.append(0.0)
 
     print("Starting Brusselator simulation:")
-    print(f"  Domain: {Lx} × {Ly}")
-    print(f"  Resolution: {nx} × {ny}")
+    print(f"  Domain: {Lx} x {Ly}")
+    print(f"  Resolution: {nx} x {ny}")
     print(f"  Diffusion: D_u = {D_u}, D_v = {D_v}")
-    print(f"  Reaction: k₁ = {k1}, k₂ = {k2}")
-    print(f"  Steady state: u* = {k1:.4f}, v* = {k2 / k1:.4f}")
+    print(f"  Reaction: k1 = {k1}, k2 = {k2}")
+    print(f"  Steady state: u* = {k1:.4f}, v* = {(k2 / k1):.4f}")
     print(f"  Time: [0, {t_end}] with dt = {dt}")
-    print(f"  Total steps: {n_steps}, saving every {save_every} steps")
 
-    # Time integration loop (Strang splitting — O(dt²) splitting error)
-    for step in range(1, n_steps + 1):
-        t = step * dt
+    while solver.proceed:
+        solver.step(dt)
+        step += 1
 
-        # Step 1: Half-step reaction (explicit Euler, dt/2)
-        u_val = u.values
-        v_val = v.values
-        R_u, R_v = brusselator_reaction(u_val, v_val, k1, k2)
-        u_val = math.maximum(u_val + (dt / 2) * R_u, 0.0)
-        v_val = math.maximum(v_val + (dt / 2) * R_v, 0.0)
-        u = CenteredGrid(u_val, extrapolation.PERIODIC, bounds=domain)
-        v = CenteredGrid(v_val, extrapolation.PERIODIC, bounds=domain)
-
-        # Step 2: Full-step diffusion (implicit, unconditionally stable)
-        u = diffuse.implicit(u, D_u, dt, solve=Solve("CG", 1e-5, x0=None))
-        v = diffuse.implicit(v, D_v, dt, solve=Solve("CG", 1e-5, x0=None))
-
-        # Step 3: Half-step reaction (explicit Euler, dt/2)
-        u_val = u.values
-        v_val = v.values
-        R_u, R_v = brusselator_reaction(u_val, v_val, k1, k2)
-        u_val = math.maximum(u_val + (dt / 2) * R_u, 0.0)
-        v_val = math.maximum(v_val + (dt / 2) * R_v, 0.0)
-        u = CenteredGrid(u_val, extrapolation.PERIODIC, bounds=domain)
-        v = CenteredGrid(v_val, extrapolation.PERIODIC, bounds=domain)
-
-        # Save snapshot at specified intervals (only transfer to CPU here)
         if step % save_every == 0:
-            u_data = math.reshaped_native(u.values, ["y", "x"])
-            v_data = math.reshaped_native(v.values, ["y", "x"])
-            concentration_history.append((np.array(u_data), np.array(v_data)))
-            times.append(t)
+            u.change_scales(1)
+            v.change_scales(1)
+            concentration_history.append(
+                (np.array(u['g']).copy(), np.array(v['g']).copy())
+            )
+            times.append(solver.sim_time)
 
-            if step % (save_every * 10) == 0:  # Progress update
-                u_mean = float(math.mean(u_val))
-                v_mean = float(math.mean(v_val))
+            if step % (save_every * 10) == 0:
+                u_mean = np.mean(u['g'])
+                v_mean = np.mean(v['g'])
                 print(
-                    f"  t = {t:.3f} / {t_end}  |  <u> = {u_mean:.4f}, <v> = {v_mean:.4f}"
+                    f"  t = {solver.sim_time:.3f} / {t_end}  |  <u> = {u_mean:.4f}, <v> = {v_mean:.4f}"
                 )
 
     print(f"Simulation complete. Saved {len(concentration_history)} snapshots.")
@@ -322,8 +293,8 @@ def solve_brusselator_with_params(
     Lx, Ly = sim_dict["domain_size"]
 
     # Create coordinate arrays
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
     # Generate initial condition
     if ic_dict.get("type") == "custom":

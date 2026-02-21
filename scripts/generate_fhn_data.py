@@ -19,12 +19,7 @@ import sys
 import os
 from pathlib import Path
 
-# Default to CPU for stability
-if "--gpu" in sys.argv:
-    sys.argv.remove("--gpu")
-    os.environ.pop("JAX_PLATFORMS", None)
-else:
-    os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
 import argparse
@@ -38,11 +33,6 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.pde.fitzhugh_nagumo import solve_fhn_with_params
-
-try:
-    from phiml.math._optimize import Diverged
-except ImportError:
-    Diverged = Exception
 
 
 def generate_fourier_data(
@@ -301,7 +291,7 @@ def process_single_ic(args_tuple):
 
             return ("success", ic_name, None, attempt)
 
-        except Diverged:
+        except RuntimeError:
             if attempt < max_retries - 1:
                 continue
             return ("failed", ic_name, f"Diverged after {max_retries} attempts", max_retries)

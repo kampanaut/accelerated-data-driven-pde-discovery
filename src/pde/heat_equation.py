@@ -1,5 +1,5 @@
 """
-Heat equation solver using PhiFlow.
+Heat equation solver using Dedalus spectral methods.
 
 The heat equation:
     u_t = D * nabla^2(u)
@@ -12,16 +12,13 @@ The simplest possible PDE. No reaction, no nonlinearity.
 A Gaussian bump spreads out over time, smooth features decay exponentially.
 """
 
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
+import dedalus.public as d3
 from dataclasses import dataclass, asdict
 from typing import Tuple, List, Optional, Any, cast
-
-from phi.field import CenteredGrid
-from phi.geom import Box
-from phi.math import spatial, extrapolation
-from phi.physics import diffuse
-from phiml.math._optimize import Solve
-from phi import math
 
 
 @dataclass
@@ -45,10 +42,9 @@ def solve_heat(
     save_interval: Optional[float] = None,
 ) -> Tuple[List[np.ndarray], np.ndarray, np.ndarray, np.ndarray]:
     """
-    Solve 2D heat equation using PhiFlow implicit diffusion.
+    Solve 2D heat equation using Dedalus spectral methods.
 
-    No Strang splitting needed — there's no reaction term.
-    Just implicit diffusion each timestep.
+    Fully implicit (linear PDE) — unconditionally stable for any dt.
 
     Args:
         initial_field: 2D numpy array, shape (ny, nx)
@@ -68,26 +64,36 @@ def solve_heat(
     ny, nx = initial_field.shape
     Lx, Ly = domain_size
 
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
-    domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[call-arg]
+    # --- Dedalus setup ---
+    coords = d3.CartesianCoordinates('x', 'y')
+    dist = d3.Distributor(coords, dtype=np.float64)
+    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
+    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
 
-    u_field = math.tensor(initial_field, spatial("y,x"))
-    u = CenteredGrid(u_field, extrapolation.PERIODIC, bounds=domain)
+    u = dist.Field(name='u', bases=(xbasis, ybasis))
+    u['g'] = initial_field
 
+    problem = d3.IVP([u], namespace={'u': u, 'D': D})
+    problem.add_equation("dt(u) - D*lap(u) = 0")
+    solver = problem.build_solver(d3.RK222)
+    solver.stop_sim_time = t_end
+
+    # --- Snapshot loop ---
     field_history: List[np.ndarray] = []
     times: List[float] = []
 
     if save_interval is None:
         save_interval = dt
 
-    n_steps = int(t_end / dt)
     save_every = max(1, int(save_interval / dt))
+    step = 0
 
     # Save initial condition
-    u_data = math.reshaped_native(u.values, ["y", "x"])
-    field_history.append(np.array(u_data))
+    u.change_scales(1)
+    field_history.append(np.array(u['g']).copy())
     times.append(0.0)
 
     print("Starting heat equation simulation:")
@@ -95,22 +101,19 @@ def solve_heat(
     print(f"  Resolution: {nx} x {ny}")
     print(f"  Diffusion: D = {D}")
     print(f"  Time: [0, {t_end}] with dt = {dt}")
-    print(f"  Total steps: {n_steps}, saving every {save_every} steps")
 
-    for step in range(1, n_steps + 1):
-        t = step * dt
-
-        # Pure diffusion — no reaction step needed
-        u = diffuse.implicit(u, D, dt, solve=Solve("CG", 1e-5, x0=None))
+    while solver.proceed:
+        solver.step(dt)
+        step += 1
 
         if step % save_every == 0:
-            u_data = math.reshaped_native(u.values, ["y", "x"])
-            field_history.append(np.array(u_data))
-            times.append(t)
+            u.change_scales(1)
+            field_history.append(np.array(u['g']).copy())
+            times.append(solver.sim_time)
 
             if step % (save_every * 10) == 0:
-                u_mean = float(math.mean(u.values))
-                print(f"  t = {t:.3f} / {t_end}  |  <u> = {u_mean:.6f}")
+                u_mean = np.mean(u['g'])
+                print(f"  t = {solver.sim_time:.3f} / {t_end}  |  <u> = {u_mean:.6f}")
 
     print(f"Simulation complete. Saved {len(field_history)} snapshots.")
 
@@ -143,8 +146,8 @@ def solve_heat_with_params(
     ny, nx = sim_dict["resolution"]
     Lx, Ly = sim_dict["domain_size"]
 
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
     generated_params: dict[str, Any]
     if ic_params.get("type") == "custom":

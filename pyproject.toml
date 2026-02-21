@@ -6,12 +6,11 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "debugpy>=1.8.20",
+    "dedalus",
     "h5py>=3.15.1",
     "higher>=0.2.1",
-    "jax[cuda13]>=0.8.1",
     "matplotlib>=3.10.7",
     "numpy>=2.3.5",
-    "phiflow>=3.4.0",
     "pyyaml>=6.0.3",
     "scikit-learn>=1.8.0",
     "scipy>=1.16.3",

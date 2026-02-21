@@ -1,24 +1,30 @@
 """
-Navier-Stokes solver using PhiFlow.
+Navier-Stokes solver using Dedalus spectral methods.
 
-This module wraps PhiFlow's incompressible fluid simulation to solve
-2D Navier-Stokes equations with custom initial conditions.
+2D incompressible Navier-Stokes:
+    u_t + (u . grad)u = -grad(p) + nu * lap(u)
+    div(u) = 0
+
+where:
+    u: velocity vector field (u, v components)
+    p: pressure (enforces incompressibility)
+    nu: kinematic viscosity
+
+Dedalus handles pressure projection through the equation system —
+no separate projection step needed. The tau_p gauge variable
+pins the mean pressure to zero.
+
+IMEX splitting:
+    LHS (implicit): viscous diffusion + pressure gradient
+    RHS (explicit): nonlinear advection u . grad(u)
 """
 
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
+import dedalus.public as d3
 from typing import Tuple, List
-from phi.jax.flow import (
-    Box,
-    CenteredGrid,
-    Solve,
-    advect,
-    channel,
-    diffuse,
-    extrapolation,
-    fluid,
-    math,
-    spatial,
-)
 
 
 def solve_navier_stokes(
@@ -30,11 +36,11 @@ def solve_navier_stokes(
     save_interval: float,
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """
-    Solve 2D incompressible Navier-Stokes equations using PhiFlow.
+    Solve 2D incompressible Navier-Stokes equations using Dedalus.
 
     Solves:
-        u_t + (u·∇)u = -∇p + ν∇²u
-        ∇·u = 0
+        u_t + (u . grad)u = -grad(p) + nu * lap(u)
+        div(u) = 0
 
     Args:
         initial_velocity: Tuple of (u, v) numpy arrays, shape (ny, nx)
@@ -55,73 +61,68 @@ def solve_navier_stokes(
     ny, nx = u_init.shape
     Lx, Ly = domain_size
 
-    # Create coordinate arrays
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
-    # Convert initial velocity to PhiFlow format
-    # PhiFlow uses staggered grids where u and v are offset
-    # Create velocity as StaggeredGrid (proper way for vector fields in PhiFlow)
+    # --- Dedalus setup ---
+    coords = d3.CartesianCoordinates('x', 'y')
+    dist = d3.Distributor(coords, dtype=np.float64)
+    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
+    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
 
-    # Create a domain box
-    domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[reportCallIssue]
+    # Vector velocity field + scalar pressure + pressure gauge
+    u_vec = dist.VectorField(coords, name='u', bases=(xbasis, ybasis))
+    p = dist.Field(name='p', bases=(xbasis, ybasis))
+    tau_p = dist.Field(name='tau_p')
 
-    # Create initial velocity as StaggeredGrid from numpy arrays
-    # StaggeredGrid expects a callable or specific format
-    # Easier approach: use CenteredGrid with tensor wrapper
-    velocity_field = math.tensor(
-        np.stack([u_init, v_init], axis=-1), spatial("y,x"), channel("vector")
-    )
+    # Set initial velocity: component 0 = x-velocity, component 1 = y-velocity
+    u_vec['g'][0] = u_init
+    u_vec['g'][1] = v_init
 
-    velocity = CenteredGrid(velocity_field, extrapolation.PERIODIC, bounds=domain)
+    # IMEX: LHS = implicit (viscosity + pressure), RHS = explicit (advection)
+    #   dt(u) + grad(p) - nu*lap(u) = -(u . grad)(u)
+    #   div(u) + tau_p = 0
+    #   integ(p) = 0
+    problem = d3.IVP([u_vec, p, tau_p], namespace={'u': u_vec, 'p': p, 'tau_p': tau_p, 'nu': nu})
+    problem.add_equation("dt(u) + grad(p) - nu*lap(u) = -u@grad(u)")
+    problem.add_equation("div(u) + tau_p = 0")
+    problem.add_equation("integ(p) = 0")
+    solver = problem.build_solver(d3.RK222)
+    solver.stop_sim_time = t_end
 
-    # Initialize storage
-    velocity_history = []
-    times = []
+    # --- Snapshot loop ---
+    velocity_history: List[Tuple[np.ndarray, np.ndarray]] = []
+    times: List[float] = []
 
-    n_steps = int(t_end / dt)
     save_every = max(1, int(save_interval / dt))
+    step = 0
 
     # Save initial condition
-    vel_data = math.reshaped_native(velocity.values, ["y", "x", "vector"])
-    velocity_history.append((vel_data[..., 0], vel_data[..., 1]))
+    u_vec.change_scales(1)
+    velocity_history.append(
+        (np.array(u_vec['g'][0]).copy(), np.array(u_vec['g'][1]).copy())
+    )
     times.append(0.0)
 
     print("Starting Navier-Stokes simulation:")
-    print(f"  Domain: {Lx} × {Ly}")
-    print(f"  Resolution: {nx} × {ny}")
-    print(f"  Viscosity: ν = {nu}")
+    print(f"  Domain: {Lx} x {Ly}")
+    print(f"  Resolution: {nx} x {ny}")
+    print(f"  Viscosity: nu = {nu}")
     print(f"  Time: [0, {t_end}] with dt = {dt}")
-    print(f"  Total steps: {n_steps}, saving every {save_every} steps")
 
-    # Time integration loop
-    for step in range(1, n_steps + 1):
-        t = step * dt
+    while solver.proceed:
+        solver.step(dt)
+        step += 1
 
-        # PhiFlow's incompressible Navier-Stokes step:
-        # 1. Advection: move velocity along itself
-        # 2. Diffusion: apply viscous diffusion
-        # 3. Pressure projection: enforce incompressibility
-
-        # Advection (semi-Lagrangian)
-        velocity = advect.semi_lagrangian(velocity, velocity, dt)
-
-        # Diffusion
-        velocity = diffuse.explicit(velocity, nu, dt)
-
-        # Pressure projection (make incompressible)
-        velocity, _ = fluid.make_incompressible(  # returns (velocity, pressure)
-            velocity, (), Solve("auto", 1e-5, x0=None)
-        )
-
-        # Save snapshot at specified intervals
         if step % save_every == 0:
-            vel_data = math.reshaped_native(velocity.values, ["y", "x", "vector"])
-            velocity_history.append((vel_data[..., 0], vel_data[..., 1]))
-            times.append(t)
+            u_vec.change_scales(1)
+            velocity_history.append(
+                (np.array(u_vec['g'][0]).copy(), np.array(u_vec['g'][1]).copy())
+            )
+            times.append(solver.sim_time)
 
-            if step % (save_every * 5) == 0:  # Progress update
-                print(f"  t = {t:.3f} / {t_end}")
+            if step % (save_every * 5) == 0:
+                print(f"  t = {solver.sim_time:.3f} / {t_end}")
 
     print(f"Simulation complete. Saved {len(velocity_history)} snapshots.")
 
@@ -156,10 +157,7 @@ def solve_navier_stokes_with_params(ic_params: dict, simulation_params: dict) ->
     # Generate initial condition
     ic_type = ic_params["type"]
 
-    if (
-        ic_type == "custom"
-    ):  # TODO: Very bad looking. Works, but we could make it look prettier
-        # Directly use provided velocity fields
+    if ic_type == "custom":
         u_init = ic_params["u_init"]
         v_init = ic_params["v_init"]
     else:

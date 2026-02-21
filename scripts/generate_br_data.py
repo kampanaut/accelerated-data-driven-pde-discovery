@@ -17,16 +17,9 @@ import sys
 import os
 from pathlib import Path
 
-from mpl_toolkits.mplot3d import Axes3D
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-# Default to CPU for stability (PhiFlow iterative solvers diverge more on GPU)
-# Use --gpu to opt into GPU execution
-if "--gpu" in sys.argv:
-    sys.argv.remove("--gpu")
-    os.environ["JAX_PLATFORMS"] = "cuda"
-elif os.environ.get("JAX_PLATFORMS") != "cuda":
-    # Only default to CPU if parent didn't already set GPU
-    os.environ["JAX_PLATFORMS"] = "cpu"
+from mpl_toolkits.mplot3d import Axes3D
 
 import numpy as np
 import argparse

@@ -1,5 +1,5 @@
 """
-FitzHugh-Nagumo reaction-diffusion solver using PhiFlow.
+FitzHugh-Nagumo reaction-diffusion solver using Dedalus spectral methods.
 
 The FitzHugh-Nagumo model:
     u_t = D_u * nabla^2(u) + u - u^3 - v           (activator, fast)
@@ -16,18 +16,19 @@ where:
 Steady state for b=0: (u*, v*) = (0, 0)
 Excitable regime produces spiral waves with broadband spatial spectra,
 structurally different from Brusselator's Turing patterns.
+
+IMEX splitting:
+    LHS (implicit): diffusion + linear damping of v (eps*a*v)
+    RHS (explicit): nonlinear terms (u - u^3 - v, eps*(u - b))
 """
 
+import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
+import dedalus.public as d3
 from dataclasses import dataclass, asdict
 from typing import Tuple, List, Optional, Any, cast
-
-from phi.field import CenteredGrid
-from phi.geom import Box
-from phi.math import spatial, extrapolation
-from phi.physics import diffuse
-from phiml.math._optimize import Solve
-from phi import math
 
 
 # =============================================================================
@@ -52,32 +53,6 @@ class FHNSimParams:
 
 
 # =============================================================================
-# Reaction function
-# =============================================================================
-
-
-def fhn_reaction(u, v, eps: float, a: float, b: float):
-    """
-    Compute reaction terms for FitzHugh-Nagumo.
-
-    R_u = u - u^3 - v
-    R_v = eps * (u - a*v - b)
-
-    Args:
-        u, v: Field values (PhiFlow tensors or numpy arrays)
-        eps: Timescale separation
-        a: Recovery coupling
-        b: Excitability threshold
-
-    Returns:
-        (R_u, R_v): Reaction terms
-    """
-    R_u = u - u * u * u - v
-    R_v = eps * (u - a * v - b)
-    return R_u, R_v
-
-
-# =============================================================================
 # Solver
 # =============================================================================
 
@@ -95,9 +70,9 @@ def solve_fhn(
     save_interval: Optional[float] = None,
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """
-    Solve 2D FitzHugh-Nagumo reaction-diffusion equations using PhiFlow.
+    Solve 2D FitzHugh-Nagumo reaction-diffusion equations using Dedalus.
 
-    Uses Strang splitting: half-reaction -> full diffusion -> half-reaction.
+    IMEX splitting: linear terms implicit (LHS), nonlinear terms explicit (RHS).
 
     Args:
         initial_fields: Tuple of (u, v) numpy arrays, shape (ny, nx)
@@ -122,30 +97,51 @@ def solve_fhn(
     ny, nx = u_init.shape
     Lx, Ly = domain_size
 
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
-    domain = Box(x=(0, Lx), y=(0, Ly))  # type: ignore[call-arg]
+    # --- Dedalus setup ---
+    coords = d3.CartesianCoordinates('x', 'y')
+    dist = d3.Distributor(coords, dtype=np.float64)
+    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
+    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
 
-    u_field = math.tensor(u_init, spatial("y,x"))
-    v_field = math.tensor(v_init, spatial("y,x"))
+    u = dist.Field(name='u', bases=(xbasis, ybasis))
+    v = dist.Field(name='v', bases=(xbasis, ybasis))
+    u['g'] = u_init
+    v['g'] = v_init
 
-    u = CenteredGrid(u_field, extrapolation.PERIODIC, bounds=domain)
-    v = CenteredGrid(v_field, extrapolation.PERIODIC, bounds=domain)
+    # IMEX: LHS = implicit linear, RHS = explicit nonlinear
+    #   u_t = D_u*lap(u) + u - u^3 - v
+    #   v_t = D_v*lap(v) + eps*(u - a*v - b)
+    #
+    # Rearranged:
+    #   dt(u) - D_u*lap(u)           = u - u*u*u - v
+    #   dt(v) - D_v*lap(v) + eps*a*v = eps*(u - b)
+    #
+    # Note: eps*a*v is linear in v, so it goes on LHS for implicit stability.
+    # u's linear term (+u) has positive sign (destabilizing), so we leave it
+    # on the RHS — implicit treatment of a positive-definite term doesn't help.
+    problem = d3.IVP([u, v], namespace={'u': u, 'v': v, 'D_u': D_u, 'D_v': D_v, 'eps': eps, 'a': a, 'b': b})
+    problem.add_equation("dt(u) - D_u*lap(u) = u - u*u*u - v")
+    problem.add_equation("dt(v) - D_v*lap(v) + eps*a*v = eps*(u - b)")
+    solver = problem.build_solver(d3.RK222)
+    solver.stop_sim_time = t_end
 
-    field_history = []
-    times = []
+    # --- Snapshot loop ---
+    field_history: List[Tuple[np.ndarray, np.ndarray]] = []
+    times: List[float] = []
 
     if save_interval is None:
         save_interval = dt
 
-    n_steps = int(t_end / dt)
     save_every = max(1, int(save_interval / dt))
+    step = 0
 
     # Save initial condition
-    u_data = math.reshaped_native(u.values, ["y", "x"])
-    v_data = math.reshaped_native(v.values, ["y", "x"])
-    field_history.append((np.array(u_data), np.array(v_data)))
+    u.change_scales(1)
+    v.change_scales(1)
+    field_history.append((np.array(u['g']).copy(), np.array(v['g']).copy()))
     times.append(0.0)
 
     print("Starting FitzHugh-Nagumo simulation:")
@@ -154,46 +150,24 @@ def solve_fhn(
     print(f"  Diffusion: D_u = {D_u}, D_v = {D_v}")
     print(f"  Kinetics: eps = {eps}, a = {a}, b = {b}")
     print(f"  Time: [0, {t_end}] with dt = {dt}")
-    print(f"  Total steps: {n_steps}, saving every {save_every} steps")
 
-    # Time integration loop (Strang splitting)
-    for step in range(1, n_steps + 1):
-        t = step * dt
+    while solver.proceed:
+        solver.step(dt)
+        step += 1
 
-        # Step 1: Half-step reaction (explicit Euler, dt/2)
-        u_val = u.values
-        v_val = v.values
-        R_u, R_v = fhn_reaction(u_val, v_val, eps, a, b)
-        u_val = u_val + (dt / 2) * R_u
-        v_val = v_val + (dt / 2) * R_v
-        u = CenteredGrid(u_val, extrapolation.PERIODIC, bounds=domain)
-        v = CenteredGrid(v_val, extrapolation.PERIODIC, bounds=domain)
-
-        # Step 2: Full-step diffusion (implicit, unconditionally stable)
-        u = diffuse.implicit(u, D_u, dt, solve=Solve("CG", 1e-5, x0=None))
-        v = diffuse.implicit(v, D_v, dt, solve=Solve("CG", 1e-5, x0=None))
-
-        # Step 3: Half-step reaction (explicit Euler, dt/2)
-        u_val = u.values
-        v_val = v.values
-        R_u, R_v = fhn_reaction(u_val, v_val, eps, a, b)
-        u_val = u_val + (dt / 2) * R_u
-        v_val = v_val + (dt / 2) * R_v
-        u = CenteredGrid(u_val, extrapolation.PERIODIC, bounds=domain)
-        v = CenteredGrid(v_val, extrapolation.PERIODIC, bounds=domain)
-
-        # Save snapshot
         if step % save_every == 0:
-            u_data = math.reshaped_native(u.values, ["y", "x"])
-            v_data = math.reshaped_native(v.values, ["y", "x"])
-            field_history.append((np.array(u_data), np.array(v_data)))
-            times.append(t)
+            u.change_scales(1)
+            v.change_scales(1)
+            field_history.append(
+                (np.array(u['g']).copy(), np.array(v['g']).copy())
+            )
+            times.append(solver.sim_time)
 
             if step % (save_every * 10) == 0:
-                u_mean = float(math.mean(u_val))
-                v_mean = float(math.mean(v_val))
+                u_mean = np.mean(u['g'])
+                v_mean = np.mean(v['g'])
                 print(
-                    f"  t = {t:.3f} / {t_end}  |  <u> = {u_mean:.4f}, <v> = {v_mean:.4f}"
+                    f"  t = {solver.sim_time:.3f} / {t_end}  |  <u> = {u_mean:.4f}, <v> = {v_mean:.4f}"
                 )
 
     print(f"Simulation complete. Saved {len(field_history)} snapshots.")
@@ -227,8 +201,8 @@ def solve_fhn_with_params(
     ny, nx = sim_dict["resolution"]
     Lx, Ly = sim_dict["domain_size"]
 
-    x = np.linspace(0, Lx, nx)
-    y = np.linspace(0, Ly, ny)
+    x = np.linspace(0, Lx, nx, endpoint=False)
+    y = np.linspace(0, Ly, ny, endpoint=False)
 
     generated_params: dict[str, Any]
     if ic_params.get("type") == "custom":
