@@ -19,6 +19,7 @@ IMEX splitting:
 """
 
 import os
+
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
@@ -172,15 +173,15 @@ def solve_brusselator(
     y = np.linspace(0, Ly, ny, endpoint=False)
 
     # --- Dedalus setup ---
-    coords = d3.CartesianCoordinates('x', 'y')
+    coords = d3.CartesianCoordinates("x", "y")
     dist = d3.Distributor(coords, dtype=np.float64)
-    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
-    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
+    xbasis = d3.RealFourier(coords["x"], size=nx, bounds=(0, Lx), dealias=3 / 2)
+    ybasis = d3.RealFourier(coords["y"], size=ny, bounds=(0, Ly), dealias=3 / 2)
 
-    u = dist.Field(name='u', bases=(xbasis, ybasis))
-    v = dist.Field(name='v', bases=(xbasis, ybasis))
-    u['g'] = u_init
-    v['g'] = v_init
+    u = dist.Field(name="u", bases=(xbasis, ybasis))
+    v = dist.Field(name="v", bases=(xbasis, ybasis))
+    u["g"] = u_init
+    v["g"] = v_init
 
     # IMEX: LHS = implicit linear, RHS = explicit nonlinear
     #   u_t = D_u*lap(u) + k1 - (k2+1)*u + u^2*v
@@ -189,7 +190,9 @@ def solve_brusselator(
     # Rearranged:
     #   dt(u) - D_u*lap(u) + (k2+1)*u = k1 + u*u*v
     #   dt(v) - D_v*lap(v)             = k2*u - u*u*v
-    problem = d3.IVP([u, v], namespace={'u': u, 'v': v, 'D_u': D_u, 'D_v': D_v, 'k1': k1, 'k2': k2})
+    problem = d3.IVP(
+        [u, v], namespace={"u": u, "v": v, "D_u": D_u, "D_v": D_v, "k1": k1, "k2": k2}
+    )
     problem.add_equation("dt(u) - D_u*lap(u) + (k2+1)*u = k1 + u*u*v")
     problem.add_equation("dt(v) - D_v*lap(v) = k2*u - u*u*v")
     solver = problem.build_solver(d3.RK222)
@@ -208,7 +211,7 @@ def solve_brusselator(
     # Save initial condition
     u.change_scales(1)
     v.change_scales(1)
-    concentration_history.append((np.array(u['g']).copy(), np.array(v['g']).copy()))
+    concentration_history.append((np.array(u["g"]).copy(), np.array(v["g"]).copy()))
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""
@@ -228,11 +231,13 @@ def solve_brusselator(
         if step % save_every == 0:
             u.change_scales(1)
             v.change_scales(1)
-            u_snap = np.array(u['g']).copy()
-            v_snap = np.array(v['g']).copy()
+            u_snap = np.array(u["g"]).copy()
+            v_snap = np.array(v["g"]).copy()
 
             if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
-                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+                raise RuntimeError(
+                    f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting"
+                )
 
             concentration_history.append((u_snap, v_snap))
             times.append(solver.sim_time)
@@ -285,11 +290,11 @@ def solve_brusselator_with_params(
     # Convert dataclasses to dicts for backward compatibility
     ic_dict: dict[str, Any]
     sim_dict: dict[str, Any]
-    if hasattr(ic_params, '__dataclass_fields__'):
+    if hasattr(ic_params, "__dataclass_fields__"):
         ic_dict = asdict(cast(BrusselatorICBase, ic_params))
     else:
         ic_dict = cast(dict[str, Any], ic_params)
-    if hasattr(simulation_params, '__dataclass_fields__'):
+    if hasattr(simulation_params, "__dataclass_fields__"):
         sim_dict = asdict(cast(BrusselatorSimParams, simulation_params))
     else:
         sim_dict = cast(dict[str, Any], simulation_params)

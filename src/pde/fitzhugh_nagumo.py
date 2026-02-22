@@ -23,6 +23,7 @@ IMEX splitting:
 """
 
 import os
+
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
@@ -43,8 +44,8 @@ class FHNSimParams:
     D_u: float  # Diffusion coefficient for activator
     D_v: float  # Diffusion coefficient for recovery
     eps: float  # Timescale separation
-    a: float    # Recovery coupling
-    b: float    # Excitability threshold
+    a: float  # Recovery coupling
+    b: float  # Excitability threshold
     domain_size: Tuple[float, float]  # (Lx, Ly)
     resolution: Tuple[int, int]  # (ny, nx)
     t_end: float  # Final simulation time
@@ -102,15 +103,15 @@ def solve_fhn(
     y = np.linspace(0, Ly, ny, endpoint=False)
 
     # --- Dedalus setup ---
-    coords = d3.CartesianCoordinates('x', 'y')
+    coords = d3.CartesianCoordinates("x", "y")
     dist = d3.Distributor(coords, dtype=np.float64)
-    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
-    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
+    xbasis = d3.RealFourier(coords["x"], size=nx, bounds=(0, Lx), dealias=3 / 2)
+    ybasis = d3.RealFourier(coords["y"], size=ny, bounds=(0, Ly), dealias=3 / 2)
 
-    u = dist.Field(name='u', bases=(xbasis, ybasis))
-    v = dist.Field(name='v', bases=(xbasis, ybasis))
-    u['g'] = u_init
-    v['g'] = v_init
+    u = dist.Field(name="u", bases=(xbasis, ybasis))
+    v = dist.Field(name="v", bases=(xbasis, ybasis))
+    u["g"] = u_init
+    v["g"] = v_init
 
     # IMEX: LHS = implicit linear, RHS = explicit nonlinear
     #   u_t = D_u*lap(u) + u - u^3 - v
@@ -123,7 +124,10 @@ def solve_fhn(
     # Note: eps*a*v is linear in v, so it goes on LHS for implicit stability.
     # u's linear term (+u) has positive sign (destabilizing), so we leave it
     # on the RHS — implicit treatment of a positive-definite term doesn't help.
-    problem = d3.IVP([u, v], namespace={'u': u, 'v': v, 'D_u': D_u, 'D_v': D_v, 'eps': eps, 'a': a, 'b': b})
+    problem = d3.IVP(
+        [u, v],
+        namespace={"u": u, "v": v, "D_u": D_u, "D_v": D_v, "eps": eps, "a": a, "b": b},
+    )
     problem.add_equation("dt(u) - D_u*lap(u) = u - u*u*u - v")
     problem.add_equation("dt(v) - D_v*lap(v) + eps*a*v = eps*(u - b)")
     solver = problem.build_solver(d3.RK222)
@@ -142,7 +146,7 @@ def solve_fhn(
     # Save initial condition
     u.change_scales(1)
     v.change_scales(1)
-    field_history.append((np.array(u['g']).copy(), np.array(v['g']).copy()))
+    field_history.append((np.array(u["g"]).copy(), np.array(v["g"]).copy()))
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""
@@ -161,11 +165,13 @@ def solve_fhn(
         if step % save_every == 0:
             u.change_scales(1)
             v.change_scales(1)
-            u_snap = np.array(u['g']).copy()
-            v_snap = np.array(v['g']).copy()
+            u_snap = np.array(u["g"]).copy()
+            v_snap = np.array(v["g"]).copy()
 
             if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
-                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+                raise RuntimeError(
+                    f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting"
+                )
 
             field_history.append((u_snap, v_snap))
             times.append(solver.sim_time)
@@ -199,7 +205,7 @@ def solve_fhn_with_params(
     from src.data.initial_conditions_fhn import create_fhn_ic
 
     sim_dict: dict[str, Any]
-    if hasattr(simulation_params, '__dataclass_fields__'):
+    if hasattr(simulation_params, "__dataclass_fields__"):
         sim_dict = asdict(cast(FHNSimParams, simulation_params))
     else:
         sim_dict = cast(dict[str, Any], simulation_params)

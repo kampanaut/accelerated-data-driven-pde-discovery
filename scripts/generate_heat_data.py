@@ -35,9 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.pde.heat_equation import solve_heat_with_params
 
 
-def generate_fourier_data(
-    field_history: list, times: np.ndarray
-) -> dict:
+def generate_fourier_data(field_history: list, times: np.ndarray) -> dict:
     """
     Convert field snapshots to Fourier coefficients.
 
@@ -105,8 +103,12 @@ def save_heat_evolution(
         # Row 1: u field (2D)
         ax = plt.subplot(3, n_snapshots, col + 1)
         im = ax.imshow(
-            u_sel[col], cmap="inferno", vmin=u_min, vmax=u_max,
-            origin="lower", extent=(0, Lx, 0, Ly),
+            u_sel[col],
+            cmap="inferno",
+            vmin=u_min,
+            vmax=u_max,
+            origin="lower",
+            extent=(0, Lx, 0, Ly),
         )
         ax.set_title(f"t={t:.2f}", fontsize=10)
         if col == 0:
@@ -117,13 +119,21 @@ def save_heat_evolution(
 
         # Row 2: u 3D surface (downsampled)
         ax3d = fig.add_subplot(
-            3, n_snapshots, n_snapshots + col + 1, projection="3d",
+            3,
+            n_snapshots,
+            n_snapshots + col + 1,
+            projection="3d",
         )
         assert isinstance(ax3d, Axes3D)
         step = max(1, X.shape[0] // 32)
         ax3d.plot_surface(
-            X[::step, ::step], Y[::step, ::step], u_sel[col][::step, ::step],
-            cmap="inferno", linewidth=0, antialiased=True, alpha=0.9,
+            X[::step, ::step],
+            Y[::step, ::step],
+            u_sel[col][::step, ::step],
+            cmap="inferno",
+            linewidth=0,
+            antialiased=True,
+            alpha=0.9,
         )
         ax3d.set_xlabel("x", fontsize=8)
         ax3d.set_ylabel("y", fontsize=8)
@@ -134,8 +144,12 @@ def save_heat_evolution(
         # Row 3: |nabla u| gradient magnitude
         ax = plt.subplot(3, n_snapshots, 2 * n_snapshots + col + 1)
         im = ax.imshow(
-            grad_sel[col], cmap="magma", vmin=grad_min, vmax=grad_max,
-            origin="lower", extent=(0, Lx, 0, Ly),
+            grad_sel[col],
+            cmap="magma",
+            vmin=grad_min,
+            vmax=grad_max,
+            origin="lower",
+            extent=(0, Lx, 0, Ly),
         )
         if col == 0:
             ax.set_ylabel("|∇u|", fontsize=12)
@@ -178,7 +192,9 @@ def process_single_ic(args_tuple):
     base_seed = ic_config.get("seed", None)
 
     for attempt in range(max_retries):
-        rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+        rng = np.random.default_rng(
+            base_seed + attempt * 1000 if base_seed is not None else None
+        )
 
         task_sim_params = simulation_params.copy()
         task_D = rng.uniform(raw_D[0], raw_D[1]) if isinstance(raw_D, list) else raw_D
@@ -198,7 +214,9 @@ def process_single_ic(args_tuple):
                 "u_init": u_init,
             }
 
-            results = solve_heat_with_params(ic_params_for_solver, task_sim_params, task_name=ic_name)
+            results = solve_heat_with_params(
+                ic_params_for_solver, task_sim_params, task_name=ic_name
+            )
 
             field_history = results["field_history"]
             times = results["times"]
@@ -232,7 +250,12 @@ def process_single_ic(args_tuple):
         except RuntimeError:
             if attempt < max_retries - 1:
                 continue
-            return ("failed", ic_name, f"Diverged after {max_retries} attempts", max_retries)
+            return (
+                "failed",
+                ic_name,
+                f"Diverged after {max_retries} attempts",
+                max_retries,
+            )
 
         except ValueError as e:
             if "divergence" in str(e).lower() and attempt < max_retries - 1:
@@ -287,7 +310,9 @@ def main():
     ic_configs = config["initial_conditions"]
     print(f"\nInitial conditions: {len(ic_configs)} configurations")
 
-    sim_name = config.get("simulation", {}).get("name") or config.get("output_dir", "heat")
+    sim_name = config.get("simulation", {}).get("name") or config.get(
+        "output_dir", "heat"
+    )
     base_dir = config.get("output", {}).get("base_dir", "data/datasets")
     data_dir = Path(__file__).parent.parent / base_dir / sim_name
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -305,6 +330,7 @@ def main():
 
     if args.workers > 1:
         import multiprocessing
+
         ctx = multiprocessing.get_context("spawn")
 
         print(f"\nUsing {args.workers} parallel workers")

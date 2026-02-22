@@ -64,8 +64,7 @@ class PDETask(ABC):
     nx: int
     n_snapshots: int
     n_features: int = 10  # Override in subclass for scalar PDEs (e.g., heat: 5)
-    n_targets: int = 2    # Override in subclass for scalar PDEs (e.g., heat: 1)
-
+    n_targets: int = 2  # Override in subclass for scalar PDEs (e.g., heat: 1)
 
     def __init__(self, npz_path: Path, device: str = "cuda"):
         self.npz_path = Path(npz_path)
@@ -214,7 +213,9 @@ class PDETask(ABC):
         all_features = torch.empty(
             (n_total, self.n_features), dtype=torch.float32, device=self.device
         )
-        all_targets = torch.empty((n_total, self.n_targets), dtype=torch.float32, device=self.device)
+        all_targets = torch.empty(
+            (n_total, self.n_targets), dtype=torch.float32, device=self.device
+        )
 
         unique_snaps = torch.unique(snap_idx)
         for si in unique_snaps:
@@ -258,8 +259,12 @@ class BrusselatorTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.device)
+        self.u_hat = torch.tensor(
+            data["u_hat"], dtype=torch.complex128, device=self.device
+        )
+        self.v_hat = torch.tensor(
+            data["v_hat"], dtype=torch.complex128, device=self.device
+        )
 
     def _extract_pde_params(self) -> None:
         self.D_u = self.simulation_params.get("D_u") or self.ic_config.get("D_u_used")
@@ -306,7 +311,12 @@ class BrusselatorTask(PDETask):
         generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
+        noise = torch.randn(
+            features.shape,
+            dtype=features.dtype,
+            device=features.device,
+            generator=generator,
+        ) * (noise_level * feat_std)
         features = features + noise
 
         # Recompute targets from noisy features via PDE RHS (self-consistent)
@@ -327,8 +337,12 @@ class BrusselatorTask(PDETask):
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
-            CoefficientSpec(name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u),
-            CoefficientSpec(name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v),
+            CoefficientSpec(
+                name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u
+            ),
+            CoefficientSpec(
+                name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v
+            ),
         ]
 
 
@@ -346,8 +360,12 @@ class FitzHughNagumoTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.device)
+        self.u_hat = torch.tensor(
+            data["u_hat"], dtype=torch.complex128, device=self.device
+        )
+        self.v_hat = torch.tensor(
+            data["v_hat"], dtype=torch.complex128, device=self.device
+        )
 
     def _extract_pde_params(self) -> None:
         self.b = self.simulation_params.get("b", 0.0)
@@ -367,7 +385,11 @@ class FitzHughNagumoTask(PDETask):
             a = self.ic_config.get("a_used")
 
         if D_u is None or D_v is None or eps is None or a is None:
-            missing = [k for k, v in {"D_u": D_u, "D_v": D_v, "eps": eps, "a": a}.items() if v is None]
+            missing = [
+                k
+                for k, v in {"D_u": D_u, "D_v": D_v, "eps": eps, "a": a}.items()
+                if v is None
+            ]
             raise ValueError(f"FHN coefficients missing: {missing}")
 
         self.D_u = D_u
@@ -411,14 +433,19 @@ class FitzHughNagumoTask(PDETask):
         generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
+        noise = torch.randn(
+            features.shape,
+            dtype=features.dtype,
+            device=features.device,
+            generator=generator,
+        ) * (noise_level * feat_std)
         features = features + noise
 
         # Recompute targets from noisy features via FHN RHS
         u, v = features[:, 0], features[:, 1]
         u_xx, u_yy = features[:, 4], features[:, 5]
         v_xx, v_yy = features[:, 8], features[:, 9]
-        u_t = self.D_u * (u_xx + u_yy) + u - u ** 3 - v
+        u_t = self.D_u * (u_xx + u_yy) + u - u**3 - v
         v_t = self.D_v * (v_xx + v_yy) + self.eps * (u - self.a * v - self.b)
         targets = torch.stack([u_t, v_t], dim=1)
 
@@ -431,8 +458,12 @@ class FitzHughNagumoTask(PDETask):
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
-            CoefficientSpec(name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u),
-            CoefficientSpec(name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v),
+            CoefficientSpec(
+                name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u
+            ),
+            CoefficientSpec(
+                name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v
+            ),
         ]
 
 
@@ -450,8 +481,12 @@ class LambdaOmegaTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.device)
+        self.u_hat = torch.tensor(
+            data["u_hat"], dtype=torch.complex128, device=self.device
+        )
+        self.v_hat = torch.tensor(
+            data["v_hat"], dtype=torch.complex128, device=self.device
+        )
 
     def _extract_pde_params(self) -> None:
         D_u = self.simulation_params.get("D_u")
@@ -469,7 +504,11 @@ class LambdaOmegaTask(PDETask):
             c = self.ic_config.get("c_used")
 
         if D_u is None or D_v is None or a is None or c is None:
-            missing = [k for k, v in {"D_u": D_u, "D_v": D_v, "a": a, "c": c}.items() if v is None]
+            missing = [
+                k
+                for k, v in {"D_u": D_u, "D_v": D_v, "a": a, "c": c}.items()
+                if v is None
+            ]
             raise ValueError(f"Lambda-Omega coefficients missing: {missing}")
 
         self.D_u = float(D_u)
@@ -506,14 +545,19 @@ class LambdaOmegaTask(PDETask):
         generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
+        noise = torch.randn(
+            features.shape,
+            dtype=features.dtype,
+            device=features.device,
+            generator=generator,
+        ) * (noise_level * feat_std)
         features = features + noise
 
         # Recompute targets from noisy features via Lambda-Omega RHS
         u, v = features[:, 0], features[:, 1]
         u_xx, u_yy = features[:, 4], features[:, 5]
         v_xx, v_yy = features[:, 8], features[:, 9]
-        r2 = u ** 2 + v ** 2
+        r2 = u**2 + v**2
         u_t = self.D_u * (u_xx + u_yy) + self.a * u - (u + self.c * v) * r2
         v_t = self.D_v * (v_xx + v_yy) + self.a * v + (self.c * u - v) * r2
         targets = torch.stack([u_t, v_t], dim=1)
@@ -527,8 +571,12 @@ class LambdaOmegaTask(PDETask):
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
-            CoefficientSpec(name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u),
-            CoefficientSpec(name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v),
+            CoefficientSpec(
+                name="D_u", perturb_indices=[4, 5], output_index=0, true_value=self.D_u
+            ),
+            CoefficientSpec(
+                name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v
+            ),
         ]
 
 
@@ -545,15 +593,21 @@ class NavierStokesTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.device)
-        self.u_t_hat = torch.tensor(data["u_t_hat"], dtype=torch.complex128, device=self.device)
-        self.v_t_hat = torch.tensor(data["v_t_hat"], dtype=torch.complex128, device=self.device)
+        self.u_hat = torch.tensor(
+            data["u_hat"], dtype=torch.complex128, device=self.device
+        )
+        self.v_hat = torch.tensor(
+            data["v_hat"], dtype=torch.complex128, device=self.device
+        )
+        self.u_t_hat = torch.tensor(
+            data["u_t_hat"], dtype=torch.complex128, device=self.device
+        )
+        self.v_t_hat = torch.tensor(
+            data["v_t_hat"], dtype=torch.complex128, device=self.device
+        )
 
     def _extract_pde_params(self) -> None:
-        self.nu = float(
-            self.simulation_params.get("nu") or self.ic_config.get("nu")
-        )
+        self.nu = float(self.simulation_params.get("nu") or self.ic_config.get("nu"))
         if self.nu is None:
             raise Exception("NS coefficient nu is None")
 
@@ -585,13 +639,23 @@ class NavierStokesTask(PDETask):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Proportional noise on features
         feat_std = features.std(dim=0, keepdim=True)
-        feat_noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
+        feat_noise = torch.randn(
+            features.shape,
+            dtype=features.dtype,
+            device=features.device,
+            generator=generator,
+        ) * (noise_level * feat_std)
         features = features + feat_noise
 
         # Can't recompute targets from noisy features (pressure is implicit).
         # Add proportional noise to targets independently.
         tgt_std = targets.std(dim=0, keepdim=True)
-        tgt_noise = torch.randn(targets.shape, dtype=targets.dtype, device=targets.device, generator=generator) * (noise_level * tgt_std)
+        tgt_noise = torch.randn(
+            targets.shape,
+            dtype=targets.dtype,
+            device=targets.device,
+            generator=generator,
+        ) * (noise_level * tgt_std)
         targets = targets + tgt_noise
 
         return features, targets
@@ -603,8 +667,20 @@ class NavierStokesTask(PDETask):
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
-            CoefficientSpec(name="nu_u", perturb_indices=[4, 5], output_index=0, true_value=self.nu, coeff_name="nu"),
-            CoefficientSpec(name="nu_v", perturb_indices=[8, 9], output_index=1, true_value=self.nu, coeff_name="nu"),
+            CoefficientSpec(
+                name="nu_u",
+                perturb_indices=[4, 5],
+                output_index=0,
+                true_value=self.nu,
+                coeff_name="nu",
+            ),
+            CoefficientSpec(
+                name="nu_v",
+                perturb_indices=[8, 9],
+                output_index=1,
+                true_value=self.nu,
+                coeff_name="nu",
+            ),
         ]
 
 
@@ -624,14 +700,18 @@ class HeatEquationTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
+        self.u_hat = torch.tensor(
+            data["u_hat"], dtype=torch.complex128, device=self.device
+        )
 
     def _extract_pde_params(self) -> None:
         D = self.simulation_params.get("D")
         if D is None:
             D = self.ic_config.get("D_used")
         if D is None:
-            raise ValueError("Heat equation coefficient D missing from simulation_params and ic_config")
+            raise ValueError(
+                "Heat equation coefficient D missing from simulation_params and ic_config"
+            )
         self.D = float(D)
 
     def _evaluate_snapshot(
@@ -659,7 +739,12 @@ class HeatEquationTask(PDETask):
         generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
+        noise = torch.randn(
+            features.shape,
+            dtype=features.dtype,
+            device=features.device,
+            generator=generator,
+        ) * (noise_level * feat_std)
         features = features + noise
 
         # Recompute targets from noisy features
@@ -676,7 +761,9 @@ class HeatEquationTask(PDETask):
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
-            CoefficientSpec(name="D", perturb_indices=[3, 4], output_index=0, true_value=self.D),
+            CoefficientSpec(
+                name="D", perturb_indices=[3, 4], output_index=0, true_value=self.D
+            ),
         ]
 
 
@@ -696,14 +783,18 @@ class NLHeatEquationTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.device)
+        self.u_hat = torch.tensor(
+            data["u_hat"], dtype=torch.complex128, device=self.device
+        )
 
     def _extract_pde_params(self) -> None:
         K = self.simulation_params.get("K")
         if K is None:
             K = self.ic_config.get("K_used")
         if K is None:
-            raise ValueError("Nonlinear heat coefficient K missing from simulation_params and ic_config")
+            raise ValueError(
+                "Nonlinear heat coefficient K missing from simulation_params and ic_config"
+            )
         self.K = float(K)
 
     def _evaluate_snapshot(
@@ -731,7 +822,12 @@ class NLHeatEquationTask(PDETask):
         generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         feat_std = features.std(dim=0, keepdim=True)
-        noise = torch.randn(features.shape, dtype=features.dtype, device=features.device, generator=generator) * (noise_level * feat_std)
+        noise = torch.randn(
+            features.shape,
+            dtype=features.dtype,
+            device=features.device,
+            generator=generator,
+        ) * (noise_level * feat_std)
         features = features + noise
 
         # Recompute targets from noisy features
@@ -749,7 +845,9 @@ class NLHeatEquationTask(PDETask):
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
-            CoefficientSpec(name="K", perturb_indices=[3, 4], output_index=0, true_value=self.K),
+            CoefficientSpec(
+                name="K", perturb_indices=[3, 4], output_index=0, true_value=self.K
+            ),
         ]
 
 
@@ -815,9 +913,7 @@ class MetaLearningDataLoader:
             )
             print(f"  {name:30s}  {task.n_samples:>7,} samples  {coeff_str}")
 
-    def sample_batch(
-        self, n_tasks: int, seed: Optional[int] = None
-    ) -> List[PDETask]:
+    def sample_batch(self, n_tasks: int, seed: Optional[int] = None) -> List[PDETask]:
         """
         Sample random subset of tasks for meta-training batch.
         """

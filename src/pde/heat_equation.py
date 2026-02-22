@@ -13,6 +13,7 @@ A Gaussian bump spreads out over time, smooth features decay exponentially.
 """
 
 import os
+
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
@@ -69,15 +70,15 @@ def solve_heat(
     y = np.linspace(0, Ly, ny, endpoint=False)
 
     # --- Dedalus setup ---
-    coords = d3.CartesianCoordinates('x', 'y')
+    coords = d3.CartesianCoordinates("x", "y")
     dist = d3.Distributor(coords, dtype=np.float64)
-    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
-    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
+    xbasis = d3.RealFourier(coords["x"], size=nx, bounds=(0, Lx), dealias=3 / 2)
+    ybasis = d3.RealFourier(coords["y"], size=ny, bounds=(0, Ly), dealias=3 / 2)
 
-    u = dist.Field(name='u', bases=(xbasis, ybasis))
-    u['g'] = initial_field
+    u = dist.Field(name="u", bases=(xbasis, ybasis))
+    u["g"] = initial_field
 
-    problem = d3.IVP([u], namespace={'u': u, 'D': D})
+    problem = d3.IVP([u], namespace={"u": u, "D": D})
     problem.add_equation("dt(u) - D*lap(u) = 0")
     solver = problem.build_solver(d3.RK222)
     solver.stop_sim_time = t_end
@@ -94,7 +95,7 @@ def solve_heat(
 
     # Save initial condition
     u.change_scales(1)
-    field_history.append(np.array(u['g']).copy())
+    field_history.append(np.array(u["g"]).copy())
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""
@@ -110,16 +111,20 @@ def solve_heat(
 
         if step % save_every == 0:
             u.change_scales(1)
-            snapshot = np.array(u['g']).copy()
+            snapshot = np.array(u["g"]).copy()
 
             if not np.isfinite(np.mean(snapshot)):
-                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+                raise RuntimeError(
+                    f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting"
+                )
 
             field_history.append(snapshot)
             times.append(solver.sim_time)
 
             if step % (save_every * 10) == 0:
-                print(f"  {tag}t = {solver.sim_time:.3f} / {t_end}  |  <u> = {np.mean(snapshot):.6f}")
+                print(
+                    f"  {tag}t = {solver.sim_time:.3f} / {t_end}  |  <u> = {np.mean(snapshot):.6f}"
+                )
 
     print(f"{tag}Simulation complete. Saved {len(field_history)} snapshots.")
 
@@ -145,7 +150,7 @@ def solve_heat_with_params(
     from src.data.initial_conditions_heat import create_heat_ic
 
     sim_dict: dict[str, Any]
-    if hasattr(simulation_params, '__dataclass_fields__'):
+    if hasattr(simulation_params, "__dataclass_fields__"):
         sim_dict = asdict(cast(HeatSimParams, simulation_params))
     else:
         sim_dict = cast(dict[str, Any], simulation_params)

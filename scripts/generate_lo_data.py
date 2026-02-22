@@ -35,9 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.pde.lambda_omega import solve_lo_with_params
 
 
-def generate_fourier_data(
-    field_history: list, times: np.ndarray
-) -> dict:
+def generate_fourier_data(field_history: list, times: np.ndarray) -> dict:
     """
     Convert field snapshots to Fourier coefficients.
 
@@ -120,8 +118,12 @@ def save_lo_evolution(
         # Row 1: u field
         ax = plt.subplot(5, n_snapshots, col + 1)
         im = ax.imshow(
-            u_sel[col], cmap="RdBu_r", vmin=u_min, vmax=u_max,
-            origin="lower", extent=(0, Lx, 0, Ly),
+            u_sel[col],
+            cmap="RdBu_r",
+            vmin=u_min,
+            vmax=u_max,
+            origin="lower",
+            extent=(0, Lx, 0, Ly),
         )
         ax.set_title(f"t={t:.1f}", fontsize=10)
         if col == 0:
@@ -133,8 +135,12 @@ def save_lo_evolution(
         # Row 2: v field
         ax = plt.subplot(5, n_snapshots, n_snapshots + col + 1)
         im = ax.imshow(
-            v_sel[col], cmap="RdBu_r", vmin=v_min, vmax=v_max,
-            origin="lower", extent=(0, Lx, 0, Ly),
+            v_sel[col],
+            cmap="RdBu_r",
+            vmin=v_min,
+            vmax=v_max,
+            origin="lower",
+            extent=(0, Lx, 0, Ly),
         )
         if col == 0:
             ax.set_ylabel("v", fontsize=12)
@@ -145,8 +151,12 @@ def save_lo_evolution(
         # Row 3: phase θ = atan2(v, u)
         ax = plt.subplot(5, n_snapshots, 2 * n_snapshots + col + 1)
         im = ax.imshow(
-            phase_sel[col], cmap="twilight", vmin=-np.pi, vmax=np.pi,
-            origin="lower", extent=(0, Lx, 0, Ly),
+            phase_sel[col],
+            cmap="twilight",
+            vmin=-np.pi,
+            vmax=np.pi,
+            origin="lower",
+            extent=(0, Lx, 0, Ly),
         )
         if col == 0:
             ax.set_ylabel("θ = atan2(v,u)", fontsize=10)
@@ -157,8 +167,12 @@ def save_lo_evolution(
         # Row 4: amplitude r = √(u² + v²)
         ax = plt.subplot(5, n_snapshots, 3 * n_snapshots + col + 1)
         im = ax.imshow(
-            amp_sel[col], cmap="viridis", vmin=amp_min, vmax=amp_max,
-            origin="lower", extent=(0, Lx, 0, Ly),
+            amp_sel[col],
+            cmap="viridis",
+            vmin=amp_min,
+            vmax=amp_max,
+            origin="lower",
+            extent=(0, Lx, 0, Ly),
         )
         if col == 0:
             ax.set_ylabel("r = √(u²+v²)", fontsize=10)
@@ -168,13 +182,21 @@ def save_lo_evolution(
 
         # Row 5: u 3D surface (downsampled)
         ax3d = fig.add_subplot(
-            5, n_snapshots, 4 * n_snapshots + col + 1, projection="3d",
+            5,
+            n_snapshots,
+            4 * n_snapshots + col + 1,
+            projection="3d",
         )
         assert isinstance(ax3d, Axes3D)
         step = max(1, X.shape[0] // 32)
         ax3d.plot_surface(
-            X[::step, ::step], Y[::step, ::step], u_sel[col][::step, ::step],
-            cmap="RdBu_r", linewidth=0, antialiased=True, alpha=0.9,
+            X[::step, ::step],
+            Y[::step, ::step],
+            u_sel[col][::step, ::step],
+            cmap="RdBu_r",
+            linewidth=0,
+            antialiased=True,
+            alpha=0.9,
         )
         ax3d.set_xlabel("x", fontsize=8)
         ax3d.set_ylabel("y", fontsize=8)
@@ -220,11 +242,21 @@ def process_single_ic(args_tuple):
     base_seed = ic_config.get("seed", None)
 
     for attempt in range(max_retries):
-        rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+        rng = np.random.default_rng(
+            base_seed + attempt * 1000 if base_seed is not None else None
+        )
 
         task_sim_params = simulation_params.copy()
-        task_D_u = rng.uniform(raw_D_u[0], raw_D_u[1]) if isinstance(raw_D_u, list) else raw_D_u
-        task_D_v = rng.uniform(raw_D_v[0], raw_D_v[1]) if isinstance(raw_D_v, list) else raw_D_v
+        task_D_u = (
+            rng.uniform(raw_D_u[0], raw_D_u[1])
+            if isinstance(raw_D_u, list)
+            else raw_D_u
+        )
+        task_D_v = (
+            rng.uniform(raw_D_v[0], raw_D_v[1])
+            if isinstance(raw_D_v, list)
+            else raw_D_v
+        )
         task_c = rng.uniform(raw_c[0], raw_c[1]) if isinstance(raw_c, list) else raw_c
         task_sim_params["D_u"] = task_D_u
         task_sim_params["D_v"] = task_D_v
@@ -250,7 +282,9 @@ def process_single_ic(args_tuple):
                 "v_init": v_init,
             }
 
-            results = solve_lo_with_params(ic_params_for_solver, task_sim_params, task_name=ic_name)
+            results = solve_lo_with_params(
+                ic_params_for_solver, task_sim_params, task_name=ic_name
+            )
 
             field_history = results["field_history"]
             times = results["times"]
@@ -289,7 +323,12 @@ def process_single_ic(args_tuple):
         except RuntimeError:
             if attempt < max_retries - 1:
                 continue
-            return ("failed", ic_name, f"Diverged after {max_retries} attempts", max_retries)
+            return (
+                "failed",
+                ic_name,
+                f"Diverged after {max_retries} attempts",
+                max_retries,
+            )
 
         except ValueError as e:
             if "divergence" in str(e).lower() and attempt < max_retries - 1:
@@ -349,7 +388,9 @@ def main():
     print(f"\nInitial conditions: {len(ic_configs)} configurations")
 
     # Output directory
-    sim_name = config.get("simulation", {}).get("name") or config.get("output_dir", "lo")
+    sim_name = config.get("simulation", {}).get("name") or config.get(
+        "output_dir", "lo"
+    )
     base_dir = config.get("output", {}).get("base_dir", "data/datasets")
     data_dir = Path(__file__).parent.parent / base_dir / sim_name
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -369,6 +410,7 @@ def main():
 
     if args.workers > 1:
         import multiprocessing
+
         ctx = multiprocessing.get_context("spawn")
 
         print(f"\nUsing {args.workers} parallel workers")

@@ -261,7 +261,9 @@ def process_single_ic(args_tuple):
     k2_c: float = 0.0
 
     for attempt in range(max_retries):
-        param_rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+        param_rng = np.random.default_rng(
+            base_seed + attempt * 1000 if base_seed is not None else None
+        )
 
         task_sim_params = simulation_params.copy()
         for param in ["D_u", "D_v", "k1", "k2"]:
@@ -292,8 +294,10 @@ def process_single_ic(args_tuple):
 
         try:
             # Create initial condition
-            u_init, v_init, _ = create_brusselator_ic( # u_init, v_init, generated_params
-                ic_config_attempt, x, y
+            u_init, v_init, _ = (
+                create_brusselator_ic(  # u_init, v_init, generated_params
+                    ic_config_attempt, x, y
+                )
             )
 
             # Solve Brusselator
@@ -518,13 +522,17 @@ def main():
             base_seed = ic_config.get("seed", None)
 
             for attempt in range(max_retries):
-                param_rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+                param_rng = np.random.default_rng(
+                    base_seed + attempt * 1000 if base_seed is not None else None
+                )
 
                 task_sim_params = simulation_params.copy()
                 for param in ["D_u", "D_v", "k1", "k2"]:
                     raw_val = ic_config.get(param, task_sim_params[param])
                     if isinstance(raw_val, list):
-                        task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
+                        task_sim_params[param] = param_rng.uniform(
+                            raw_val[0], raw_val[1]
+                        )
                         print(
                             f"Sampled {param} = {task_sim_params[param]:.6f} from range {raw_val}"
                         )
@@ -559,8 +567,10 @@ def main():
 
                 try:
                     # Create initial condition
-                    u_init, v_init, _ = create_brusselator_ic( # u_init, v_init, generated_params
-                        ic_config_attempt, x, y
+                    u_init, v_init, _ = (
+                        create_brusselator_ic(  # u_init, v_init, generated_params
+                            ic_config_attempt, x, y
+                        )
                     )
 
                     # Solve Brusselator
@@ -607,9 +617,7 @@ def main():
                             task_sim_params["k2"] - k2_c
                         )
 
-                    fourier_data = generate_fourier_data(
-                        concentration_history, times
-                    )
+                    fourier_data = generate_fourier_data(concentration_history, times)
                     np.savez(
                         output_file,
                         **fourier_data,

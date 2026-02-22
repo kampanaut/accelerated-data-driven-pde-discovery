@@ -24,7 +24,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
-FEATURE_NAMES_2F = ["u", "v", "u_x", "u_y", "u_xx", "u_yy", "v_x", "v_y", "v_xx", "v_yy"]
+FEATURE_NAMES_2F = [
+    "u",
+    "v",
+    "u_x",
+    "u_y",
+    "u_xx",
+    "u_yy",
+    "v_x",
+    "v_y",
+    "v_xx",
+    "v_yy",
+]
 FEATURE_NAMES_1F = ["u", "u_x", "u_y", "u_xx", "u_yy"]
 
 
@@ -42,7 +53,11 @@ def load_fourier_fields(npz_path: Path) -> dict:
         "times": data["times"],
     }
 
-    if "u_hat" in keys and "v_hat" in keys:
+    if "A_hat" in keys and "B_hat" in keys:
+        result["field1_hat"] = data["A_hat"]
+        result["field2_hat"] = data["B_hat"]
+        result["n_fields"] = 2
+    elif "u_hat" in keys and "v_hat" in keys:
         result["field1_hat"] = data["u_hat"]
         result["field2_hat"] = data["v_hat"]
         result["n_fields"] = 2
@@ -82,6 +97,7 @@ def evaluate_features_2f(field1_hat, field2_hat, kx, ky, E_x, E_y):
 
     return torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
 
+
 def build_phase_matrices(n_points, nx, ny, Lx, Ly, seed, device="cuda"):
     """Build phase matrices E_x, E_y for random spatial evaluation points."""
     gen = torch.Generator(device=device)
@@ -98,7 +114,9 @@ def build_phase_matrices(n_points, nx, ny, Lx, Ly, seed, device="cuda"):
     return kx, ky, E_x, E_y
 
 
-def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int = 1) -> tuple[torch.Tensor, int]:
+def collect_features(
+    directory: Path, n_points: int, seed: int, k_snapshots: int = 1
+) -> tuple[torch.Tensor, int]:
     """Load all fourier .npz files and collect features into one big matrix.
 
     Args:
@@ -116,7 +134,9 @@ def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int
         sys.exit(1)
 
     print(f"Found {len(files)} fourier files in {directory}")
-    print(f"Sampling {k_snapshots} timestep(s) per task, {n_points} spatial points each")
+    print(
+        f"Sampling {k_snapshots} timestep(s) per task, {n_points} spatial points each"
+    )
 
     all_features = []
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -129,10 +149,16 @@ def collect_features(directory: Path, n_points: int, seed: int, k_snapshots: int
         # Detect field count from first file, enforce consistency
         if n_fields is None:
             n_fields = loaded["n_fields"]
-            label = "two-field (10 features)" if n_fields == 2 else "single-field (5 features)"
+            label = (
+                "two-field (10 features)"
+                if n_fields == 2
+                else "single-field (5 features)"
+            )
             print(f"Detected {label} PDE")
         elif loaded["n_fields"] != n_fields:
-            raise ValueError(f"Mixed field counts in {directory}: expected {n_fields}, got {loaded['n_fields']} in {f.name}")
+            raise ValueError(
+                f"Mixed field counts in {directory}: expected {n_fields}, got {loaded['n_fields']} in {f.name}"
+            )
 
         domain_size = sim.get("domain_size", sim.get("Lx", 2 * np.pi))
         if isinstance(domain_size, (list, tuple)):
@@ -179,14 +205,14 @@ def run_svd_analysis(features: torch.Tensor, feature_names: list[str]):
 
     print("\n=== Singular Values ===")
     for i, s in enumerate(S):
-        print(f"  sigma_{i+1:2d} = {s:.6f}")
+        print(f"  sigma_{i + 1:2d} = {s:.6f}")
 
     print(f"\n  Condition number: {S[0] / S[-1]:.2f}")
 
-    cumulative = torch.cumsum(S ** 2, dim=0) / (S ** 2).sum()
+    cumulative = torch.cumsum(S**2, dim=0) / (S**2).sum()
     print("\n=== Cumulative Energy ===")
     for i, c in enumerate(cumulative):
-        print(f"  {i+1:2d} components: {c:.4f}")
+        print(f"  {i + 1:2d} components: {c:.4f}")
 
     print(f"\n=== Weakest Direction (v_{n_feats}) ===")
     v_last = Vt[-1]
@@ -205,7 +231,7 @@ def run_correlation_analysis(features: torch.Tensor, feature_names: list[str]):
     header = "        " + "  ".join(f"{n:>6s}" for n in feature_names)
     print(header)
     for i, name in enumerate(feature_names):
-        row = f"  {name:>5s} " + "  ".join(f"{corr[i,j]:+.3f}" for j in range(n_feats))
+        row = f"  {name:>5s} " + "  ".join(f"{corr[i, j]:+.3f}" for j in range(n_feats))
         print(row)
 
     return corr
@@ -252,20 +278,37 @@ def plot_results(S, Vt, corr, feature_names: list[str], output_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SVD/correlation analysis of PDE features")
-    parser.add_argument("directory", type=Path, help="Directory containing *_fourier.npz files")
-    parser.add_argument("--n_points", type=int, default=500, help="Random spatial points per snapshot")
-    parser.add_argument("--k_snapshots", type=int, default=5, help="Timesteps to sample per task (default: 5)")
+    parser = argparse.ArgumentParser(
+        description="SVD/correlation analysis of PDE features"
+    )
+    parser.add_argument(
+        "directory", type=Path, help="Directory containing *_fourier.npz files"
+    )
+    parser.add_argument(
+        "--n_points", type=int, default=500, help="Random spatial points per snapshot"
+    )
+    parser.add_argument(
+        "--k_snapshots",
+        type=int,
+        default=5,
+        help="Timesteps to sample per task (default: 5)",
+    )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output_dir", type=Path, default=None, help="Where to save figures")
+    parser.add_argument(
+        "--output_dir", type=Path, default=None, help="Where to save figures"
+    )
     args = parser.parse_args()
 
     if args.output_dir is None:
         args.output_dir = args.directory
 
-    features, n_fields = collect_features(args.directory, args.n_points, args.seed, args.k_snapshots)
+    features, n_fields = collect_features(
+        args.directory, args.n_points, args.seed, args.k_snapshots
+    )
     feature_names = FEATURE_NAMES_2F if n_fields == 2 else FEATURE_NAMES_1F
-    print(f"\nFeature matrix shape: {features.shape}  (samples x {len(feature_names)} features)")
+    print(
+        f"\nFeature matrix shape: {features.shape}  (samples x {len(feature_names)} features)"
+    )
 
     S, Vt = run_svd_analysis(features, feature_names)
     corr = run_correlation_analysis(features, feature_names)

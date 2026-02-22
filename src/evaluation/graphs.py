@@ -753,19 +753,29 @@ def _draw_histogram_panel(
         fill, edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
         mean, std = float(np.mean(est)), float(np.std(est))
         ax.hist(
-            est, bins=bins_list, alpha=0.6, color=fill, edgecolor=edge,
+            est,
+            bins=bins_list,
+            alpha=0.6,
+            color=fill,
+            edgecolor=edge,
             label=f"{label}: μ={mean:.4f}, σ={std:.4f}",
         )
         ax.axvline(mean, color=fill, linestyle="-", linewidth=1.5, alpha=0.8)
 
     # Truth line
-    truth_label = "Perfect recovery (1.0)" if ratio_mode else f"True {symbol} = {coeff_true:.4f}"
+    truth_label = (
+        "Perfect recovery (1.0)" if ratio_mode else f"True {symbol} = {coeff_true:.4f}"
+    )
     ax.axvline(coeff_true, color="red", linestyle="--", linewidth=2, label=truth_label)
 
     # Combined mean (average of per-estimate means)
     overall_mean = float(np.mean([np.mean(e) for e in estimates]))
     ax.axvline(
-        overall_mean, color="black", linestyle="--", linewidth=2, alpha=0.9,
+        overall_mean,
+        color="black",
+        linestyle="--",
+        linewidth=2,
+        alpha=0.9,
         label=f"combined: μ={overall_mean:.4f}",
     )
 
@@ -778,10 +788,14 @@ def _draw_histogram_panel(
     if has_pe:
         assert pred_errors is not None
         ax2 = ax.twinx()
-        for i, (est, pe, label) in enumerate(zip(estimates, pred_errors, estimate_labels)):
+        for i, (est, pe, label) in enumerate(
+            zip(estimates, pred_errors, estimate_labels)
+        ):
             if pe is not None:
                 _, dark = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
-                _overlay_pred_errors(ax2, est, pe, bins, color=dark, label=f"|err| {label}")
+                _overlay_pred_errors(
+                    ax2, est, pe, bins, color=dark, label=f"|err| {label}"
+                )
         ax2.set_ylabel("Mean |pred error|", fontsize=8)
         ax2.tick_params(axis="y", labelsize=7)
         # Merge legends from both axes
@@ -842,13 +856,23 @@ def plot_jacobian_histogram(
         fig.suptitle(f"{title}\nTrue {symbol} = {coeff_true:.6f}", fontsize=12)
 
     _draw_histogram_panel(
-        axes[0], maml_estimates, estimate_labels, coeff_true,
-        panel_title="MAML (θ*)", ratio_mode=ratio_mode, symbol=symbol,
+        axes[0],
+        maml_estimates,
+        estimate_labels,
+        coeff_true,
+        panel_title="MAML (θ*)",
+        ratio_mode=ratio_mode,
+        symbol=symbol,
         pred_errors=maml_pred_errors,
     )
     _draw_histogram_panel(
-        axes[1], baseline_estimates, estimate_labels, coeff_true,
-        panel_title="Baseline (θ₀)", ratio_mode=ratio_mode, symbol=symbol,
+        axes[1],
+        baseline_estimates,
+        estimate_labels,
+        coeff_true,
+        panel_title="Baseline (θ₀)",
+        ratio_mode=ratio_mode,
+        symbol=symbol,
         pred_errors=baseline_pred_errors,
     )
 

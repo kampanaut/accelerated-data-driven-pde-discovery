@@ -155,9 +155,7 @@ class MAMLTrainer:
         self.best_val_loss = float("inf")
         self.best_train_state = None  # Stash weights when train loss improves
 
-    def compute_task_loss(
-        self, task: PDETask, seed: int
-    ) -> torch.Tensor:
+    def compute_task(self, task: PDETask, seed: int) -> torch.Tensor:
         """
         Compute query loss after inner loop adaptation.
 
@@ -186,7 +184,11 @@ class MAMLTrainer:
         query_x, query_y = query
 
         # Inner loop optimizer (recreated each task)
-        inner_opt = torch.optim.SGD(self.model.parameters(), lr=self.config.inner_lr)
+        inner_opt = torch.optim.SGD(
+            self.model.parameters(), lr=self.config.inner_lr
+        )
+
+        #  source: https://github.com/dragen1860/MAML-Pytorch/blob/master/meta.py
 
         # Inner loop with higher library
         with (
@@ -201,7 +203,12 @@ class MAMLTrainer:
             for _ in range(self.config.inner_steps):
                 support_pred = fmodel(support_x)
                 support_loss = F.mse_loss(support_pred, support_y)
-                diffopt.step(support_loss)
+                diffopt.step(
+                    support_loss
+                ) # \phi_i = U_{\tau}(\theta). 
+                # 1. Computes gradient via autograd.grad in respect to the intermediate adapted parameter \phi_i
+                # 2. Then applies the gradient to the update rule as differentiable ops
+                # 3. Appends the computational graph segment for `fmodel` subgraph that diverged from \theta.
 
             # Evaluate adapted model on query set
             query_pred = fmodel(query_x)
@@ -227,11 +234,11 @@ class MAMLTrainer:
         for i, task in enumerate(tasks):
             # Use iteration + task index as seed for reproducibility
             seed = self.iteration * len(tasks) + i
-            task_loss = self.compute_task_loss(task, seed)
+            task_loss = self.compute_task(task, seed)
             total_loss += task_loss
 
         # Average loss
-        avg_loss = total_loss / len(tasks)
+        avg_loss = total_loss / len(tasks) # Every task subgraph that was extended inner_step times converges right here. This is where they connect.
 
         # Meta-gradient update
         avg_loss.backward()
@@ -239,9 +246,7 @@ class MAMLTrainer:
 
         return avg_loss.item()
 
-    def evaluate(
-        self, tasks: List[PDETask], seed: int = 0
-    ) -> float:
+    def evaluate(self, tasks: List[PDETask], seed: int = 0) -> float:
         """
         Evaluate meta-learned initialization on tasks (no meta-update).
 
@@ -265,7 +270,7 @@ class MAMLTrainer:
             task_seed = seed + i
             # Temporarily enable gradients for inner loop
             with torch.enable_grad():
-                task_loss = self.compute_task_loss(task, task_seed)
+                task_loss = self.compute_task(task, task_seed)
             total_loss += task_loss.item()
 
         return total_loss / len(tasks)

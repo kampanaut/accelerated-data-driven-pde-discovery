@@ -125,7 +125,9 @@ def main():
     pde_type = config["experiment"].get("pde_type", "ns")
     task_class = TASK_REGISTRY.get(pde_type)
     if task_class is None:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}")
+        raise ValueError(
+            f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}"
+        )
     print(f"PDE type: {pde_type} ({task_class.__name__})")
 
     task_pattern = "*_fourier.npz"
@@ -157,7 +159,10 @@ def main():
     output_dim = train_cfg.get("output_dim", 2)
 
     model = PDEOperatorNetwork(
-        input_dim=input_dim, output_dim=output_dim, hidden_dims=hidden_dims, activation=activation
+        input_dim=input_dim,
+        output_dim=output_dim,
+        hidden_dims=hidden_dims,
+        activation=activation,
     )
     print(model)
     print()

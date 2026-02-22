@@ -51,7 +51,9 @@ def compute_parameter_norms(theta_0: dict, theta_star: dict):
     l2 = torch.norm(diff).item()
     l1 = torch.norm(diff, p=1).item()
     linf = torch.norm(diff, p=float("inf")).item()
-    cosine = torch.nn.functional.cosine_similarity(vec_0.unsqueeze(0), vec_star.unsqueeze(0)).item()
+    cosine = torch.nn.functional.cosine_similarity(
+        vec_0.unsqueeze(0), vec_star.unsqueeze(0)
+    ).item()
 
     print(f"  ||θ' - θ||₂ (L2 norm):    {l2:.6e}")
     print(f"  ||θ' - θ||₁ (L1 norm):    {l1:.6e}")
@@ -71,7 +73,9 @@ def compute_parameter_norms(theta_0: dict, theta_star: dict):
     # Interpret
     print("\n  Interpretation:")
     if l2 < 1e-6:
-        print("    ✗ No meaningful change — parameters barely moved (floating point noise)")
+        print(
+            "    ✗ No meaningful change — parameters barely moved (floating point noise)"
+        )
     elif l2 < 1e-3:
         print("    ~ Weak change — parameters moved slightly")
     elif l2 < 1e-1:
@@ -80,7 +84,15 @@ def compute_parameter_norms(theta_0: dict, theta_star: dict):
         print("    ✓ Strong change — parameters moved significantly")
 
 
-def compute_gradient_check(theta_0, theta_star, config, dataset_dir, pde_type, k_shot: int = 500, seed: int = 42):
+def compute_gradient_check(
+    theta_0,
+    theta_star,
+    config,
+    dataset_dir,
+    pde_type,
+    k_shot: int = 500,
+    seed: int = 42,
+):
     model = PDEOperatorNetwork(
         input_dim=config.get("input_dim", 10),
         output_dim=config.get("output_dim", 2),
@@ -95,13 +107,17 @@ def compute_gradient_check(theta_0, theta_star, config, dataset_dir, pde_type, k
 
     pde_class = TASK_REGISTRY.get(pde_type)
     if pde_class is None:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}")
+        raise ValueError(
+            f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}"
+        )
 
     dataset_loader = MetaLearningDataLoader(dataset_dir, pde_class)
 
     all_X, all_y = [], []
     for task_idx, task in enumerate(dataset_loader.tasks):
-        (X, y), _ = task.get_support_query_split(K_shot=k_shot, query_size=0, seed=seed + task_idx)
+        (X, y), _ = task.get_support_query_split(
+            K_shot=k_shot, query_size=0, seed=seed + task_idx
+        )
         all_X.append(X)
         all_y.append(y)
 
@@ -110,7 +126,9 @@ def compute_gradient_check(theta_0, theta_star, config, dataset_dir, pde_type, k
 
     pred_y = model(X)
     loss = F.mse_loss(pred_y, y)
-    grad_vec = torch.cat([g.flatten() for g in torch.autograd.grad(loss, tuple(model.parameters()))])
+    grad_vec = torch.cat(
+        [g.flatten() for g in torch.autograd.grad(loss, tuple(model.parameters()))]
+    )
     diff_vec = (state_to_vec(theta_star) - state_to_vec(theta_0)).to(device)
 
     dot_product = torch.dot(grad_vec, diff_vec).item()
@@ -119,7 +137,9 @@ def compute_gradient_check(theta_0, theta_star, config, dataset_dir, pde_type, k
     diff_norm = torch.norm(diff_vec).item()
 
     print("\n=== Gradient Check ===\n")
-    print(f"  Data: {len(all_X)} tasks x {k_shot} points = {X.shape[0]} samples from {dataset_dir}")
+    print(
+        f"  Data: {len(all_X)} tasks x {k_shot} points = {X.shape[0]} samples from {dataset_dir}"
+    )
     print(f"  Loss at θ₀:              {loss.item():.6e}")
     print(f"  ||∇L(θ₀)||₂:            {grad_norm:.6e}")
     print(f"  ||θ' - θ₀||₂:           {diff_norm:.6e}")
@@ -152,24 +172,39 @@ def compute_gradient_check(theta_0, theta_star, config, dataset_dir, pde_type, k
         print("    ↑ Strong alignment with ascent direction (suspicious)")
 
 
-
-
-
-
-
-
 def main():
     parser = argparse.ArgumentParser(description="Parameter difference sanity check")
-    parser.add_argument("theta_0_path", type=Path, help="Path to initial .pt checkpoint")
-    parser.add_argument("theta_star_path", type=Path, help="Path to final .pt checkpoint")
-    parser.add_argument("--with-gradient", type=Path, default=None,
-                        help="Dataset directory used to train θ₀ → θ' (for gradient check)")
-    parser.add_argument("--pde-type", type=str, default=None, choices=list(TASK_REGISTRY),
-                        help="PDE type of the dataset (required with --with-gradient)")
-    parser.add_argument("--k-shot", type=int, default=500,
-                        help="Collocation points per task for gradient estimate (default: 500)")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Seed for reproducible collocation sampling (default: 42)")
+    parser.add_argument(
+        "theta_0_path", type=Path, help="Path to initial .pt checkpoint"
+    )
+    parser.add_argument(
+        "theta_star_path", type=Path, help="Path to final .pt checkpoint"
+    )
+    parser.add_argument(
+        "--with-gradient",
+        type=Path,
+        default=None,
+        help="Dataset directory used to train θ₀ → θ' (for gradient check)",
+    )
+    parser.add_argument(
+        "--pde-type",
+        type=str,
+        default=None,
+        choices=list(TASK_REGISTRY),
+        help="PDE type of the dataset (required with --with-gradient)",
+    )
+    parser.add_argument(
+        "--k-shot",
+        type=int,
+        default=500,
+        help="Collocation points per task for gradient estimate (default: 500)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed for reproducible collocation sampling (default: 42)",
+    )
     args = parser.parse_args()
 
     if args.with_gradient is not None and args.pde_type is None:
@@ -190,9 +225,19 @@ def main():
     compute_parameter_norms(theta_0, theta_star)
 
     if args.with_gradient is not None:
-        compute_gradient_check(theta_0, theta_star, config, args.with_gradient, args.pde_type, k_shot=args.k_shot, seed=args.seed)
+        compute_gradient_check(
+            theta_0,
+            theta_star,
+            config,
+            args.with_gradient,
+            args.pde_type,
+            k_shot=args.k_shot,
+            seed=args.seed,
+        )
     else:
-        print("\n  (Skipping gradient check — pass --with-gradient <dataset_dir> --pde-type <ns|br|fhn|lo> to enable)")
+        print(
+            "\n  (Skipping gradient check — pass --with-gradient <dataset_dir> --pde-type <ns|br|fhn|lo> to enable)"
+        )
 
 
 if __name__ == "__main__":

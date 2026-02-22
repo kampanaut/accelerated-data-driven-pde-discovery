@@ -31,9 +31,7 @@ from src.utils.visualization import save_flow_evolution
 from src.data import initial_conditions_ns
 
 
-def generate_fourier_data(
-    velocity_history: list, times: np.ndarray
-) -> dict:
+def generate_fourier_data(velocity_history: list, times: np.ndarray) -> dict:
     """
     Convert velocity snapshots to Fourier coefficients with temporal derivatives.
 
@@ -75,7 +73,9 @@ def generate_fourier_data(
     v_hat = v_hat_all[1:-1]
     valid_times = times[1:-1]
 
-    print(f"  FFT'd {n_snapshots} snapshots → {n_valid} valid (central diff), shape ({ny}, {nx})")
+    print(
+        f"  FFT'd {n_snapshots} snapshots → {n_valid} valid (central diff), shape ({ny}, {nx})"
+    )
 
     return {
         "u_hat": u_hat,
@@ -270,10 +270,14 @@ def process_single_ic(args_tuple):
     base_seed = ic_config.get("seed", None)
 
     for attempt in range(max_retries):
-        rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+        rng = np.random.default_rng(
+            base_seed + attempt * 1000 if base_seed is not None else None
+        )
 
         task_sim_params = simulation_params.copy()
-        task_nu = rng.uniform(raw_nu[0], raw_nu[1]) if isinstance(raw_nu, list) else raw_nu
+        task_nu = (
+            rng.uniform(raw_nu[0], raw_nu[1]) if isinstance(raw_nu, list) else raw_nu
+        )
         task_sim_params["nu"] = task_nu
 
         ic_config_attempt = ic_config.copy()
@@ -282,8 +286,10 @@ def process_single_ic(args_tuple):
 
         try:
             # Create initial condition
-            u_init, v_init, _ = create_ic_from_config( # u_init, v_init, generated_params
-                ic_config_attempt, x, y
+            u_init, v_init, _ = (
+                create_ic_from_config(  # u_init, v_init, generated_params
+                    ic_config_attempt, x, y
+                )
             )
 
             # Wrap IC for solver
@@ -500,12 +506,20 @@ def main():
             base_seed = ic_config.get("seed", None)
 
             for attempt in range(max_retries):
-                rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+                rng = np.random.default_rng(
+                    base_seed + attempt * 1000 if base_seed is not None else None
+                )
 
                 task_sim_params = simulation_params.copy()
-                task_nu = rng.uniform(raw_nu[0], raw_nu[1]) if isinstance(raw_nu, list) else raw_nu
+                task_nu = (
+                    rng.uniform(raw_nu[0], raw_nu[1])
+                    if isinstance(raw_nu, list)
+                    else raw_nu
+                )
                 task_sim_params["nu"] = task_nu
-                print(f"{'Sampled' if isinstance(raw_nu, list) else 'Using'} ν = {task_nu:.6f}")
+                print(
+                    f"{'Sampled' if isinstance(raw_nu, list) else 'Using'} ν = {task_nu:.6f}"
+                )
 
                 ic_config_attempt = ic_config.copy()
                 if base_seed is not None:
@@ -517,8 +531,10 @@ def main():
 
                 try:
                     # Create initial condition
-                    u_init, v_init, _ = create_ic_from_config( # u_init, v_init, generated_params
-                        ic_config_attempt, x, y
+                    u_init, v_init, _ = (
+                        create_ic_from_config(  # u_init, v_init, generated_params
+                            ic_config_attempt, x, y
+                        )
                     )
 
                     ic_params_for_solver = {

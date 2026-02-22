@@ -117,8 +117,13 @@ def analyze_jacobian(
         _, jvp_result = jvp(forward, (features,), (tangent,))
 
         coeff = (
-            jvp_result[:, spec.output_index] / len(spec.perturb_indices)  # type: ignore[reportCallIssue]
-        ).detach().cpu().numpy()
+            (
+                jvp_result[:, spec.output_index] / len(spec.perturb_indices)  # type: ignore[reportCallIssue]
+            )
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
         estimates[spec.name] = coeff  # type: ignore[assignment]
         true_values[spec.name] = spec.true_value

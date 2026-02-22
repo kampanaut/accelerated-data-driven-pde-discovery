@@ -20,7 +20,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-def steps_to_threshold(losses: NDArray[np.floating[Any]], threshold: float = 1e-6) -> Optional[int]:
+def steps_to_threshold(
+    losses: NDArray[np.floating[Any]], threshold: float = 1e-6
+) -> Optional[int]:
     """
     Find first step where loss drops below threshold.
 
@@ -123,7 +125,9 @@ def loss_at_step(losses: List[float], step: int) -> float:
 
 
 def speedup_ratio(
-    maml_losses: NDArray[np.floating[Any]], baseline_losses: NDArray[np.floating[Any]], threshold: float = 1e-6
+    maml_losses: NDArray[np.floating[Any]],
+    baseline_losses: NDArray[np.floating[Any]],
+    threshold: float = 1e-6,
 ) -> Tuple[Optional[float], str]:
     """
     Compute speedup ratio: baseline_steps / maml_steps.

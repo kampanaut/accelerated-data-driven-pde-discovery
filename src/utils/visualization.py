@@ -230,7 +230,7 @@ def save_flow_evolution(
 
         # Row 1: Velocity field (2D quiver)
         ax_vel = plt.subplot(5, n_snapshots, col + 1)
-        _ = ax_vel.quiver( # quiver
+        _ = ax_vel.quiver(  # quiver
             x_grid[::4, ::4],
             y_grid[::4, ::4],
             u[::4, ::4],

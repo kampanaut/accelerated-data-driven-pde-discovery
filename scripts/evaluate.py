@@ -188,7 +188,9 @@ def evaluate_task(
         actual_holdout = min(holdout_size, available_for_holdout)
 
         support_clean, holdout_clean = task.get_support_query_split(
-            K_shot=k, query_size=actual_holdout, seed=k_seed,
+            K_shot=k,
+            query_size=actual_holdout,
+            seed=k_seed,
         )
 
         for noise_idx, noise in enumerate(noise_levels):
@@ -206,8 +208,12 @@ def evaluate_task(
                     noise_gen.manual_seed(k_seed + noise_idx)
                     feat_s, tgt_s = support_clean[0].clone(), support_clean[1].clone()
                     feat_h, tgt_h = holdout_clean[0].clone(), holdout_clean[1].clone()
-                    feat_s, tgt_s = task.inject_noise(feat_s, tgt_s, noise, generator=noise_gen)
-                    feat_h, tgt_h = task.inject_noise(feat_h, tgt_h, noise, generator=noise_gen)
+                    feat_s, tgt_s = task.inject_noise(
+                        feat_s, tgt_s, noise, generator=noise_gen
+                    )
+                    feat_h, tgt_h = task.inject_noise(
+                        feat_h, tgt_h, noise, generator=noise_gen
+                    )
                     features, targets = feat_s, tgt_s
                     holdout_features, holdout_targets = feat_h, tgt_h
 
@@ -261,12 +267,18 @@ def evaluate_task(
                 samples[f"{combo_key}/baseline/pred_errors"] = baseline_pred_errors
 
                 # Jacobian analysis for coefficient recovery
-                maml_jacobian = analyze_jacobian(maml_model, holdout_features, specs, device=device)
-                baseline_jacobian = analyze_jacobian(baseline_model, holdout_features, specs, device=device)
+                maml_jacobian = analyze_jacobian(
+                    maml_model, holdout_features, specs, device=device
+                )
+                baseline_jacobian = analyze_jacobian(
+                    baseline_model, holdout_features, specs, device=device
+                )
 
                 # Store Jacobian distributions
                 if maml_jacobian is not None:
-                    for key, arr in maml_jacobian.to_npz_dict(f"{combo_key}/maml").items():
+                    for key, arr in maml_jacobian.to_npz_dict(
+                        f"{combo_key}/maml"
+                    ).items():
                         samples[key] = arr
                 if baseline_jacobian is not None:
                     for key, arr in baseline_jacobian.to_npz_dict(
@@ -294,8 +306,10 @@ def evaluate_task(
                 worse_coeffs = []
                 if maml_jacobian is not None and baseline_jacobian is not None:
                     worse_coeffs = [
-                        n for n in maml_jacobian.true_values.keys()
-                        if maml_jacobian.coeff_error_pct(n) > baseline_jacobian.coeff_error_pct(n)
+                        n
+                        for n in maml_jacobian.true_values.keys()
+                        if maml_jacobian.coeff_error_pct(n)
+                        > baseline_jacobian.coeff_error_pct(n)
                     ]
 
                 # Store per-combo flags
@@ -444,7 +458,9 @@ def main():
 
     task_class = TASK_REGISTRY.get(pde_type)
     if task_class is None:
-        raise ValueError(f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}")
+        raise ValueError(
+            f"Unknown pde_type: {pde_type}. Available: {list(TASK_REGISTRY)}"
+        )
 
     task_pattern = "*_fourier.npz"
 
@@ -543,12 +559,16 @@ def main():
                 combo_key = f"k_{k}_noise_{noise:.2f}"
 
                 maml_holdout = task_samples.get(f"{combo_key}/maml_holdout_losses")
-                baseline_holdout = task_samples.get(f"{combo_key}/baseline_holdout_losses")
+                baseline_holdout = task_samples.get(
+                    f"{combo_key}/baseline_holdout_losses"
+                )
                 if maml_holdout is None or baseline_holdout is None:
                     continue
 
                 worse = task_result.get(f"worse_{combo_key}", {})
-                coeff_recovery = task_result.get(f"coefficient_recovery_{combo_key}", {})
+                coeff_recovery = task_result.get(
+                    f"coefficient_recovery_{combo_key}", {}
+                )
 
                 entry: Dict[str, Any] = {
                     "task": task.task_name,
@@ -593,12 +613,18 @@ def main():
         bl_loss_avg = np.mean([e["baseline_loss"] for e in entries])
 
         maml_cerrs = [e["maml_coeff_error"] for e in entries if "maml_coeff_error" in e]
-        bl_cerrs = [e["baseline_coeff_error"] for e in entries if "baseline_coeff_error" in e]
+        bl_cerrs = [
+            e["baseline_coeff_error"] for e in entries if "baseline_coeff_error" in e
+        ]
 
         print(f"\n  {ic_type} ({n} combos):")
-        print(f"    Loss:  MAML={maml_loss_avg:.2e}  BL={bl_loss_avg:.2e}  MAML worse: {loss_worse_n}/{n}")
+        print(
+            f"    Loss:  MAML={maml_loss_avg:.2e}  BL={bl_loss_avg:.2e}  MAML worse: {loss_worse_n}/{n}"
+        )
         if maml_cerrs:
-            print(f"    Coeff: MAML={np.mean(maml_cerrs):.1f}%  BL={np.mean(bl_cerrs):.1f}%  MAML worse: {coeff_worse_n}/{n}")
+            print(
+                f"    Coeff: MAML={np.mean(maml_cerrs):.1f}%  BL={np.mean(bl_cerrs):.1f}%  MAML worse: {coeff_worse_n}/{n}"
+            )
 
         underperformers = [e for e in entries if e["loss_worse"] or e["coeff_worse"]]
         if underperformers:
@@ -609,7 +635,9 @@ def main():
                     flags.append("loss")
                 if e["coeff_worse"]:
                     flags.append("coeff")
-                print(f"      {e['task']} K={e['k']} noise={e['noise']:.0%} [{','.join(flags)}]")
+                print(
+                    f"      {e['task']} K={e['k']} noise={e['noise']:.0%} [{','.join(flags)}]"
+                )
             if len(underperformers) > 5:
                 print(f"      ... and {len(underperformers) - 5} more")
     print()

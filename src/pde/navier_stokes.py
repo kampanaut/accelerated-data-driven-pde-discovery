@@ -20,6 +20,7 @@ IMEX splitting:
 """
 
 import os
+
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
@@ -66,25 +67,27 @@ def solve_navier_stokes(
     y = np.linspace(0, Ly, ny, endpoint=False)
 
     # --- Dedalus setup ---
-    coords = d3.CartesianCoordinates('x', 'y')
+    coords = d3.CartesianCoordinates("x", "y")
     dist = d3.Distributor(coords, dtype=np.float64)
-    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
-    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
+    xbasis = d3.RealFourier(coords["x"], size=nx, bounds=(0, Lx), dealias=3 / 2)
+    ybasis = d3.RealFourier(coords["y"], size=ny, bounds=(0, Ly), dealias=3 / 2)
 
     # Vector velocity field + scalar pressure + pressure gauge
-    u_vec = dist.VectorField(coords, name='u', bases=(xbasis, ybasis))
-    p = dist.Field(name='p', bases=(xbasis, ybasis))
-    tau_p = dist.Field(name='tau_p')
+    u_vec = dist.VectorField(coords, name="u", bases=(xbasis, ybasis))
+    p = dist.Field(name="p", bases=(xbasis, ybasis))
+    tau_p = dist.Field(name="tau_p")
 
     # Set initial velocity: component 0 = x-velocity, component 1 = y-velocity
-    u_vec['g'][0] = u_init
-    u_vec['g'][1] = v_init
+    u_vec["g"][0] = u_init
+    u_vec["g"][1] = v_init
 
     # IMEX: LHS = implicit (viscosity + pressure), RHS = explicit (advection)
     #   dt(u) + grad(p) - nu*lap(u) = -(u . grad)(u)
     #   div(u) + tau_p = 0
     #   integ(p) = 0
-    problem = d3.IVP([u_vec, p, tau_p], namespace={'u': u_vec, 'p': p, 'tau_p': tau_p, 'nu': nu})
+    problem = d3.IVP(
+        [u_vec, p, tau_p], namespace={"u": u_vec, "p": p, "tau_p": tau_p, "nu": nu}
+    )
     problem.add_equation("dt(u) + grad(p) - nu*lap(u) = -u@grad(u)")
     problem.add_equation("div(u) + tau_p = 0")
     problem.add_equation("integ(p) = 0")
@@ -101,7 +104,7 @@ def solve_navier_stokes(
     # Save initial condition
     u_vec.change_scales(1)
     velocity_history.append(
-        (np.array(u_vec['g'][0]).copy(), np.array(u_vec['g'][1]).copy())
+        (np.array(u_vec["g"][0]).copy(), np.array(u_vec["g"][1]).copy())
     )
     times.append(0.0)
 
@@ -119,11 +122,13 @@ def solve_navier_stokes(
 
         if step % save_every == 0:
             u_vec.change_scales(1)
-            u_snap = np.array(u_vec['g'][0]).copy()
-            v_snap = np.array(u_vec['g'][1]).copy()
+            u_snap = np.array(u_vec["g"][0]).copy()
+            v_snap = np.array(u_vec["g"][1]).copy()
 
             if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
-                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+                raise RuntimeError(
+                    f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting"
+                )
 
             velocity_history.append((u_snap, v_snap))
             times.append(solver.sim_time)
@@ -136,7 +141,9 @@ def solve_navier_stokes(
     return velocity_history, np.array(times), x, y
 
 
-def solve_navier_stokes_with_params(ic_params: dict, simulation_params: dict, task_name: str = "") -> dict:
+def solve_navier_stokes_with_params(
+    ic_params: dict, simulation_params: dict, task_name: str = ""
+) -> dict:
     """
     High-level interface: generate IC from parameters and solve N-S.
 

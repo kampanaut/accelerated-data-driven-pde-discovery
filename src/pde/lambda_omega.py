@@ -21,6 +21,7 @@ IMEX splitting:
 """
 
 import os
+
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
@@ -40,8 +41,8 @@ class LOSimParams:
 
     D_u: float  # Diffusion coefficient for u
     D_v: float  # Diffusion coefficient for v
-    a: float    # Linear growth rate
-    c: float    # Rotation/frequency parameter
+    a: float  # Linear growth rate
+    c: float  # Rotation/frequency parameter
     domain_size: Tuple[float, float]  # (Lx, Ly)
     resolution: Tuple[int, int]  # (ny, nx)
     t_end: float  # Final simulation time
@@ -97,15 +98,15 @@ def solve_lo(
     y = np.linspace(0, Ly, ny, endpoint=False)
 
     # --- Dedalus setup ---
-    coords = d3.CartesianCoordinates('x', 'y')
+    coords = d3.CartesianCoordinates("x", "y")
     dist = d3.Distributor(coords, dtype=np.float64)
-    xbasis = d3.RealFourier(coords['x'], size=nx, bounds=(0, Lx), dealias=3/2)
-    ybasis = d3.RealFourier(coords['y'], size=ny, bounds=(0, Ly), dealias=3/2)
+    xbasis = d3.RealFourier(coords["x"], size=nx, bounds=(0, Lx), dealias=3 / 2)
+    ybasis = d3.RealFourier(coords["y"], size=ny, bounds=(0, Ly), dealias=3 / 2)
 
-    u = dist.Field(name='u', bases=(xbasis, ybasis))
-    v = dist.Field(name='v', bases=(xbasis, ybasis))
-    u['g'] = u_init
-    v['g'] = v_init
+    u = dist.Field(name="u", bases=(xbasis, ybasis))
+    v = dist.Field(name="v", bases=(xbasis, ybasis))
+    u["g"] = u_init
+    v["g"] = v_init
 
     # IMEX: LHS = implicit linear, RHS = explicit nonlinear
     #   u_t = D_u*lap(u) + a*u - (u + c*v)*(u^2 + v^2)
@@ -118,7 +119,9 @@ def solve_lo(
     # Note: -a*u on LHS means the linear growth is treated implicitly.
     # a > 0 makes this a destabilizing term, but implicit treatment
     # still helps stability by capturing it exactly.
-    problem = d3.IVP([u, v], namespace={'u': u, 'v': v, 'D_u': D_u, 'D_v': D_v, 'a': a, 'c': c})
+    problem = d3.IVP(
+        [u, v], namespace={"u": u, "v": v, "D_u": D_u, "D_v": D_v, "a": a, "c": c}
+    )
     problem.add_equation("dt(u) - D_u*lap(u) - a*u = -(u + c*v)*(u*u + v*v)")
     problem.add_equation("dt(v) - D_v*lap(v) - a*v =  (c*u - v)*(u*u + v*v)")
     solver = problem.build_solver(d3.RK222)
@@ -137,7 +140,7 @@ def solve_lo(
     # Save initial condition
     u.change_scales(1)
     v.change_scales(1)
-    field_history.append((np.array(u['g']).copy(), np.array(v['g']).copy()))
+    field_history.append((np.array(u["g"]).copy(), np.array(v["g"]).copy()))
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""
@@ -156,11 +159,13 @@ def solve_lo(
         if step % save_every == 0:
             u.change_scales(1)
             v.change_scales(1)
-            u_snap = np.array(u['g']).copy()
-            v_snap = np.array(v['g']).copy()
+            u_snap = np.array(u["g"]).copy()
+            v_snap = np.array(v["g"]).copy()
 
             if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
-                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+                raise RuntimeError(
+                    f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting"
+                )
 
             field_history.append((u_snap, v_snap))
             times.append(solver.sim_time)
@@ -194,7 +199,7 @@ def solve_lo_with_params(
     from src.data.initial_conditions_lo import create_lo_ic
 
     sim_dict: dict[str, Any]
-    if hasattr(simulation_params, '__dataclass_fields__'):
+    if hasattr(simulation_params, "__dataclass_fields__"):
         sim_dict = asdict(cast(LOSimParams, simulation_params))
     else:
         sim_dict = cast(dict[str, Any], simulation_params)

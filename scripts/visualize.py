@@ -138,15 +138,21 @@ def load_results_with_samples(results_path: Path) -> dict:
                 "maml_losses": raw.get(f"{combo_key}/maml_train_losses"),
                 "baseline_losses": raw.get(f"{combo_key}/baseline_train_losses"),
                 "maml_holdout_losses": raw.get(f"{combo_key}/maml_holdout_losses"),
-                "baseline_holdout_losses": raw.get(f"{combo_key}/baseline_holdout_losses"),
+                "baseline_holdout_losses": raw.get(
+                    f"{combo_key}/baseline_holdout_losses"
+                ),
                 "maml_pred_errors": raw.get(f"{combo_key}/maml/pred_errors"),
                 "baseline_pred_errors": raw.get(f"{combo_key}/baseline/pred_errors"),
             }
             for name in coeff_names:
                 combo_data[f"maml_{name}"] = raw.get(f"{combo_key}/maml/{name}")
                 combo_data[f"baseline_{name}"] = raw.get(f"{combo_key}/baseline/{name}")
-                combo_data[f"maml_{name}_true"] = raw.get(f"{combo_key}/maml/{name}_true")
-                combo_data[f"baseline_{name}_true"] = raw.get(f"{combo_key}/baseline/{name}_true")
+                combo_data[f"maml_{name}_true"] = raw.get(
+                    f"{combo_key}/maml/{name}_true"
+                )
+                combo_data[f"baseline_{name}_true"] = raw.get(
+                    f"{combo_key}/baseline/{name}_true"
+                )
 
             task_data["samples"][combo_key] = combo_data
 
@@ -264,7 +270,8 @@ def generate_per_task_figures(
                     maml_losses=maml_losses,
                     baseline_losses=baseline_losses,
                     title=f"{task_name}: K={k}, noise={noise:.0%}",
-                    save_path=task_dir / f"convergence_k{k}_noise{noise:.2f}{_combo_worse_suffix(task_data, combo_key)}.png",
+                    save_path=task_dir
+                    / f"convergence_k{k}_noise{noise:.2f}{_combo_worse_suffix(task_data, combo_key)}.png",
                     dpi=dpi,
                     deriv_threshold=deriv_threshold,
                     k_shot=k,
@@ -281,7 +288,8 @@ def generate_per_task_figures(
                         baseline_train=baseline_losses,
                         baseline_holdout=baseline_holdout,
                         title=f"{task_name}: K={k}, noise={noise:.0%} (Train vs Holdout)",
-                        save_path=task_dir / f"train_holdout_k{k}_noise{noise:.2f}{_combo_worse_suffix(task_data, combo_key)}.png",
+                        save_path=task_dir
+                        / f"train_holdout_k{k}_noise{noise:.2f}{_combo_worse_suffix(task_data, combo_key)}.png",
                         dpi=dpi,
                         k_shot=k,
                         holdout_size=holdout_size,
@@ -425,10 +433,14 @@ def generate_per_task_figures(
                     output_indices = [m["output_index"] for m in members]
 
                     maml_ests = [combo_data.get(f"maml_{n}") for n in member_names]
-                    baseline_ests = [combo_data.get(f"baseline_{n}") for n in member_names]
+                    baseline_ests = [
+                        combo_data.get(f"baseline_{n}") for n in member_names
+                    ]
                     true_arr = combo_data.get(f"maml_{member_names[0]}_true")
 
-                    if true_arr is None or any(x is None for x in maml_ests + baseline_ests):
+                    if true_arr is None or any(
+                        x is None for x in maml_ests + baseline_ests
+                    ):
                         continue
                     if any(len(x) == 0 for x in maml_ests + baseline_ests):
                         continue
@@ -473,7 +485,9 @@ def generate_per_task_figures(
                     combo_data = task_samples.get(combo_key, {})
 
                     maml_ests = [combo_data.get(f"maml_{n}") for n in member_names]
-                    baseline_ests = [combo_data.get(f"baseline_{n}") for n in member_names]
+                    baseline_ests = [
+                        combo_data.get(f"baseline_{n}") for n in member_names
+                    ]
                     coeff_true = combo_data.get(f"maml_{true_key}")
 
                     if coeff_true is None or any(x is None for x in maml_ests):
@@ -487,8 +501,12 @@ def generate_per_task_figures(
                     maml_errors[i, j] = abs(maml_recovered - true_val) / true_val * 100
 
                     if not any(x is None for x in baseline_ests):
-                        baseline_recovered = float(np.mean([np.mean(x) for x in baseline_ests]))
-                        baseline_errors[i, j] = abs(baseline_recovered - true_val) / true_val * 100
+                        baseline_recovered = float(
+                            np.mean([np.mean(x) for x in baseline_ests])
+                        )
+                        baseline_errors[i, j] = (
+                            abs(baseline_recovered - true_val) / true_val * 100
+                        )
 
             if has_jacobian_data:
                 fig = plot_coefficient_heatmap(
@@ -519,19 +537,29 @@ def generate_per_task_figures(
                     combo_data = task_samples.get(combo_key, {})
 
                     maml_ests = [combo_data.get(f"maml_{n}") for n in member_names]
-                    baseline_ests = [combo_data.get(f"baseline_{n}") for n in member_names]
+                    baseline_ests = [
+                        combo_data.get(f"baseline_{n}") for n in member_names
+                    ]
                     coeff_true = combo_data.get(f"maml_{true_key}")
 
-                    if coeff_true is None or any(x is None for x in maml_ests + baseline_ests):
+                    if coeff_true is None or any(
+                        x is None for x in maml_ests + baseline_ests
+                    ):
                         continue
                     true_val = float(coeff_true[0])
                     if true_val == 0:
                         continue
 
                     maml_recovered = float(np.mean([np.mean(x) for x in maml_ests]))
-                    baseline_recovered = float(np.mean([np.mean(x) for x in baseline_ests]))
-                    maml_err_list.append(abs(maml_recovered - true_val) / true_val * 100)
-                    baseline_err_list.append(abs(baseline_recovered - true_val) / true_val * 100)
+                    baseline_recovered = float(
+                        np.mean([np.mean(x) for x in baseline_ests])
+                    )
+                    maml_err_list.append(
+                        abs(maml_recovered - true_val) / true_val * 100
+                    )
+                    baseline_err_list.append(
+                        abs(baseline_recovered - true_val) / true_val * 100
+                    )
                     valid_k.append(k)
 
                 if len(valid_k) >= 2:
@@ -563,19 +591,29 @@ def generate_per_task_figures(
                     combo_data = task_samples.get(combo_key, {})
 
                     maml_ests = [combo_data.get(f"maml_{n}") for n in member_names]
-                    baseline_ests = [combo_data.get(f"baseline_{n}") for n in member_names]
+                    baseline_ests = [
+                        combo_data.get(f"baseline_{n}") for n in member_names
+                    ]
                     coeff_true = combo_data.get(f"maml_{true_key}")
 
-                    if coeff_true is None or any(x is None for x in maml_ests + baseline_ests):
+                    if coeff_true is None or any(
+                        x is None for x in maml_ests + baseline_ests
+                    ):
                         continue
                     true_val = float(coeff_true[0])
                     if true_val == 0:
                         continue
 
                     maml_recovered = float(np.mean([np.mean(x) for x in maml_ests]))
-                    baseline_recovered = float(np.mean([np.mean(x) for x in baseline_ests]))
-                    maml_err_list.append(abs(maml_recovered - true_val) / true_val * 100)
-                    baseline_err_list.append(abs(baseline_recovered - true_val) / true_val * 100)
+                    baseline_recovered = float(
+                        np.mean([np.mean(x) for x in baseline_ests])
+                    )
+                    maml_err_list.append(
+                        abs(maml_recovered - true_val) / true_val * 100
+                    )
+                    baseline_err_list.append(
+                        abs(baseline_recovered - true_val) / true_val * 100
+                    )
                     valid_noise.append(noise)
 
                 if len(valid_noise) >= 2:
@@ -932,7 +970,9 @@ def generate_aggregated_figures(
                 has_data = False
 
                 for task_name in task_names:
-                    task_data = results["tasks"][task_name]["samples"].get(combo_key, {})
+                    task_data = results["tasks"][task_name]["samples"].get(
+                        combo_key, {}
+                    )
                     true_arr = task_data.get(f"maml_{member_names[0]}_true")
                     if true_arr is None:
                         continue
@@ -949,9 +989,7 @@ def generate_aggregated_figures(
                         if b is not None:
                             baseline_all[i].extend(b.flatten() / true_val)
 
-                if has_data and all(
-                    len(x) > 0 for x in maml_all + baseline_all
-                ):
+                if has_data and all(len(x) > 0 for x in maml_all + baseline_all):
                     fig = plot_jacobian_histogram(
                         maml_estimates=[np.array(x) for x in maml_all],
                         baseline_estimates=[np.array(x) for x in baseline_all],
@@ -987,7 +1025,9 @@ def generate_aggregated_figures(
                     combo_data = task_samples.get(combo_key, {})
 
                     maml_ests = [combo_data.get(f"maml_{n}") for n in member_names]
-                    baseline_ests = [combo_data.get(f"baseline_{n}") for n in member_names]
+                    baseline_ests = [
+                        combo_data.get(f"baseline_{n}") for n in member_names
+                    ]
                     coeff_true = combo_data.get(f"maml_{true_key}")
 
                     if coeff_true is None or any(x is None for x in maml_ests):
@@ -1001,8 +1041,12 @@ def generate_aggregated_figures(
                     maml_errors[i, j] = abs(maml_recovered - true_val) / true_val * 100
 
                     if not any(x is None for x in baseline_ests):
-                        baseline_recovered = float(np.mean([np.mean(x) for x in baseline_ests]))
-                        baseline_errors[i, j] = abs(baseline_recovered - true_val) / true_val * 100
+                        baseline_recovered = float(
+                            np.mean([np.mean(x) for x in baseline_ests])
+                        )
+                        baseline_errors[i, j] = (
+                            abs(baseline_recovered - true_val) / true_val * 100
+                        )
 
             maml_error_stack.append(maml_errors)
             baseline_error_stack.append(baseline_errors)
@@ -1043,10 +1087,14 @@ def generate_aggregated_figures(
                     combo_data = task_samples.get(combo_key, {})
 
                     maml_ests = [combo_data.get(f"maml_{n}") for n in member_names]
-                    baseline_ests = [combo_data.get(f"baseline_{n}") for n in member_names]
+                    baseline_ests = [
+                        combo_data.get(f"baseline_{n}") for n in member_names
+                    ]
                     coeff_true = combo_data.get(f"maml_{true_key}")
 
-                    if coeff_true is None or any(x is None for x in maml_ests + baseline_ests):
+                    if coeff_true is None or any(
+                        x is None for x in maml_ests + baseline_ests
+                    ):
                         maml_row.append(np.nan)
                         baseline_row.append(np.nan)
                     else:
@@ -1055,10 +1103,18 @@ def generate_aggregated_figures(
                             maml_row.append(np.nan)
                             baseline_row.append(np.nan)
                         else:
-                            maml_recovered = float(np.mean([np.mean(x) for x in maml_ests]))
-                            baseline_recovered = float(np.mean([np.mean(x) for x in baseline_ests]))
-                            maml_row.append(abs(maml_recovered - true_val) / true_val * 100)
-                            baseline_row.append(abs(baseline_recovered - true_val) / true_val * 100)
+                            maml_recovered = float(
+                                np.mean([np.mean(x) for x in maml_ests])
+                            )
+                            baseline_recovered = float(
+                                np.mean([np.mean(x) for x in baseline_ests])
+                            )
+                            maml_row.append(
+                                abs(maml_recovered - true_val) / true_val * 100
+                            )
+                            baseline_row.append(
+                                abs(baseline_recovered - true_val) / true_val * 100
+                            )
 
                 maml_per_task.append(maml_row)
                 baseline_per_task.append(baseline_row)
@@ -1101,10 +1157,14 @@ def generate_aggregated_figures(
                     combo_data = task_samples.get(combo_key, {})
 
                     maml_ests = [combo_data.get(f"maml_{n}") for n in member_names]
-                    baseline_ests = [combo_data.get(f"baseline_{n}") for n in member_names]
+                    baseline_ests = [
+                        combo_data.get(f"baseline_{n}") for n in member_names
+                    ]
                     coeff_true = combo_data.get(f"maml_{true_key}")
 
-                    if coeff_true is None or any(x is None for x in maml_ests + baseline_ests):
+                    if coeff_true is None or any(
+                        x is None for x in maml_ests + baseline_ests
+                    ):
                         maml_row.append(np.nan)
                         baseline_row.append(np.nan)
                     else:
@@ -1113,10 +1173,18 @@ def generate_aggregated_figures(
                             maml_row.append(np.nan)
                             baseline_row.append(np.nan)
                         else:
-                            maml_recovered = float(np.mean([np.mean(x) for x in maml_ests]))
-                            baseline_recovered = float(np.mean([np.mean(x) for x in baseline_ests]))
-                            maml_row.append(abs(maml_recovered - true_val) / true_val * 100)
-                            baseline_row.append(abs(baseline_recovered - true_val) / true_val * 100)
+                            maml_recovered = float(
+                                np.mean([np.mean(x) for x in maml_ests])
+                            )
+                            baseline_recovered = float(
+                                np.mean([np.mean(x) for x in baseline_ests])
+                            )
+                            maml_row.append(
+                                abs(maml_recovered - true_val) / true_val * 100
+                            )
+                            baseline_row.append(
+                                abs(baseline_recovered - true_val) / true_val * 100
+                            )
 
                 maml_per_task.append(maml_row)
                 baseline_per_task.append(baseline_row)
@@ -1130,8 +1198,7 @@ def generate_aggregated_figures(
                     maml_errors=np.nanmean(maml_arr, axis=0),
                     baseline_errors=np.nanmean(baseline_arr, axis=0),
                     title=f"Aggregated {coeff_name} Error vs Noise (K={k}, n={n_tasks} tasks)",
-                    save_path=agg_dir
-                    / f"coefficient_vs_noise_{coeff_name}_k{k}.png",
+                    save_path=agg_dir / f"coefficient_vs_noise_{coeff_name}_k{k}.png",
                     dpi=dpi,
                     maml_std=np.nanstd(maml_arr, axis=0),
                     baseline_std=np.nanstd(baseline_arr, axis=0),
@@ -1191,7 +1258,6 @@ def main():
 
     if not results_path.exists():
         raise ValueError("Results doesn't exist!")
-
 
     print("=" * 60)
     print(f"Processing {results_path}")
