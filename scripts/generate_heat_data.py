@@ -172,22 +172,18 @@ def process_single_ic(args_tuple):
     if output_file.exists():
         return ("skipped", ic_name, None, 0)
 
-    rng = np.random.default_rng(ic_config.get("seed"))
-
-    task_sim_params = simulation_params.copy()
-
-    # D: scalar or [min, max] range
     raw_D = ic_config.get("D", simulation_params["D"])
-    if isinstance(raw_D, list):
-        task_D = rng.uniform(raw_D[0], raw_D[1])
-    else:
-        task_D = raw_D
-    task_sim_params["D"] = task_D
 
-    max_retries = 5
+    max_retries = 800
     base_seed = ic_config.get("seed", None)
 
     for attempt in range(max_retries):
+        rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+
+        task_sim_params = simulation_params.copy()
+        task_D = rng.uniform(raw_D[0], raw_D[1]) if isinstance(raw_D, list) else raw_D
+        task_sim_params["D"] = task_D
+
         ic_config_attempt = ic_config.copy()
         if base_seed is not None:
             ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -202,7 +198,7 @@ def process_single_ic(args_tuple):
                 "u_init": u_init,
             }
 
-            results = solve_heat_with_params(ic_params_for_solver, task_sim_params)
+            results = solve_heat_with_params(ic_params_for_solver, task_sim_params, task_name=ic_name)
 
             field_history = results["field_history"]
             times = results["times"]

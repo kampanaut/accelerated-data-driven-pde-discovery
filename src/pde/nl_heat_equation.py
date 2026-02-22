@@ -49,6 +49,7 @@ def solve_nl_heat(
     t_end: float,
     dt: float,
     save_interval: Optional[float] = None,
+    task_name: str = "",
 ) -> Tuple[List[np.ndarray], np.ndarray, np.ndarray, np.ndarray]:
     """
     Solve 2D nonlinear heat equation u_t = K*(1-u)*nabla^2(u) using Dedalus.
@@ -110,11 +111,12 @@ def solve_nl_heat(
     field_history.append(np.array(u['g']).copy())
     times.append(0.0)
 
-    print("Starting nonlinear heat equation simulation:")
-    print(f"  Domain: {Lx} x {Ly}")
-    print(f"  Resolution: {nx} x {ny}")
-    print(f"  Coefficient: K = {K}")
-    print(f"  Time: [0, {t_end}] with dt = {dt}")
+    tag = f"[{task_name}] " if task_name else ""
+    print(f"{tag}Starting nonlinear heat equation simulation:")
+    print(f"  {tag}Domain: {Lx} x {Ly}")
+    print(f"  {tag}Resolution: {nx} x {ny}")
+    print(f"  {tag}Coefficient: K = {K}")
+    print(f"  {tag}Time: [0, {t_end}] with dt = {dt}")
 
     while solver.proceed:
         solver.step(dt)
@@ -122,14 +124,18 @@ def solve_nl_heat(
 
         if step % save_every == 0:
             u.change_scales(1)
-            field_history.append(np.array(u['g']).copy())
+            snapshot = np.array(u['g']).copy()
+
+            if not np.isfinite(np.mean(snapshot)):
+                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+
+            field_history.append(snapshot)
             times.append(solver.sim_time)
 
             if step % (save_every * 10) == 0:
-                u_mean = np.mean(u['g'])
-                print(f"  t = {solver.sim_time:.3f} / {t_end}  |  <u> = {u_mean:.6f}")
+                print(f"  {tag}t = {solver.sim_time:.3f} / {t_end}  |  <u> = {np.mean(snapshot):.6f}")
 
-    print(f"Simulation complete. Saved {len(field_history)} snapshots.")
+    print(f"{tag}Simulation complete. Saved {len(field_history)} snapshots.")
 
     return field_history, np.array(times), x, y
 
@@ -137,6 +143,7 @@ def solve_nl_heat(
 def solve_nl_heat_with_params(
     ic_params: dict[str, Any],
     simulation_params: NLHeatSimParams | dict[str, Any],
+    task_name: str = "",
 ) -> dict[str, Any]:
     """
     High-level interface: generate IC from parameters and solve nonlinear heat equation.
@@ -177,6 +184,7 @@ def solve_nl_heat_with_params(
         t_end=sim_dict["t_end"],
         dt=sim_dict["dt"],
         save_interval=sim_dict["save_interval"],
+        task_name=task_name,
     )
 
     return {

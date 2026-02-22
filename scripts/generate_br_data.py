@@ -243,48 +243,49 @@ def process_single_ic(args_tuple):
     if output_file.exists():
         return ("skipped", ic_name, None, 0)
 
-    # Check for task-specific parameter overrides
-    task_sim_params = simulation_params.copy()
-
-    # Handle parameter sampling from ranges
-    # Single RNG per task — draws are sequential so D_u, D_v, k1, k2 get distinct values
-    param_rng = np.random.default_rng(ic_config.get("seed"))
-    for param in ["D_u", "D_v", "k1", "k2"]:
-        raw_val = ic_config.get(param, task_sim_params[param])
-        if isinstance(raw_val, list):
-            if len(raw_val) != 2:
-                return (
-                    "failed",
-                    ic_name,
-                    f"{param} as list must have 2 elements, got {len(raw_val)}",
-                    0,
-                )
-            task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
-        elif raw_val != task_sim_params[param]:
-            task_sim_params[param] = raw_val
-
-    # k2_delta: sample k2 relative to Turing threshold instead of absolute range
+    # Validate list params upfront
     k2_delta_range = ic_config.get("k2_delta")
-    k2_c = 0
-    if k2_delta_range is not None:
-        k2_c = compute_turing_threshold(
-            k1=task_sim_params["k1"],
-            D_u=task_sim_params["D_u"],
-            D_v=task_sim_params["D_v"],
-        )
-        delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
-        task_sim_params["k2"] = k2_c + delta
-
-    # Inject k1, k2 into IC config for steady state calculation
-    ic_config_with_params = ic_config.copy()
-    ic_config_with_params["k1"] = task_sim_params["k1"]
-    ic_config_with_params["k2"] = task_sim_params["k2"]
+    for param in ["D_u", "D_v", "k1", "k2"]:
+        raw_val = ic_config.get(param, simulation_params[param])
+        if isinstance(raw_val, list) and len(raw_val) != 2:
+            return (
+                "failed",
+                ic_name,
+                f"{param} as list must have 2 elements, got {len(raw_val)}",
+                0,
+            )
 
     # Retry loop for divergence
     max_retries = 800
     base_seed = ic_config.get("seed", None)
+    k2_c: float = 0.0
 
     for attempt in range(max_retries):
+        param_rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+
+        task_sim_params = simulation_params.copy()
+        for param in ["D_u", "D_v", "k1", "k2"]:
+            raw_val = ic_config.get(param, task_sim_params[param])
+            if isinstance(raw_val, list):
+                task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
+            elif raw_val != task_sim_params[param]:
+                task_sim_params[param] = raw_val
+
+        # k2_delta: sample k2 relative to Turing threshold instead of absolute range
+        if k2_delta_range is not None:
+            k2_c = compute_turing_threshold(
+                k1=task_sim_params["k1"],
+                D_u=task_sim_params["D_u"],
+                D_v=task_sim_params["D_v"],
+            )
+            delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
+            task_sim_params["k2"] = k2_c + delta
+
+        # Inject k1, k2 into IC config for steady state calculation
+        ic_config_with_params = ic_config.copy()
+        ic_config_with_params["k1"] = task_sim_params["k1"]
+        ic_config_with_params["k2"] = task_sim_params["k2"]
+
         ic_config_attempt = ic_config_with_params.copy()
         if base_seed is not None:
             ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -306,6 +307,7 @@ def process_single_ic(args_tuple):
                 t_end=task_sim_params["t_end"],
                 dt=task_sim_params["dt"],
                 save_interval=task_sim_params.get("save_interval"),
+                task_name=ic_name,
             )
 
             # Validate raw concentrations for divergence
@@ -509,52 +511,44 @@ def main():
             print(f"IC {ic_idx + 1}/{len(ic_configs)}: {ic_name} ({ic_config['type']})")
             print(f"{'-' * 60}")
 
-            # Check for task-specific parameter overrides
-            task_sim_params = simulation_params.copy()
-
-            # Handle parameter sampling from ranges
-            # Single RNG per task — draws are sequential so D_u, D_v, k1, k2 get distinct values
-            param_rng = np.random.default_rng(ic_config.get("seed"))
-            for param in ["D_u", "D_v", "k1", "k2"]:
-                raw_val = ic_config.get(param, task_sim_params[param])
-                if isinstance(raw_val, list):
-                    if len(raw_val) != 2:
-                        raise ValueError(
-                            f"Task '{ic_name}': {param} as list must have exactly 2 elements [min, max], "
-                            f"got {len(raw_val)} elements: {raw_val}"
-                        )
-                    task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
-                    print(
-                        f"Sampled {param} = {task_sim_params[param]:.6f} from range {raw_val}"
-                    )
-                elif raw_val != task_sim_params[param]:
-                    task_sim_params[param] = raw_val
-
-            # k2_delta: sample k2 relative to Turing threshold
-            k2_delta_range = ic_config.get("k2_delta")
-            k2_c = 0
-            if k2_delta_range is not None:
-                k2_c = compute_turing_threshold(
-                    k1=task_sim_params["k1"],
-                    D_u=task_sim_params["D_u"],
-                    D_v=task_sim_params["D_v"],
-                )
-                delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
-                task_sim_params["k2"] = k2_c + delta
-                print(
-                    f"k2_delta mode: k2_c={k2_c:.4f}, delta={delta:.4f}, k2={task_sim_params['k2']:.4f}"
-                )
-
-            # Inject k1, k2 into IC config for steady state calculation
-            ic_config_with_params = ic_config.copy()
-            ic_config_with_params["k1"] = task_sim_params["k1"]
-            ic_config_with_params["k2"] = task_sim_params["k2"]
-
             # Retry loop for divergence
+            k2_delta_range = ic_config.get("k2_delta")
             max_retries = 800
+            k2_c: float = 0.0
             base_seed = ic_config.get("seed", None)
 
             for attempt in range(max_retries):
+                param_rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+
+                task_sim_params = simulation_params.copy()
+                for param in ["D_u", "D_v", "k1", "k2"]:
+                    raw_val = ic_config.get(param, task_sim_params[param])
+                    if isinstance(raw_val, list):
+                        task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
+                        print(
+                            f"Sampled {param} = {task_sim_params[param]:.6f} from range {raw_val}"
+                        )
+                    elif raw_val != task_sim_params[param]:
+                        task_sim_params[param] = raw_val
+
+                # k2_delta: sample k2 relative to Turing threshold
+                if k2_delta_range is not None:
+                    k2_c = compute_turing_threshold(
+                        k1=task_sim_params["k1"],
+                        D_u=task_sim_params["D_u"],
+                        D_v=task_sim_params["D_v"],
+                    )
+                    delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
+                    task_sim_params["k2"] = k2_c + delta
+                    print(
+                        f"k2_delta mode: k2_c={k2_c:.4f}, delta={delta:.4f}, k2={task_sim_params['k2']:.4f}"
+                    )
+
+                # Inject k1, k2 into IC config for steady state calculation
+                ic_config_with_params = ic_config.copy()
+                ic_config_with_params["k1"] = task_sim_params["k1"]
+                ic_config_with_params["k2"] = task_sim_params["k2"]
+
                 ic_config_attempt = ic_config_with_params.copy()
                 if base_seed is not None:
                     ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -581,6 +575,7 @@ def main():
                             t_end=task_sim_params["t_end"],
                             dt=task_sim_params["dt"],
                             save_interval=task_sim_params.get("save_interval"),
+                            task_name=ic_name,
                         )
                     )
 

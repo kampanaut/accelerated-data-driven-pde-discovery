@@ -139,6 +139,7 @@ def solve_brusselator(
     t_end: float,
     dt: float,
     save_interval: Optional[float] = None,
+    task_name: str = "",
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """
     Solve 2D Brusselator reaction-diffusion equations using Dedalus.
@@ -210,13 +211,15 @@ def solve_brusselator(
     concentration_history.append((np.array(u['g']).copy(), np.array(v['g']).copy()))
     times.append(0.0)
 
-    print("Starting Brusselator simulation:")
-    print(f"  Domain: {Lx} x {Ly}")
-    print(f"  Resolution: {nx} x {ny}")
-    print(f"  Diffusion: D_u = {D_u}, D_v = {D_v}")
-    print(f"  Reaction: k1 = {k1}, k2 = {k2}")
-    print(f"  Steady state: u* = {k1:.4f}, v* = {(k2 / k1):.4f}")
-    print(f"  Time: [0, {t_end}] with dt = {dt}")
+    tag = f"[{task_name}] " if task_name else ""
+
+    print(f"{tag}Starting Brusselator simulation:")
+    print(f"{tag}  Domain: {Lx} x {Ly}")
+    print(f"{tag}  Resolution: {nx} x {ny}")
+    print(f"{tag}  Diffusion: D_u = {D_u}, D_v = {D_v}")
+    print(f"{tag}  Reaction: k1 = {k1}, k2 = {k2}")
+    print(f"{tag}  Steady state: u* = {k1:.4f}, v* = {(k2 / k1):.4f}")
+    print(f"{tag}  Time: [0, {t_end}] with dt = {dt}")
 
     while solver.proceed:
         solver.step(dt)
@@ -225,19 +228,21 @@ def solve_brusselator(
         if step % save_every == 0:
             u.change_scales(1)
             v.change_scales(1)
-            concentration_history.append(
-                (np.array(u['g']).copy(), np.array(v['g']).copy())
-            )
+            u_snap = np.array(u['g']).copy()
+            v_snap = np.array(v['g']).copy()
+
+            if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
+                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+
+            concentration_history.append((u_snap, v_snap))
             times.append(solver.sim_time)
 
             if step % (save_every * 10) == 0:
-                u_mean = np.mean(u['g'])
-                v_mean = np.mean(v['g'])
                 print(
-                    f"  t = {solver.sim_time:.3f} / {t_end}  |  <u> = {u_mean:.4f}, <v> = {v_mean:.4f}"
+                    f"{tag}  t = {solver.sim_time:.3f} / {t_end}  |  <u> = {np.mean(u_snap):.4f}, <v> = {np.mean(v_snap):.4f}"
                 )
 
-    print(f"Simulation complete. Saved {len(concentration_history)} snapshots.")
+    print(f"{tag}Simulation complete. Saved {len(concentration_history)} snapshots.")
 
     return concentration_history, np.array(times), x, y
 
@@ -245,6 +250,7 @@ def solve_brusselator(
 def solve_brusselator_with_params(
     ic_params: BrusselatorICParams | dict[str, Any],
     simulation_params: BrusselatorSimParams | dict[str, Any],
+    task_name: str = "",
 ) -> SolverResult:
     """
     High-level interface: generate IC from parameters and solve Brusselator.
@@ -315,6 +321,7 @@ def solve_brusselator_with_params(
         t_end=sim_dict["t_end"],
         dt=sim_dict["dt"],
         save_interval=sim_dict["save_interval"],
+        task_name=task_name,
     )
 
     return {

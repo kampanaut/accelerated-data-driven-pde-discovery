@@ -34,6 +34,7 @@ def solve_navier_stokes(
     t_end: float,
     dt: float,
     save_interval: float,
+    task_name: str = "",
 ) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
     """
     Solve 2D incompressible Navier-Stokes equations using Dedalus.
@@ -104,11 +105,13 @@ def solve_navier_stokes(
     )
     times.append(0.0)
 
-    print("Starting Navier-Stokes simulation:")
-    print(f"  Domain: {Lx} x {Ly}")
-    print(f"  Resolution: {nx} x {ny}")
-    print(f"  Viscosity: nu = {nu}")
-    print(f"  Time: [0, {t_end}] with dt = {dt}")
+    tag = f"[{task_name}] " if task_name else ""
+
+    print(f"{tag}Starting Navier-Stokes simulation:")
+    print(f"{tag}  Domain: {Lx} x {Ly}")
+    print(f"{tag}  Resolution: {nx} x {ny}")
+    print(f"{tag}  Viscosity: nu = {nu}")
+    print(f"{tag}  Time: [0, {t_end}] with dt = {dt}")
 
     while solver.proceed:
         solver.step(dt)
@@ -116,20 +119,24 @@ def solve_navier_stokes(
 
         if step % save_every == 0:
             u_vec.change_scales(1)
-            velocity_history.append(
-                (np.array(u_vec['g'][0]).copy(), np.array(u_vec['g'][1]).copy())
-            )
+            u_snap = np.array(u_vec['g'][0]).copy()
+            v_snap = np.array(u_vec['g'][1]).copy()
+
+            if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
+                raise RuntimeError(f"{tag}NaN/Inf detected at t={solver.sim_time:.3f}, aborting")
+
+            velocity_history.append((u_snap, v_snap))
             times.append(solver.sim_time)
 
             if step % (save_every * 5) == 0:
-                print(f"  t = {solver.sim_time:.3f} / {t_end}")
+                print(f"{tag}  t = {solver.sim_time:.3f} / {t_end}")
 
-    print(f"Simulation complete. Saved {len(velocity_history)} snapshots.")
+    print(f"{tag}Simulation complete. Saved {len(velocity_history)} snapshots.")
 
     return velocity_history, np.array(times), x, y
 
 
-def solve_navier_stokes_with_params(ic_params: dict, simulation_params: dict) -> dict:
+def solve_navier_stokes_with_params(ic_params: dict, simulation_params: dict, task_name: str = "") -> dict:
     """
     High-level interface: generate IC from parameters and solve N-S.
 
@@ -171,6 +178,7 @@ def solve_navier_stokes_with_params(ic_params: dict, simulation_params: dict) ->
         t_end=simulation_params["t_end"],
         dt=simulation_params["dt"],
         save_interval=simulation_params["save_interval"],
+        task_name=task_name,
     )
 
     return {

@@ -257,27 +257,25 @@ def process_single_ic(args_tuple):
     # Check for task-specific viscosity override
     raw_nu = ic_config.get("nu", simulation_params["nu"])
 
-    if isinstance(raw_nu, list):
-        if len(raw_nu) != 2:
-            return (
-                "failed",
-                ic_name,
-                f"nu as list must have 2 elements, got {len(raw_nu)}",
-                0,
-            )
-        rng = np.random.default_rng(ic_config.get("seed"))
-        task_nu = rng.uniform(raw_nu[0], raw_nu[1])
-    else:
-        task_nu = raw_nu
-
-    task_sim_params = simulation_params.copy()
-    task_sim_params["nu"] = task_nu
+    if isinstance(raw_nu, list) and len(raw_nu) != 2:
+        return (
+            "failed",
+            ic_name,
+            f"nu as list must have 2 elements, got {len(raw_nu)}",
+            0,
+        )
 
     # Retry loop for divergence
     max_retries = 800
     base_seed = ic_config.get("seed", None)
 
     for attempt in range(max_retries):
+        rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+
+        task_sim_params = simulation_params.copy()
+        task_nu = rng.uniform(raw_nu[0], raw_nu[1]) if isinstance(raw_nu, list) else raw_nu
+        task_sim_params["nu"] = task_nu
+
         ic_config_attempt = ic_config.copy()
         if base_seed is not None:
             ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -297,7 +295,7 @@ def process_single_ic(args_tuple):
 
             # Solve Navier-Stokes
             results = solve_navier_stokes_with_params(
-                ic_params_for_solver, task_sim_params
+                ic_params_for_solver, task_sim_params, task_name=ic_name
             )
 
             velocity_history = results["velocity_history"]
@@ -491,27 +489,24 @@ def main():
             # Check for task-specific viscosity override
             raw_nu = ic_config.get("nu", simulation_params["nu"])
 
-            if isinstance(raw_nu, list):
-                if len(raw_nu) != 2:
-                    raise ValueError(
-                        f"Task '{ic_name}': nu as list must have exactly 2 elements [min, max], "
-                        f"got {len(raw_nu)} elements: {raw_nu}"
-                    )
-                rng = np.random.default_rng(ic_config.get("seed"))
-                task_nu = rng.uniform(raw_nu[0], raw_nu[1])
-                print(f"Sampled ν = {task_nu:.6f} from range {raw_nu}")
-            else:
-                task_nu = raw_nu
-                print(f"Using ν = {task_nu:.6f}")
-
-            task_sim_params = simulation_params.copy()
-            task_sim_params["nu"] = task_nu
+            if isinstance(raw_nu, list) and len(raw_nu) != 2:
+                raise ValueError(
+                    f"Task '{ic_name}': nu as list must have exactly 2 elements [min, max], "
+                    f"got {len(raw_nu)} elements: {raw_nu}"
+                )
 
             # Retry loop for divergence
             max_retries = 800
             base_seed = ic_config.get("seed", None)
 
             for attempt in range(max_retries):
+                rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+
+                task_sim_params = simulation_params.copy()
+                task_nu = rng.uniform(raw_nu[0], raw_nu[1]) if isinstance(raw_nu, list) else raw_nu
+                task_sim_params["nu"] = task_nu
+                print(f"{'Sampled' if isinstance(raw_nu, list) else 'Using'} ν = {task_nu:.6f}")
+
                 ic_config_attempt = ic_config.copy()
                 if base_seed is not None:
                     ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -534,7 +529,7 @@ def main():
 
                     # Solve Navier-Stokes
                     results = solve_navier_stokes_with_params(
-                        ic_params_for_solver, task_sim_params
+                        ic_params_for_solver, task_sim_params, task_name=ic_name
                     )
 
                     velocity_history = results["velocity_history"]

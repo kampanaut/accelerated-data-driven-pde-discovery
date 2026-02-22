@@ -212,46 +212,29 @@ def process_single_ic(args_tuple):
     if output_file.exists():
         return ("skipped", ic_name, None, 0)
 
-    # Sample per-task parameters from ranges
-    rng = np.random.default_rng(ic_config.get("seed"))
-
-    task_sim_params = simulation_params.copy()
-
-    # D_u: scalar or [min, max] range
     raw_D_u = ic_config.get("D_u", simulation_params["D_u"])
-    if isinstance(raw_D_u, list):
-        task_D_u = rng.uniform(raw_D_u[0], raw_D_u[1])
-    else:
-        task_D_u = raw_D_u
-    task_sim_params["D_u"] = task_D_u
-
-    # D_v: scalar or [min, max] range
     raw_D_v = ic_config.get("D_v", simulation_params["D_v"])
-    if isinstance(raw_D_v, list):
-        task_D_v = rng.uniform(raw_D_v[0], raw_D_v[1])
-    else:
-        task_D_v = raw_D_v
-    task_sim_params["D_v"] = task_D_v
-
-    # c: scalar or [min, max] range
     raw_c = ic_config.get("c", simulation_params["c"])
-    if isinstance(raw_c, list):
-        task_c = rng.uniform(raw_c[0], raw_c[1])
-    else:
-        task_c = raw_c
-    task_sim_params["c"] = task_c
 
-    # a: always scalar (fixed across tasks)
-    task_sim_params["a"] = simulation_params["a"]
-
-    # Pass a to IC config so ICs can use limit-cycle amplitude
-    ic_config_with_a = ic_config.copy()
-    ic_config_with_a["a_value"] = simulation_params["a"]
-
-    max_retries = 5
+    max_retries = 800
     base_seed = ic_config.get("seed", None)
 
     for attempt in range(max_retries):
+        rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+
+        task_sim_params = simulation_params.copy()
+        task_D_u = rng.uniform(raw_D_u[0], raw_D_u[1]) if isinstance(raw_D_u, list) else raw_D_u
+        task_D_v = rng.uniform(raw_D_v[0], raw_D_v[1]) if isinstance(raw_D_v, list) else raw_D_v
+        task_c = rng.uniform(raw_c[0], raw_c[1]) if isinstance(raw_c, list) else raw_c
+        task_sim_params["D_u"] = task_D_u
+        task_sim_params["D_v"] = task_D_v
+        task_sim_params["c"] = task_c
+        task_sim_params["a"] = simulation_params["a"]
+
+        # Pass a to IC config so ICs can use limit-cycle amplitude
+        ic_config_with_a = ic_config.copy()
+        ic_config_with_a["a_value"] = simulation_params["a"]
+
         ic_config_attempt = ic_config_with_a.copy()
         if base_seed is not None:
             ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -267,7 +250,7 @@ def process_single_ic(args_tuple):
                 "v_init": v_init,
             }
 
-            results = solve_lo_with_params(ic_params_for_solver, task_sim_params)
+            results = solve_lo_with_params(ic_params_for_solver, task_sim_params, task_name=ic_name)
 
             field_history = results["field_history"]
             times = results["times"]

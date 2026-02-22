@@ -203,43 +203,26 @@ def process_single_ic(args_tuple):
     if output_file.exists():
         return ("skipped", ic_name, None, 0)
 
-    # Sample per-task parameters from ranges
-    rng = np.random.default_rng(ic_config.get("seed"))
-
-    task_sim_params = simulation_params.copy()
-
-    # D_u: scalar or [min, max] range
     raw_D_u = ic_config.get("D_u", simulation_params["D_u"])
-    if isinstance(raw_D_u, list):
-        task_D_u = rng.uniform(raw_D_u[0], raw_D_u[1])
-    else:
-        task_D_u = raw_D_u
-    task_sim_params["D_u"] = task_D_u
-
-    # D_v: scalar or [min, max] range
     raw_D_v = ic_config.get("D_v", simulation_params["D_v"])
-    if isinstance(raw_D_v, list):
-        task_D_v = rng.uniform(raw_D_v[0], raw_D_v[1])
-    else:
-        task_D_v = raw_D_v
-    task_sim_params["D_v"] = task_D_v
-
-    # a: scalar or [min, max] range
     raw_a = ic_config.get("a", simulation_params["a"])
-    if isinstance(raw_a, list):
-        task_a = rng.uniform(raw_a[0], raw_a[1])
-    else:
-        task_a = raw_a
-    task_sim_params["a"] = task_a
 
-    # eps, b: always scalars (fixed across tasks)
-    task_sim_params["eps"] = simulation_params["eps"]
-    task_sim_params["b"] = simulation_params["b"]
-
-    max_retries = 5
+    max_retries = 800
     base_seed = ic_config.get("seed", None)
 
     for attempt in range(max_retries):
+        rng = np.random.default_rng(base_seed + attempt * 1000 if base_seed is not None else None)
+
+        task_sim_params = simulation_params.copy()
+        task_D_u = rng.uniform(raw_D_u[0], raw_D_u[1]) if isinstance(raw_D_u, list) else raw_D_u
+        task_D_v = rng.uniform(raw_D_v[0], raw_D_v[1]) if isinstance(raw_D_v, list) else raw_D_v
+        task_a = rng.uniform(raw_a[0], raw_a[1]) if isinstance(raw_a, list) else raw_a
+        task_sim_params["D_u"] = task_D_u
+        task_sim_params["D_v"] = task_D_v
+        task_sim_params["a"] = task_a
+        task_sim_params["eps"] = simulation_params["eps"]
+        task_sim_params["b"] = simulation_params["b"]
+
         ic_config_attempt = ic_config.copy()
         if base_seed is not None:
             ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -255,7 +238,7 @@ def process_single_ic(args_tuple):
                 "v_init": v_init,
             }
 
-            results = solve_fhn_with_params(ic_params_for_solver, task_sim_params)
+            results = solve_fhn_with_params(ic_params_for_solver, task_sim_params, task_name=ic_name)
 
             field_history = results["field_history"]
             times = results["times"]
