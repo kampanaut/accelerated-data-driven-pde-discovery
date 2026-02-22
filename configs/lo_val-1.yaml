@@ -1,5 +1,5 @@
 # Lambda-Omega Validation Configuration v1
-# 14 tasks: 5 ss + 5 tp + 4 mp
+# 5 tasks: 1 ss + 2 tp + 2 mp
 # Same parameter ranges as lo_train-1
 
 simulation:
@@ -11,32 +11,23 @@ simulation:
   c: 2.0
 
   domain_size: [50.0, 50.0]
-  resolution: [128, 128]
+  resolution: [512, 512]
 
   t_end: 50.0
-  dt: 0.01
-  save_interval: 0.5
+  dt: 0.005
+  save_interval: 1.0
 
 output:
   base_dir: "data/datasets"
 
 initial_conditions:
-  # ========== single_spiral (ss) — 5 tasks ==========
-  - {name: "lov_ss_001", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.5, r_core: 2.0, seed: 230001}
-  - {name: "lov_ss_002", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.5, r_core: 2.0, seed: 230002}
-  - {name: "lov_ss_003", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.3, r_core: 2.0, seed: 230003}
-  - {name: "lov_ss_004", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: -1, k: 0.7, r_core: 2.0, seed: 230004}
-  - {name: "lov_ss_005", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.6, r_core: 2.5, seed: 230005}
+  # ========== single_spiral (ss) — 1 task ==========
+  - {name: "lov_ss_001", type: "single_spiral", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], chirality: 1, k: 0.5, r_core: 2.0, seed: 4110001}
 
-  # ========== target_pattern (tp) — 5 tasks ==========
-  - {name: "lov_tp_001", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 231001}
-  - {name: "lov_tp_002", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 231002}
-  - {name: "lov_tp_003", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.5, seed: 231003}
-  - {name: "lov_tp_004", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 231004}
-  - {name: "lov_tp_005", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 231005}
+  # ========== target_pattern (tp) — 2 tasks ==========
+  - {name: "lov_tp_001", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, seed: 4120001}
+  - {name: "lov_tp_002", type: "target_pattern", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 0.5, seed: 4120002}
 
-  # ========== multi_pacemaker (mp) — 4 tasks ==========
-  - {name: "lov_mp_001", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 232001}
-  - {name: "lov_mp_002", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 232002}
-  - {name: "lov_mp_003", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 5, seed: 232003}
-  - {name: "lov_mp_004", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 232004}
+  # ========== multi_pacemaker (mp) — 2 tasks ==========
+  - {name: "lov_mp_001", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 3, seed: 4130001}
+  - {name: "lov_mp_002", type: "multi_pacemaker", D_u: [0.5, 2.0], D_v: [0.5, 2.0], c: [1.0, 3.0], amp: 1.0, n_bumps: 4, seed: 4130002}

@@ -1,13 +1,13 @@
 # Nonlinear Heat Equation Validation Configuration v1
-# 14 tasks: 4 gb + 4 mb + 3 rp + 3 ss
+# 5 tasks: 1 gb + 1 mb + 1 rp + 2 ss
 
 simulation:
   name: "nl_heat_val-1"
   K: 1.0
   domain_size: [6.283185307179586, 6.283185307179586]
-  resolution: [128, 128]
+  resolution: [512, 512]
   t_end: 5.0
-  dt: 0.01
+  dt: 0.005
   save_interval: 0.1
 
 output:
@@ -15,20 +15,15 @@ output:
 
 initial_conditions:
   # NOTE: amplitude must stay < 1.0 for nl_heat
-  - {name: "nlh_gb_v01", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.35, amplitude: 0.75, seed: 540001}
-  - {name: "nlh_gb_v02", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.55, amplitude: 0.8, seed: 540002}
-  - {name: "nlh_gb_v03", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.45, amplitude: 0.7, seed: 540003}
-  - {name: "nlh_gb_v04", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.65, amplitude: 0.65, seed: 540004}
+  # ========== gaussian_bump (gb) — 1 task ==========
+  - {name: "nlh_gb_v01", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.35, amplitude: 0.75, seed: 6110001}
 
-  - {name: "nlh_mb_v01", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.25, 0.65], seed: 550001}
-  - {name: "nlh_mb_v02", type: "multi_bump", K: [0.1, 2.0], n_bumps: 5, sigma_range: [0.15, 0.55], seed: 550002}
-  - {name: "nlh_mb_v03", type: "multi_bump", K: [0.1, 2.0], n_bumps: 4, sigma_range: [0.2, 0.7], seed: 550003}
-  - {name: "nlh_mb_v04", type: "multi_bump", K: [0.1, 2.0], n_bumps: 2, sigma_range: [0.3, 0.6], seed: 550004}
+  # ========== multi_bump (mb) — 1 task ==========
+  - {name: "nlh_mb_v01", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.25, 0.65], seed: 6120001}
 
-  - {name: "nlh_rp_v01", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 9, seed: 560001}
-  - {name: "nlh_rp_v02", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.15, n_modes: 11, seed: 560002}
-  - {name: "nlh_rp_v03", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.25, n_modes: 7, seed: 560003}
+  # ========== random_perturbation (rp) — 1 task ==========
+  - {name: "nlh_rp_v01", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 9, seed: 6130001}
 
-  - {name: "nlh_ss_v01", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 570001}
-  - {name: "nlh_ss_v02", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 570002}
-  - {name: "nlh_ss_v03", type: "sine_superposition", K: [0.1, 2.0], modes: 5, seed: 570003}
+  # ========== sine_superposition (ss) — 2 tasks ==========
+  - {name: "nlh_ss_v01", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 6140001}
+  - {name: "nlh_ss_v02", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 6140002}

@@ -1,5 +1,5 @@
 # FitzHugh-Nagumo Validation Configuration v1
-# 14 tasks: 5 lb + 5 mb + 4 pf
+# 5 tasks: 1 lb + 2 mb + 2 pf
 # Same parameter ranges as fhn_train-1
 
 simulation:
@@ -12,32 +12,23 @@ simulation:
   b: 0.0
 
   domain_size: [20.0, 20.0]
-  resolution: [128, 128]
+  resolution: [512, 512]
 
-  t_end: 50.0
-  dt: 0.01
-  save_interval: 0.5
+  t_end: 20.0
+  dt: 0.005
+  save_interval: 0.4
 
 output:
   base_dir: "data/datasets"
 
 initial_conditions:
-  # ========== localized_bump (lb) — 5 tasks ==========
-  - {name: "fhnv_lb_001", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 200001}
-  - {name: "fhnv_lb_002", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 200002}
-  - {name: "fhnv_lb_003", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 200003}
-  - {name: "fhnv_lb_004", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 200004}
-  - {name: "fhnv_lb_005", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 200005}
+  # ========== localized_bump (lb) — 1 task ==========
+  - {name: "fhnv_lb_001", type: "localized_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, seed: 3110001}
 
-  # ========== multi_bump (mb) — 5 tasks ==========
-  - {name: "fhnv_mb_001", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 210001}
-  - {name: "fhnv_mb_002", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 210002}
-  - {name: "fhnv_mb_003", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 5, seed: 210003}
-  - {name: "fhnv_mb_004", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 210004}
-  - {name: "fhnv_mb_005", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 210005}
+  # ========== multi_bump (mb) — 2 tasks ==========
+  - {name: "fhnv_mb_001", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 3, seed: 3120001}
+  - {name: "fhnv_mb_002", type: "multi_bump", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 1.0, n_bumps: 4, seed: 3120002}
 
-  # ========== perturbed_front (pf) — 4 tasks ==========
-  - {name: "fhnv_pf_001", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 220001}
-  - {name: "fhnv_pf_002", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 1.0, seed: 220002}
-  - {name: "fhnv_pf_003", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 0.5, seed: 220003}
-  - {name: "fhnv_pf_004", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.10, width: 1.0, seed: 220004}
+  # ========== perturbed_front (pf) — 2 tasks ==========
+  - {name: "fhnv_pf_001", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 0.5, seed: 3130001}
+  - {name: "fhnv_pf_002", type: "perturbed_front", D_u: [0.5, 2.0], D_v: [0.05, 0.2], a: [0.5, 1.5], amp: 0.05, width: 1.0, seed: 3130002}

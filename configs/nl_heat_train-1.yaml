@@ -1,7 +1,7 @@
 # Nonlinear Heat Equation Training Configuration v1
-# 42 tasks: 11 gb + 11 mb + 10 rp + 10 ss
+# 28 tasks: 7 gb + 7 mb + 7 rp + 7 ss
 # u_t = K*(1-u)*nabla^2(u), K sampled per-task from [0.1, 2.0]
-# Domain 2pi x 2pi, 128x128, dt=0.01
+# Domain 2pi x 2pi, 512x512, dt=0.005
 
 simulation:
   name: "nl_heat_train-1"
@@ -9,68 +9,54 @@ simulation:
   K: 1.0
 
   domain_size: [6.283185307179586, 6.283185307179586]  # 2*pi
-  resolution: [128, 128]
+  resolution: [512, 512]
 
   t_end: 5.0
-  dt: 0.01
+  dt: 0.005
   save_interval: 0.1
 
 output:
   base_dir: "data/datasets"
 
 # ============================================================================
-# Initial Conditions: 11 gb + 11 mb + 10 rp + 10 ss = 42 tasks
+# Initial Conditions: 7 gb + 7 mb + 7 rp + 7 ss = 28 tasks
 # ============================================================================
 initial_conditions:
-  # ========== gaussian_bump (gb) — 11 tasks ==========
+  # ========== gaussian_bump (gb) — 7 tasks ==========
   # NOTE: amplitude must stay < 1.0 for nl_heat (u>1 causes anti-diffusion blowup)
-  - {name: "nlh_gb_001", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.3, amplitude: 0.8, seed: 500001}
-  - {name: "nlh_gb_002", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.5, amplitude: 0.7, seed: 500002}
-  - {name: "nlh_gb_003", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.7, amplitude: 0.6, seed: 500003}
-  - {name: "nlh_gb_004", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.4, amplitude: 0.8, seed: 500004}
-  - {name: "nlh_gb_005", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.2, amplitude: 0.75, seed: 500005}
-  - {name: "nlh_gb_006", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.6, amplitude: 0.8, seed: 500006}
-  - {name: "nlh_gb_007", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.3, amplitude: 0.65, seed: 500007}
-  - {name: "nlh_gb_008", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.8, amplitude: 0.5, seed: 500008}
-  - {name: "nlh_gb_009", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.5, amplitude: 0.7, seed: 500009}
-  - {name: "nlh_gb_010", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.4, amplitude: 0.8, seed: 500010}
-  - {name: "nlh_gb_011", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.6, amplitude: 0.6, seed: 500011}
+  - {name: "nlh_gb_001", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.3, amplitude: 0.8, seed: 6010001}
+  - {name: "nlh_gb_002", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.5, amplitude: 0.7, seed: 6010002}
+  - {name: "nlh_gb_003", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.7, amplitude: 0.6, seed: 6010003}
+  - {name: "nlh_gb_004", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.4, amplitude: 0.8, seed: 6010004}
+  - {name: "nlh_gb_005", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.2, amplitude: 0.75, seed: 6010005}
+  - {name: "nlh_gb_006", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.6, amplitude: 0.8, seed: 6010006}
+  - {name: "nlh_gb_007", type: "gaussian_bump", K: [0.1, 2.0], sigma: 0.3, amplitude: 0.65, seed: 6010007}
 
-  # ========== multi_bump (mb) — 11 tasks ==========
-  - {name: "nlh_mb_001", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.2, 0.6], seed: 510001}
-  - {name: "nlh_mb_002", type: "multi_bump", K: [0.1, 2.0], n_bumps: 5, sigma_range: [0.2, 0.6], seed: 510002}
-  - {name: "nlh_mb_003", type: "multi_bump", K: [0.1, 2.0], n_bumps: 2, sigma_range: [0.3, 0.8], seed: 510003}
-  - {name: "nlh_mb_004", type: "multi_bump", K: [0.1, 2.0], n_bumps: 4, sigma_range: [0.1, 0.5], seed: 510004}
-  - {name: "nlh_mb_005", type: "multi_bump", K: [0.1, 2.0], n_bumps: 6, sigma_range: [0.2, 0.4], seed: 510005}
-  - {name: "nlh_mb_006", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.3, 0.7], seed: 510006}
-  - {name: "nlh_mb_007", type: "multi_bump", K: [0.1, 2.0], n_bumps: 5, sigma_range: [0.1, 0.6], seed: 510007}
-  - {name: "nlh_mb_008", type: "multi_bump", K: [0.1, 2.0], n_bumps: 4, sigma_range: [0.2, 0.8], seed: 510008}
-  - {name: "nlh_mb_009", type: "multi_bump", K: [0.1, 2.0], n_bumps: 2, sigma_range: [0.4, 0.8], seed: 510009}
-  - {name: "nlh_mb_010", type: "multi_bump", K: [0.1, 2.0], n_bumps: 7, sigma_range: [0.1, 0.4], seed: 510010}
-  - {name: "nlh_mb_011", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.2, 0.5], seed: 510011}
+  # ========== multi_bump (mb) — 7 tasks ==========
+  - {name: "nlh_mb_001", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.2, 0.6], seed: 6020001}
+  - {name: "nlh_mb_002", type: "multi_bump", K: [0.1, 2.0], n_bumps: 5, sigma_range: [0.2, 0.6], seed: 6020002}
+  - {name: "nlh_mb_003", type: "multi_bump", K: [0.1, 2.0], n_bumps: 2, sigma_range: [0.3, 0.8], seed: 6020003}
+  - {name: "nlh_mb_004", type: "multi_bump", K: [0.1, 2.0], n_bumps: 4, sigma_range: [0.1, 0.5], seed: 6020004}
+  - {name: "nlh_mb_005", type: "multi_bump", K: [0.1, 2.0], n_bumps: 6, sigma_range: [0.2, 0.4], seed: 6020005}
+  - {name: "nlh_mb_006", type: "multi_bump", K: [0.1, 2.0], n_bumps: 3, sigma_range: [0.3, 0.7], seed: 6020006}
+  - {name: "nlh_mb_007", type: "multi_bump", K: [0.1, 2.0], n_bumps: 5, sigma_range: [0.1, 0.6], seed: 6020007}
 
-  # ========== random_perturbation (rp) — 10 tasks ==========
+  # ========== random_perturbation (rp) — 7 tasks ==========
   # NOTE: amplitude must be > 0.1 (code draws per-mode amp from uniform(0.1, amplitude))
   # The clamp in create_heat_ic handles any overshoot past 1.0.
-  - {name: "nlh_rp_001", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.3, n_modes: 8, seed: 520001}
-  - {name: "nlh_rp_002", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 12, seed: 520002}
-  - {name: "nlh_rp_003", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.3, n_modes: 5, seed: 520003}
-  - {name: "nlh_rp_004", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.15, n_modes: 15, seed: 520004}
-  - {name: "nlh_rp_005", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 10, seed: 520005}
-  - {name: "nlh_rp_006", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.25, n_modes: 8, seed: 520006}
-  - {name: "nlh_rp_007", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.15, n_modes: 20, seed: 520007}
-  - {name: "nlh_rp_008", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.3, n_modes: 6, seed: 520008}
-  - {name: "nlh_rp_009", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 10, seed: 520009}
-  - {name: "nlh_rp_010", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.15, n_modes: 14, seed: 520010}
+  - {name: "nlh_rp_001", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.3, n_modes: 8, seed: 6030001}
+  - {name: "nlh_rp_002", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 12, seed: 6030002}
+  - {name: "nlh_rp_003", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.3, n_modes: 5, seed: 6030003}
+  - {name: "nlh_rp_004", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.15, n_modes: 15, seed: 6030004}
+  - {name: "nlh_rp_005", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.2, n_modes: 10, seed: 6030005}
+  - {name: "nlh_rp_006", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.25, n_modes: 8, seed: 6030006}
+  - {name: "nlh_rp_007", type: "random_perturbation", K: [0.1, 2.0], amplitude: 0.15, n_modes: 20, seed: 6030007}
 
-  # ========== sine_superposition (ss) — 10 tasks ==========
-  - {name: "nlh_ss_001", type: "sine_superposition", K: [0.1, 2.0], modes: 2, seed: 530001}
-  - {name: "nlh_ss_002", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 530002}
-  - {name: "nlh_ss_003", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 530003}
-  - {name: "nlh_ss_004", type: "sine_superposition", K: [0.1, 2.0], modes: 5, seed: 530004}
-  - {name: "nlh_ss_005", type: "sine_superposition", K: [0.1, 2.0], modes: 2, seed: 530005}
-  - {name: "nlh_ss_006", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 530006}
-  - {name: "nlh_ss_007", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 530007}
-  - {name: "nlh_ss_008", type: "sine_superposition", K: [0.1, 2.0], modes: 6, seed: 530008}
-  - {name: "nlh_ss_009", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 530009}
-  - {name: "nlh_ss_010", type: "sine_superposition", K: [0.1, 2.0], modes: 5, seed: 530010}
+  # ========== sine_superposition (ss) — 7 tasks ==========
+  - {name: "nlh_ss_001", type: "sine_superposition", K: [0.1, 2.0], modes: 2, seed: 6040001}
+  - {name: "nlh_ss_002", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 6040002}
+  - {name: "nlh_ss_003", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 6040003}
+  - {name: "nlh_ss_004", type: "sine_superposition", K: [0.1, 2.0], modes: 5, seed: 6040004}
+  - {name: "nlh_ss_005", type: "sine_superposition", K: [0.1, 2.0], modes: 2, seed: 6040005}
+  - {name: "nlh_ss_006", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 6040006}
+  - {name: "nlh_ss_007", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 6040007}

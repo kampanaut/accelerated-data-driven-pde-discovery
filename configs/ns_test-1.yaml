@@ -2,53 +2,68 @@ simulation:
   name: "ns_test-1"                  # Output: {base_dir}/{name}/
   nu: [0.01, 0.025]                            # Viscosity (or [min, max] to sample)
   domain_size: [6.283185, 6.283185]   # 2pi x 2pi
-  resolution: [128, 128]                # ny x nx grid
+  resolution: [512, 512]                # ny x nx grid
   t_end: 7.0                         # Simulation end time
-  dt: 0.001                            # Timestep
-  save_interval: 0.2                  # Snapshot frequency
+  dt: 0.005                            # Timestep
+  save_interval: 0.14                  # Snapshot frequency
 
 initial_conditions:
   # ==========================================================================
-  # IN-DISTRIBUTION (8 tasks, seeds 86-93)
+  # IN-DISTRIBUTION (12 tasks, seeds 86-97)
   # ==========================================================================
 
-  # gv (gaussian_vortex) - 2 tasks, seeds 86-87, n_gaussians 5-10
+  # gv (gaussian_vortex) - 3 tasks, seeds 86-88, n_gaussians 5-10
   # ==========================================================================
   - name: "gv_n7_s86_086"
     type: "gaussian_vortex"
     n_gaussians: 7
     amplitude_range: [-2.0, 2.0]
     width_range: [0.2, 1.5]
-    seed: 86
+    seed: 1210001
 
   - name: "gv_n9_s87_087"
     type: "gaussian_vortex"
     n_gaussians: 9
     amplitude_range: [-2.0, 2.0]
     width_range: [0.2, 1.5]
-    seed: 87
+    seed: 1210002
 
-  # gd (gaussian_direct) - 2 tasks, seeds 88-89, n_total 6-12
+  - name: "gv_n5_s88_088"
+    type: "gaussian_vortex"
+    n_gaussians: 5
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.2, 1.5]
+    seed: 1210003
+
+  # gd (gaussian_direct) - 3 tasks, seeds 89-91, n_total 6-12
   # ==========================================================================
-  - name: "gd_n8_s88_088"
+  - name: "gd_n8_s89_089"
     type: "gaussian_direct"
     n_gaussians_u: 4
     n_gaussians_v: 4
     amplitude_range: [-2.0, 2.0]
     width_range: [0.3, 1.2]
-    seed: 88
+    seed: 1220001
 
-  - name: "gd_n10_s89_089"
+  - name: "gd_n10_s90_090"
     type: "gaussian_direct"
     n_gaussians_u: 5
     n_gaussians_v: 5
     amplitude_range: [-2.0, 2.0]
     width_range: [0.3, 1.2]
-    seed: 89
+    seed: 1220002
 
-  # gh (gaussian_hybrid) - 2 tasks, seeds 90-91, n_gaussians_vorticity 5-10
+  - name: "gd_n6_s91_091"
+    type: "gaussian_direct"
+    n_gaussians_u: 3
+    n_gaussians_v: 3
+    amplitude_range: [-2.0, 2.0]
+    width_range: [0.3, 1.2]
+    seed: 1220003
+
+  # gh (gaussian_hybrid) - 2 tasks, seeds 92-93, n_gaussians_vorticity 5-10
   # ==========================================================================
-  - name: "gh_n6_s90_090"
+  - name: "gh_n6_s92_092"
     type: "gaussian_hybrid"
     n_gaussians_vorticity: 6
     n_gaussians_u: 4
@@ -57,9 +72,9 @@ initial_conditions:
     width_range: [0.3, 1.2]
     alpha: 0.65
     beta: 0.35
-    seed: 90
+    seed: 1230001
 
-  - name: "gh_n8_s91_091"
+  - name: "gh_n8_s93_093"
     type: "gaussian_hybrid"
     n_gaussians_vorticity: 8
     n_gaussians_u: 3
@@ -68,158 +83,143 @@ initial_conditions:
     width_range: [0.3, 1.2]
     alpha: 0.7
     beta: 0.3
-    seed: 91
+    seed: 1230002
 
-  # rs (random_soup) - 1 task, seed 92, n_vortices 8-15
+  # rs (random_soup) - 2 tasks, seeds 94-95, n_vortices 8-15
   # ==========================================================================
-  - name: "rs_n11_s92_092"
+  - name: "rs_n11_s94_094"
     type: "random_soup"
     n_vortices: 11
     strength_range: [-1.5, 1.5]
     width_range: [0.2, 0.8]
-    seed: 92
+    seed: 1240001
 
-  # pf (perturbed_flow) - 1 task, seed 93, wavelength 1.5
+  - name: "rs_n13_s95_095"
+    type: "random_soup"
+    n_vortices: 13
+    strength_range: [-1.5, 1.5]
+    width_range: [0.2, 0.8]
+    seed: 1240002
+
+  # pf (perturbed_flow) - 2 tasks, seeds 96-97, wavelength 1.0-3.0
   # ==========================================================================
-  - name: "pf_w1.5_s93_093"
+  - name: "pf_w1.5_s96_096"
     type: "perturbed_flow"
     u_mean: 0.5
     v_mean: 0.0
     perturbation_amplitude: 0.15
     perturbation_wavelength: 1.5
-    seed: 93
+    seed: 1250001
+
+  - name: "pf_w2.5_s97_097"
+    type: "perturbed_flow"
+    u_mean: 0.5
+    v_mean: 0.0
+    perturbation_amplitude: 0.15
+    perturbation_wavelength: 2.5
+    seed: 1250002
 
   # ==========================================================================
-  # OUT-OF-DISTRIBUTION (22 tasks, seeds 94-115)
+  # OUT-OF-DISTRIBUTION (18 tasks, seeds 98-115)
   # ==========================================================================
 
-  # dp (dipole) - 4 tasks, seeds 94-97
+  # dp (dipole) - 3 tasks, seeds 98-100
   # ==========================================================================
-  - name: "dp_sep1.2_s94_094"
+  - name: "dp_sep1.2_s98_098"
     type: "dipole"
     center: [3.14, 3.14]
     separation: 1.2
     width: 0.4
     strength: 1.0
-    seed: 94
+    seed: 1310001
 
-  - name: "dp_sep1.5_s95_095"
+  - name: "dp_sep1.5_s99_099"
     type: "dipole"
     center: [3.14, 3.14]
     separation: 1.5
     width: 0.5
     strength: 1.2
-    seed: 95
+    seed: 1310002
 
-  - name: "dp_sep1.8_s96_096"
+  - name: "dp_sep1.8_s100_100"
     type: "dipole"
     center: [3.14, 3.14]
     separation: 1.8
     width: 0.3
     strength: 0.8
-    seed: 96
+    seed: 1310003
 
-  - name: "dp_sep2.0_s97_097"
-    type: "dipole"
-    center: [3.14, 3.14]
-    separation: 2.0
-    width: 0.6
-    strength: 1.5
-    seed: 97
-
-  # tg (taylor_green) - 4 tasks, seeds 98-101
+  # tg (taylor_green) - 3 tasks, seeds 101-103
   # ==========================================================================
-  - name: "tg_amp0.8_s98_098"
+  - name: "tg_amp0.8_s101_101"
     type: "taylor_green"
     amplitude: 0.8
-    seed: 98
+    seed: 1320001
 
-  - name: "tg_amp1.2_s99_099"
+  - name: "tg_amp1.2_s102_102"
     type: "taylor_green"
     amplitude: 1.2
-    seed: 99
+    seed: 1320002
 
-  - name: "tg_amp1.6_s100_100"
+  - name: "tg_amp1.6_s103_103"
     type: "taylor_green"
     amplitude: 1.6
-    seed: 100
+    seed: 1320003
 
-  - name: "tg_amp1.7_s101_101"
-    type: "taylor_green"
-    amplitude: 1.7
-    seed: 101
-
-  # sl (shear_layer) - 4 tasks, seeds 102-105
+  # sl (shear_layer) - 3 tasks, seeds 104-106
   # ==========================================================================
-  - name: "sl_thick0.25_s102_102"
+  - name: "sl_thick0.25_s104_104"
     type: "shear_layer"
     y_center: 3.14
     thickness: 0.25
     velocity_jump: 2.0
     perturbation_amplitude: 0.08
-    seed: 102
+    seed: 1330001
 
-  - name: "sl_thick0.35_s103_103"
+  - name: "sl_thick0.35_s105_105"
     type: "shear_layer"
     y_center: 3.14
     thickness: 0.35
     velocity_jump: 2.5
     perturbation_amplitude: 0.12
-    seed: 103
+    seed: 1330002
 
-  - name: "sl_thick0.45_s104_104"
+  - name: "sl_thick0.45_s106_106"
     type: "shear_layer"
     y_center: 3.14
     thickness: 0.45
     velocity_jump: 2.8
     perturbation_amplitude: 0.15
-    seed: 104
+    seed: 1330003
 
-  - name: "sl_thick0.5_s105_105"
-    type: "shear_layer"
-    y_center: 3.14
-    thickness: 0.5
-    velocity_jump: 3.0
-    perturbation_amplitude: 0.2
-    seed: 105
-
-  # vk (von_karman) - 4 tasks, seeds 106-109
+  # vk (von_karman) - 3 tasks, seeds 107-109
   # ==========================================================================
-  - name: "vk_n6_s106_106"
+  - name: "vk_n6_s107_107"
     type: "von_karman"
     n_vortices: 6
     spacing: 1.0
     offset: 2.0
     width: 0.4
     strength: 1.0
-    seed: 106
+    seed: 1340001
 
-  - name: "vk_n8_s107_107"
+  - name: "vk_n8_s108_108"
     type: "von_karman"
     n_vortices: 8
     spacing: 1.2
     offset: 2.0
     width: 0.4
     strength: 1.2
-    seed: 107
+    seed: 1340002
 
-  - name: "vk_n10_s108_108"
+  - name: "vk_n10_s109_109"
     type: "von_karman"
     n_vortices: 10
     spacing: 1.4
     offset: 2.0
     width: 0.4
     strength: 0.9
-    seed: 108
-
-  - name: "vk_n8_s109_109"
-    type: "von_karman"
-    n_vortices: 8
-    spacing: 1.5
-    offset: 2.0
-    width: 0.4
-    strength: 1.5
-    seed: 109
+    seed: 1340003
 
   # lo (lamb_oseen) - 3 tasks, seeds 110-112
   # ==========================================================================
@@ -228,21 +228,21 @@ initial_conditions:
     center: [3.14, 3.14]
     core_radius: 0.5
     circulation: 2.0
-    seed: 110
+    seed: 1350001
 
   - name: "lo_rad0.6_s111_111"
     type: "lamb_oseen"
     center: [3.14, 3.14]
     core_radius: 0.6
     circulation: 2.5
-    seed: 111
+    seed: 1350002
 
   - name: "lo_rad0.75_s112_112"
     type: "lamb_oseen"
     center: [3.14, 3.14]
     core_radius: 0.75
     circulation: 3.0
-    seed: 112
+    seed: 1350003
 
   # gl (gaussian_hill) - 3 tasks, seeds 113-115
   # ==========================================================================
@@ -251,18 +251,18 @@ initial_conditions:
     center: [3.14, 3.14]
     width: 0.4
     strength: 1.2
-    seed: 113
+    seed: 1360001
 
   - name: "gl_w0.6_s114_114"
     type: "gaussian_hill"
     center: [3.14, 3.14]
     width: 0.6
     strength: 1.5
-    seed: 114
+    seed: 1360002
 
   - name: "gl_w0.8_s115_115"
     type: "gaussian_hill"
     center: [3.14, 3.14]
     width: 0.8
     strength: 2.0
-    seed: 115
+    seed: 1360003
