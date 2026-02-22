@@ -56,7 +56,7 @@ initial_conditions:
   - {name: "nlh_ss_001", type: "sine_superposition", K: [0.1, 2.0], modes: 2, seed: 6040001}
   - {name: "nlh_ss_002", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 6040002}
   - {name: "nlh_ss_003", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 6040003}
-  - {name: "nlh_ss_004", type: "sine_superposition", K: [0.1, 2.0], modes: 5, seed: 6040004}
+  - {name: "nlh_ss_004", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 6040004}
   - {name: "nlh_ss_005", type: "sine_superposition", K: [0.1, 2.0], modes: 2, seed: 6040005}
   - {name: "nlh_ss_006", type: "sine_superposition", K: [0.1, 2.0], modes: 3, seed: 6040006}
   - {name: "nlh_ss_007", type: "sine_superposition", K: [0.1, 2.0], modes: 4, seed: 6040007}
