@@ -5,7 +5,6 @@
 experiment:
   name: "nl_heat-eksperimentasyon-1"
   pde_type: "nl_heat"
-  data_format: "fourier"
   seed: 42
   device: "cuda"
 

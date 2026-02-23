@@ -27,53 +27,39 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
 import dedalus.public as d3
-from dataclasses import dataclass, asdict
-from typing import Tuple, List, Optional, Any, cast
-
-
-@dataclass
-class NLHeatSimParams:
-    """Simulation parameters for nonlinear heat equation solver."""
-
-    K: float  # Diffusion coefficient
-    domain_size: Tuple[float, float]  # (Lx, Ly)
-    resolution: Tuple[int, int]  # (ny, nx)
-    t_end: float  # Final simulation time
-    dt: float  # Timestep
-    save_interval: Optional[float] = None
+from typing import Tuple, List, Any
 
 
 def solve_nl_heat(
-    initial_field: np.ndarray,
-    K: float,
-    domain_size: Tuple[float, float],
-    t_end: float,
-    dt: float,
-    save_interval: Optional[float] = None,
+    initial_fields: Tuple[np.ndarray],
+    simulation_params: dict[str, Any],
     task_name: str = "",
-) -> Tuple[List[np.ndarray], np.ndarray, np.ndarray, np.ndarray]:
+) -> dict[str, Any]:
     """
     Solve 2D nonlinear heat equation u_t = K*(1-u)*nabla^2(u) using Dedalus.
 
     IMEX: linear diffusion implicit (LHS), nonlinear correction explicit (RHS).
 
     Args:
-        initial_field: 2D numpy array, shape (ny, nx)
-        K: Diffusion coefficient
-        domain_size: (Lx, Ly) physical domain size
-        t_end: Final simulation time
-        dt: Timestep
-        save_interval: Snapshot interval (None = every step)
+        initial_fields: 1-tuple of (u,) numpy array, shape (ny, nx)
+        simulation_params: Dict with keys: K, domain_size, resolution,
+            t_end, dt, save_interval
+        task_name: Optional label for log messages
 
     Returns:
-        Tuple of:
-        - field_history: List of 2D numpy arrays at saved timesteps
-        - times: Array of time values
-        - x: 1D array of x-coordinates
-        - y: 1D array of y-coordinates
+        Dict containing:
+        - 'field_history': List of 2D numpy arrays
+        - 'times': Time values array
+        - 'x', 'y': Coordinate arrays
     """
+    (initial_field,) = initial_fields
     ny, nx = initial_field.shape
-    Lx, Ly = domain_size
+
+    K = simulation_params["K"]
+    Lx, Ly = simulation_params["domain_size"]
+    t_end = simulation_params["t_end"]
+    dt = simulation_params["dt"]
+    save_interval = simulation_params.get("save_interval")
 
     x = np.linspace(0, Lx, nx, endpoint=False)
     y = np.linspace(0, Ly, ny, endpoint=False)
@@ -142,62 +128,9 @@ def solve_nl_heat(
 
     print(f"{tag}Simulation complete. Saved {len(field_history)} snapshots.")
 
-    return field_history, np.array(times), x, y
-
-
-def solve_nl_heat_with_params(
-    ic_params: dict[str, Any],
-    simulation_params: NLHeatSimParams | dict[str, Any],
-    task_name: str = "",
-) -> dict[str, Any]:
-    """
-    High-level interface: generate IC from parameters and solve nonlinear heat equation.
-
-    Args:
-        ic_params: Dict with 'type' and type-specific parameters,
-                   OR 'u_init' for custom IC
-        simulation_params: NLHeatSimParams dataclass or dict
-
-    Returns:
-        Dict with field_history, times, x, y, ic_params, simulation_params
-    """
-    from src.data.initial_conditions_heat import create_heat_ic
-
-    sim_dict: dict[str, Any]
-    if hasattr(simulation_params, "__dataclass_fields__"):
-        sim_dict = asdict(cast(NLHeatSimParams, simulation_params))
-    else:
-        sim_dict = cast(dict[str, Any], simulation_params)
-
-    ny, nx = sim_dict["resolution"]
-    Lx, Ly = sim_dict["domain_size"]
-
-    x = np.linspace(0, Lx, nx, endpoint=False)
-    y = np.linspace(0, Ly, ny, endpoint=False)
-
-    generated_params: dict[str, Any]
-    if ic_params.get("type") == "custom":
-        u_init = ic_params["u_init"]
-        generated_params = {}
-    else:
-        u_init, generated_params = create_heat_ic(ic_params, x, y)
-
-    field_history, times, x_out, y_out = solve_nl_heat(
-        initial_field=u_init,
-        K=sim_dict["K"],
-        domain_size=sim_dict["domain_size"],
-        t_end=sim_dict["t_end"],
-        dt=sim_dict["dt"],
-        save_interval=sim_dict["save_interval"],
-        task_name=task_name,
-    )
-
     return {
         "field_history": field_history,
-        "times": times,
-        "x": x_out,
-        "y": y_out,
-        "ic_params": ic_params.copy(),
-        "simulation_params": sim_dict.copy(),
-        "generated_params": generated_params,
+        "times": np.array(times),
+        "x": x,
+        "y": y,
     }

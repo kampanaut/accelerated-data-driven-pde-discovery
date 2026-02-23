@@ -1,18 +1,12 @@
 """
 Generate Lambda-Omega training data for PDE discovery.
 
-This script:
-1. Loads IC configuration from YAML file
-2. Solves Lambda-Omega equations for each IC
-3. FFTs all snapshots to Fourier coefficients
-4. Saves .npz files (Fourier-only, like FHN pipeline)
-
-Like FHN, Lambda-Omega targets come from PDE RHS (not temporal FD), so we store
-ALL snapshots (no first/last drop) and don't need u_t_hat/v_t_hat.
+Solves Lambda-Omega reaction-diffusion equations for each IC, FFTs
+snapshots to Fourier coefficients, saves .npz files.
 
 Usage:
     python scripts/generate_lo_data.py --config configs/lo_train-1.yaml
-    python scripts/generate_lo_data.py --config configs/lo_train-1.yaml --gpu
+    python scripts/generate_lo_data.py --config configs/lo_train-1.yaml --workers 4
 """
 
 import sys
@@ -22,8 +16,6 @@ from pathlib import Path
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
-import argparse
-import yaml
 import matplotlib
 
 matplotlib.use("Agg")
@@ -32,42 +24,25 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.pde.lambda_omega import solve_lo_with_params
+from src.data.generation import PDESpec, FieldType, run_generation
+from src.data.initial_conditions_lo import create_lo_ic
+from src.pde.lambda_omega import solve_lo
 
 
-def generate_fourier_data(field_history: list, times: np.ndarray) -> dict:
-    """
-    Convert field snapshots to Fourier coefficients.
+# ---------------------------------------------------------------------------
+# Hooks
+# ---------------------------------------------------------------------------
 
-    Like FHN, Lambda-Omega doesn't need temporal derivatives in Fourier space —
-    targets are computed from PDE RHS at evaluation time. So we store
-    ALL snapshots.
+def prepare_lo_ic_config(ic_config: dict, sim_params: dict) -> dict:
+    """Inject amplitude parameter 'a' into IC config for limit-cycle scaling."""
+    ic_config = ic_config.copy()
+    ic_config["a_value"] = sim_params["a"]
+    return ic_config
 
-    Args:
-        field_history: List of (u, v) tuples at different times
-        times: Time values for each snapshot
 
-    Returns:
-        Dict with keys: u_hat, v_hat (complex128), times (float64)
-    """
-    n_snapshots = len(field_history)
-    ny, nx = field_history[0][0].shape
-
-    u_hat = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
-    v_hat = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
-
-    for i, (u, v) in enumerate(field_history):
-        u_hat[i] = np.fft.fft2(u)
-        v_hat[i] = np.fft.fft2(v)
-
-    print(f"  FFT'd {n_snapshots} snapshots, shape ({ny}, {nx})")
-
-    return {
-        "u_hat": u_hat,
-        "v_hat": v_hat,
-        "times": times,
-    }
-
+# ---------------------------------------------------------------------------
+# Visualization
+# ---------------------------------------------------------------------------
 
 def save_lo_evolution(
     field_history: list,
@@ -78,34 +53,25 @@ def save_lo_evolution(
     n_snapshots: int = 8,
 ) -> None:
     """
-    Save a multi-panel figure showing λ-ω evolution over time.
+    Save a multi-panel figure showing Lambda-Omega evolution over time.
 
-    Creates a 5×n_snapshots grid:
+    Creates a 5xn_snapshots grid:
     - Row 1: u field (2D heatmap)
     - Row 2: v field (2D heatmap)
-    - Row 3: phase θ = atan2(v, u) (cyclic colormap)
-    - Row 4: amplitude r = √(u² + v²)
+    - Row 3: phase theta = atan2(v, u)
+    - Row 4: amplitude r = sqrt(u^2 + v^2)
     - Row 5: u field (3D surface)
-
-    Args:
-        field_history: List of (u, v) tuples at different times
-        times: Array of time values
-        x, y: Coordinate arrays
-        output_path: Path to save the figure
-        n_snapshots: Number of time snapshots to show
     """
     indices = np.linspace(0, len(field_history) - 1, n_snapshots, dtype=int)
 
     X, Y = np.meshgrid(x, y)
     Lx, Ly = float(x[-1]), float(y[-1])
 
-    # Collect selected snapshots
     u_sel = [field_history[i][0] for i in indices]
     v_sel = [field_history[i][1] for i in indices]
     phase_sel = [np.arctan2(v, u) for u, v in zip(u_sel, v_sel)]
     amp_sel = [np.sqrt(u**2 + v**2) for u, v in zip(u_sel, v_sel)]
 
-    # Global ranges for consistent colorbars
     u_min, u_max = min(a.min() for a in u_sel), max(a.max() for a in u_sel)
     v_min, v_max = min(a.min() for a in v_sel), max(a.max() for a in v_sel)
     amp_min, amp_max = min(a.min() for a in amp_sel), max(a.max() for a in amp_sel)
@@ -148,7 +114,7 @@ def save_lo_evolution(
         ax.set_yticks([])
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-        # Row 3: phase θ = atan2(v, u)
+        # Row 3: phase
         ax = plt.subplot(5, n_snapshots, 2 * n_snapshots + col + 1)
         im = ax.imshow(
             phase_sel[col],
@@ -164,7 +130,7 @@ def save_lo_evolution(
         ax.set_yticks([])
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-        # Row 4: amplitude r = √(u² + v²)
+        # Row 4: amplitude
         ax = plt.subplot(5, n_snapshots, 3 * n_snapshots + col + 1)
         im = ax.imshow(
             amp_sel[col],
@@ -209,270 +175,33 @@ def save_lo_evolution(
     plt.close()
 
 
-def load_config(config_path: Path) -> dict:
-    """Load configuration from YAML file."""
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+# ---------------------------------------------------------------------------
+# PDESpec
+# ---------------------------------------------------------------------------
+
+lo_spec = PDESpec(
+    name="Lambda-Omega",
+    pde_param_keys=["D_u", "D_v", "a", "c"],
+    samplable_params=["D_u", "D_v", "c"],
+    create_ic=create_lo_ic,
+    solve=solve_lo,
+    field_type=FieldType.PAIRED,
+    default_output_name="lo",
+    prepare_ic_config=prepare_lo_ic_config,
+    save_visualization=save_lo_evolution,
+)
 
 
-def process_single_ic(args_tuple):
-    """
-    Worker function for multiprocessing Pool.
-
-    Args:
-        args_tuple: (ic_config, simulation_params, data_dir, ic_idx, x, y)
-
-    Returns:
-        (status, ic_name, error_msg, retry_count)
-    """
-    ic_config, simulation_params, data_dir, ic_idx, x, y = args_tuple
-
-    ic_name = ic_config.get("name", f"ic_{ic_idx}")
-
-    # Check if already generated
-    output_file = Path(data_dir) / f"{ic_name}_fourier.npz"
-    if output_file.exists():
-        return ("skipped", ic_name, None, 0)
-
-    raw_D_u = ic_config.get("D_u", simulation_params["D_u"])
-    raw_D_v = ic_config.get("D_v", simulation_params["D_v"])
-    raw_c = ic_config.get("c", simulation_params["c"])
-
-    max_retries = 800
-    base_seed = ic_config.get("seed", None)
-
-    for attempt in range(max_retries):
-        rng = np.random.default_rng(
-            base_seed + attempt * 1000 if base_seed is not None else None
-        )
-
-        task_sim_params = simulation_params.copy()
-        task_D_u = (
-            rng.uniform(raw_D_u[0], raw_D_u[1])
-            if isinstance(raw_D_u, list)
-            else raw_D_u
-        )
-        task_D_v = (
-            rng.uniform(raw_D_v[0], raw_D_v[1])
-            if isinstance(raw_D_v, list)
-            else raw_D_v
-        )
-        task_c = rng.uniform(raw_c[0], raw_c[1]) if isinstance(raw_c, list) else raw_c
-        task_sim_params["D_u"] = task_D_u
-        task_sim_params["D_v"] = task_D_v
-        task_sim_params["c"] = task_c
-        task_sim_params["a"] = simulation_params["a"]
-
-        # Pass a to IC config so ICs can use limit-cycle amplitude
-        ic_config_with_a = ic_config.copy()
-        ic_config_with_a["a_value"] = simulation_params["a"]
-
-        ic_config_attempt = ic_config_with_a.copy()
-        if base_seed is not None:
-            ic_config_attempt["seed"] = base_seed + attempt * 1000
-
-        try:
-            from src.data.initial_conditions_lo import create_lo_ic
-
-            u_init, v_init, _ = create_lo_ic(ic_config_attempt, x, y)
-
-            ic_params_for_solver = {
-                "type": "custom",
-                "u_init": u_init,
-                "v_init": v_init,
-            }
-
-            results = solve_lo_with_params(
-                ic_params_for_solver, task_sim_params, task_name=ic_name
-            )
-
-            field_history = results["field_history"]
-            times = results["times"]
-
-            ic_config_to_save = ic_config.copy()
-            ic_config_to_save["seed_used"] = ic_config_attempt.get("seed")
-            ic_config_to_save["retry_attempt"] = attempt
-            ic_config_to_save["D_u_used"] = task_D_u
-            ic_config_to_save["D_v_used"] = task_D_v
-            ic_config_to_save["c_used"] = task_c
-
-            fourier_data = generate_fourier_data(field_history, times)
-
-            # Validate
-            for key in ["u_hat", "v_hat"]:
-                arr = fourier_data[key]
-                if np.any(np.isnan(arr)) or np.any(np.isinf(arr)):
-                    raise ValueError(f"Silent divergence: {key} has NaN/Inf")
-
-            np.savez(
-                output_file,
-                **fourier_data,
-                ic_config=ic_config_to_save,
-                simulation_params=task_sim_params,
-                D_u_used=task_D_u,
-                D_v_used=task_D_v,
-                c_used=task_c,
-            )
-
-            # Save evolution visualization
-            vis_file = Path(data_dir) / f"{ic_name}_evolution.png"
-            save_lo_evolution(field_history, times, x, y, str(vis_file))
-
-            return ("success", ic_name, None, attempt)
-
-        except RuntimeError:
-            if attempt < max_retries - 1:
-                continue
-            return (
-                "failed",
-                ic_name,
-                f"Diverged after {max_retries} attempts",
-                max_retries,
-            )
-
-        except ValueError as e:
-            if "divergence" in str(e).lower() and attempt < max_retries - 1:
-                continue
-            if attempt >= max_retries - 1:
-                return ("failed", ic_name, str(e), max_retries)
-            continue
-
-        except Exception as e:
-            return ("failed", ic_name, f"{type(e).__name__}: {str(e)}", attempt)
-
-    return ("failed", ic_name, f"Exhausted {max_retries} retries", max_retries)
-
-
-def main():
-    """Main data generation workflow."""
-    parser = argparse.ArgumentParser(description="Generate Lambda-Omega training data")
-    parser.add_argument(
-        "--config", type=str, required=True, help="Path to YAML configuration file"
-    )
-    parser.add_argument(
-        "--workers", type=int, default=1, help="Number of parallel workers (default: 1)"
-    )
-    args = parser.parse_args()
-
-    config_path = Path(args.config)
-    if not config_path.exists():
-        print(f"Error: Config file not found: {config_path}")
-        sys.exit(1)
-
-    config = load_config(config_path)
-
-    print("=" * 60)
-    print("Lambda-Omega Data Generation for PDE Discovery")
-    print("=" * 60)
-    print(f"Config file: {config_path}")
-
-    # Extract simulation parameters
-    sim_params = config["simulation"]
-    simulation_params = {
-        "D_u": sim_params["D_u"],
-        "D_v": sim_params["D_v"],
-        "a": sim_params["a"],
-        "c": sim_params["c"],
-        "domain_size": tuple(sim_params["domain_size"]),
-        "resolution": tuple(sim_params["resolution"]),
-        "t_end": sim_params["t_end"],
-        "dt": sim_params["dt"],
-        "save_interval": sim_params["save_interval"],
-    }
-
-    print("\nSimulation parameters:")
-    for key, value in simulation_params.items():
-        print(f"  {key}: {value}")
-
-    ic_configs = config["initial_conditions"]
-    print(f"\nInitial conditions: {len(ic_configs)} configurations")
-
-    # Output directory
-    sim_name = config.get("simulation", {}).get("name") or config.get(
-        "output_dir", "lo"
-    )
-    base_dir = config.get("output", {}).get("base_dir", "data/datasets")
-    data_dir = Path(__file__).parent.parent / base_dir / sim_name
-    data_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\nOutput directory: {data_dir}")
-
-    # Coordinate arrays
-    domain_size = simulation_params["domain_size"]
-    resolution = simulation_params["resolution"]
-    x = np.linspace(0, domain_size[0], resolution[1], endpoint=False)
-    y = np.linspace(0, domain_size[1], resolution[0], endpoint=False)
-
-    # Build work items
-    work_items = [
-        (ic_config, simulation_params, str(data_dir), ic_idx, x, y)
-        for ic_idx, ic_config in enumerate(ic_configs)
-    ]
-
-    if args.workers > 1:
-        import multiprocessing
-
-        ctx = multiprocessing.get_context("spawn")
-
-        print(f"\nUsing {args.workers} parallel workers")
-
-        results = []
-        with ctx.Pool(args.workers) as pool:
-            for result in pool.imap_unordered(process_single_ic, work_items):
-                status, name, error, retries = result
-                results.append(result)
-                done = len(results)
-                if status == "success":
-                    retry_info = f" (after {retries} retries)" if retries > 0 else ""
-                    print(f"[{done}/{len(ic_configs)}] {name}: SUCCESS{retry_info}")
-                elif status == "skipped":
-                    print(f"[{done}/{len(ic_configs)}] {name}: SKIPPED (exists)")
-                else:
-                    print(f"[{done}/{len(ic_configs)}] {name}: FAILED - {error}")
-
-        successful = sum(1 for r in results if r[0] in ("success", "skipped"))
-        skipped_existing = sum(1 for r in results if r[0] == "skipped")
-        failed_tasks = [(r[1], r[2]) for r in results if r[0] == "failed"]
-
-    else:
-        successful = 0
-        failed_tasks = []
-        skipped_existing = 0
-
-        for ic_idx, ic_config in enumerate(ic_configs):
-            result = process_single_ic(work_items[ic_idx])
-            status, name, error, retries = result
-
-            if status == "success":
-                retry_info = f" (after {retries} retries)" if retries > 0 else ""
-                print(f"[{ic_idx + 1}/{len(ic_configs)}] {name}: SUCCESS{retry_info}")
-                successful += 1
-            elif status == "skipped":
-                print(f"[{ic_idx + 1}/{len(ic_configs)}] {name}: SKIPPED (exists)")
-                skipped_existing += 1
-                successful += 1
-            else:
-                print(f"[{ic_idx + 1}/{len(ic_configs)}] {name}: FAILED - {error}")
-                failed_tasks.append((name, error))
-
-    print(f"\n{'=' * 60}")
-    print("Data generation complete!")
-    print(f"{'=' * 60}")
-    print(f"\nSummary:")
-    print(f"  Total tasks: {len(ic_configs)}")
-    print(f"  Successful: {successful} ({skipped_existing} already existed)")
-    print(f"  Failed: {len(failed_tasks)}")
-    print(f"\nOutput directory: {data_dir}")
-
-    if failed_tasks:
-        print("\nFailed tasks:")
-        for name, error in failed_tasks:
-            print(f"    - {name}: {error}")
-
-    if successful > 0:
-        print("\nEach dataset contains:")
-        print("  - Fourier coefficients: u_hat, v_hat (complex128)")
-        print("  - Metadata: ic_config, simulation_params")
-
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate Lambda-Omega training data")
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    args = parser.parse_args()
+
+    run_generation(lo_spec, args.config, args.workers)

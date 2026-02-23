@@ -11,7 +11,6 @@ The key formula (unnormalized DFT convention matching numpy.fft):
 where kx_j = 2*pi*fftfreq(nx, dx) are angular wavenumbers.
 """
 
-from scipy.ndimage import fourier
 import torch
 from typing import Tuple
 
@@ -170,26 +169,28 @@ def evaluate_lo_features(
 def evaluate_ns_features(
     u_hat: torch.Tensor,
     v_hat: torch.Tensor,
-    u_t_hat: torch.Tensor,
-    v_t_hat: torch.Tensor,
+    p_hat: torch.Tensor,
     kx: torch.Tensor,
     ky: torch.Tensor,
     E_x: torch.Tensor,
     E_y: torch.Tensor,
+    nu: float,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Evaluate all 10 features and 2 temporal-FD targets for Navier-Stokes
+    Evaluate all 10 features and 2 PDE-RHS targets for Navier-Stokes
     at arbitrary points.
 
     Features: [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy]
-    Targets: [u_t, v_t] from pre-stored temporal derivative coefficients
-             (NOT from PDE RHS — pressure term is implicit)
+    Targets: [u_t, v_t] from NS momentum equation:
+        u_t = -(u*u_x + v*u_y) - p_x + nu*(u_xx + u_yy)
+        v_t = -(u*v_x + v*v_y) - p_y + nu*(v_xx + v_yy)
 
     Args:
         u_hat, v_hat: Fourier coefficients for one snapshot, shape (ny, nx), complex128
-        u_t_hat, v_t_hat: Temporal derivative coefficients, shape (ny, nx), complex128
+        p_hat: Pressure Fourier coefficients, shape (ny, nx), complex128
         kx, ky: Wavenumber arrays, shapes (nx,) and (ny,)
         E_x, E_y: Phase matrices, shapes (n_points, nx) and (n_points, ny)
+        nu: Kinematic viscosity
 
     Returns:
         (features, targets): float32 tensors, shapes (n_points, 10) and (n_points, 2)
@@ -212,10 +213,15 @@ def evaluate_ns_features(
     v_xx = _eval(neg_kx2 * v_hat)
     v_yy = _eval(neg_ky2 * v_hat)
 
+    # Pressure gradient from p_hat
+    p_x = _eval(ikx * p_hat)
+    p_y = _eval(iky * p_hat)
+
     features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
 
-    u_t = _eval(u_t_hat)
-    v_t = _eval(v_t_hat)
+    # NS momentum equation
+    u_t = -(u * u_x + v * u_y) - p_x + nu * (u_xx + u_yy)
+    v_t = -(u * v_x + v * v_y) - p_y + nu * (v_xx + v_yy)
     targets = torch.stack([u_t, v_t], dim=1)
 
     return features.float(), targets.float()

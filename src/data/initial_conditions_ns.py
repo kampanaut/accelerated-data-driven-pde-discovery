@@ -660,7 +660,7 @@ def gaussian_direct_ic(
     without the rotational structure imposed by vorticity fields.
 
     The resulting velocity field is NOT guaranteed to be divergence-free initially, but
-    PhiFlow's pressure projection will enforce incompressibility at the first timestep.
+    Dedalus' pressure projection will enforce incompressibility at the first timestep.
 
     Args:
         n_gaussians_u: Number of Gaussians for u component
@@ -895,3 +895,113 @@ def von_karman_street_ic(
         })
 
     return multi_vortex_ic(vortex_params, x, y)
+
+
+def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
+    """
+    Factory function to create NS initial condition from configuration dict.
+
+    Args:
+        ic_config: Dict with 'type' and type-specific parameters
+        x, y: Coordinate arrays
+
+    Returns:
+        (u, v, generated_params): Initial velocity field and generated parameters
+    """
+    ic_type = ic_config["type"]
+
+    if ic_type == "gaussian_hill":
+        return gaussian_hill_ic(
+            center=tuple(ic_config["center"]),
+            width=ic_config["width"],
+            strength=ic_config["strength"],
+            x=x, y=y,
+        )
+    elif ic_type == "multi_vortex":
+        vortex_params = [
+            {"center": tuple(v["center"]), "width": v["width"], "strength": v["strength"]}
+            for v in ic_config["vortices"]
+        ]
+        return multi_vortex_ic(vortex_params, x, y)
+    elif ic_type == "taylor_green":
+        return taylor_green_vortex(x, y, ic_config.get("amplitude", 1.0))
+    elif ic_type == "shear_layer":
+        return shear_layer_ic(
+            y_center=ic_config["y_center"],
+            thickness=ic_config["thickness"],
+            velocity_jump=ic_config["velocity_jump"],
+            perturbation_amplitude=ic_config["perturbation_amplitude"],
+            x=x, y=y,
+        )
+    elif ic_type == "lamb_oseen":
+        return lamb_oseen_vortex_ic(
+            center=tuple(ic_config["center"]),
+            core_radius=ic_config["core_radius"],
+            circulation=ic_config["circulation"],
+            x=x, y=y,
+        )
+    elif ic_type == "dipole":
+        return dipole_vortex_ic(
+            center=tuple(ic_config["center"]),
+            separation=ic_config["separation"],
+            width=ic_config["width"],
+            strength=ic_config["strength"],
+            x=x, y=y,
+        )
+    elif ic_type == "perturbed_flow":
+        return perturbed_uniform_flow_ic(
+            u_mean=ic_config["u_mean"],
+            v_mean=ic_config["v_mean"],
+            perturbation_amplitude=ic_config["perturbation_amplitude"],
+            perturbation_wavelength=ic_config["perturbation_wavelength"],
+            x=x, y=y,
+            seed=ic_config["seed"],
+        )
+    elif ic_type == "random_soup":
+        return random_vortex_soup_ic(
+            n_vortices=ic_config["n_vortices"],
+            strength_range=tuple(ic_config["strength_range"]),
+            width_range=tuple(ic_config["width_range"]),
+            x=x, y=y,
+            seed=ic_config["seed"],
+        )
+    elif ic_type == "von_karman":
+        return von_karman_street_ic(
+            n_vortices=ic_config["n_vortices"],
+            spacing=ic_config["spacing"],
+            offset=ic_config["offset"],
+            width=ic_config["width"],
+            strength=ic_config["strength"],
+            x=x, y=y,
+        )
+    elif ic_type == "gaussian_vortex":
+        return gaussian_vortex_ic(
+            n_gaussians=ic_config["n_gaussians"],
+            amplitude_range=tuple(ic_config["amplitude_range"]),
+            width_range=tuple(ic_config["width_range"]),
+            x=x, y=y,
+            seed=ic_config["seed"],
+        )
+    elif ic_type == "gaussian_direct":
+        return gaussian_direct_ic(
+            n_gaussians_u=ic_config["n_gaussians_u"],
+            n_gaussians_v=ic_config["n_gaussians_v"],
+            amplitude_range=tuple(ic_config["amplitude_range"]),
+            width_range=tuple(ic_config["width_range"]),
+            x=x, y=y,
+            seed=ic_config["seed"],
+        )
+    elif ic_type == "gaussian_hybrid":
+        return gaussian_hybrid_ic(
+            n_gaussians_vorticity=ic_config["n_gaussians_vorticity"],
+            n_gaussians_u=ic_config["n_gaussians_u"],
+            n_gaussians_v=ic_config["n_gaussians_v"],
+            amplitude_range=tuple(ic_config["amplitude_range"]),
+            width_range=tuple(ic_config["width_range"]),
+            alpha=ic_config["alpha"],
+            beta=ic_config["beta"],
+            x=x, y=y,
+            seed=ic_config["seed"],
+        )
+    else:
+        raise ValueError(f"Unknown NS IC type: {ic_type}")

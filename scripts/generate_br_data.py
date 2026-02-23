@@ -1,16 +1,12 @@
 """
 Generate Brusselator training data for PDE discovery.
 
-This script:
-1. Loads initial condition configuration from YAML file
-2. Solves Brusselator equations for each IC
-3. Computes spatial and temporal derivatives
-4. Formats data as training samples for the N network
-5. Saves data and visualizations
+Solves Brusselator reaction-diffusion equations for each IC, FFTs
+snapshots to Fourier coefficients, saves .npz files.
 
 Usage:
-    python scripts/generate_br_data.py --config configs/brusselator_train.yaml
-    python scripts/generate_br_data.py --config configs/brusselator_train.yaml --gpu --workers 8
+    python scripts/generate_br_data.py --config configs/br_train-1.yaml
+    python scripts/generate_br_data.py --config configs/br_train-1.yaml --workers 4
 """
 
 import sys
@@ -19,65 +15,51 @@ from pathlib import Path
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-from mpl_toolkits.mplot3d import Axes3D
-
 import numpy as np
-import argparse
-import yaml
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.pde.brusselator import solve_brusselator
+from src.data.generation import PDESpec, FieldType, run_generation
 from src.data.initial_conditions_brusselator import (
     create_brusselator_ic,
     compute_turing_threshold,
 )
+from src.pde.brusselator import solve_br
 
 
-def generate_fourier_data(
-    concentration_history: list,
-    times: np.ndarray,
+# ---------------------------------------------------------------------------
+# Hooks
+# ---------------------------------------------------------------------------
+
+def prepare_br_ic_config(ic_config: dict, sim_params: dict) -> dict:
+    """Inject k1/k2 into IC config for steady-state calculation."""
+    ic_config = ic_config.copy()
+    ic_config["k1"] = sim_params["k1"]
+    ic_config["k2"] = sim_params["k2"]
+    return ic_config
+
+
+def post_sample_br_params(
+    ic_config: dict, sim_params: dict, rng: np.random.Generator
 ) -> dict:
-    """
-    Convert concentration snapshots to Fourier coefficient arrays.
-
-    FFTs each snapshot and stacks into (n_snapshots, ny, nx) complex128 arrays.
-    No derivative computation — derivatives are computed on-the-fly during
-    training via wavenumber multiplication.
-
-    Args:
-        concentration_history: List of (u, v) tuples at different times
-        times: Time values for each snapshot
-
-    Returns:
-        Dict with keys: u_hat, v_hat (complex128), times (float64)
-    """
-    n_snapshots = len(concentration_history)
-    ny, nx = concentration_history[0][0].shape
-
-    u_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
-    v_hat_stack = np.empty((n_snapshots, ny, nx), dtype=np.complex128)
-
-    for i, (u, v) in enumerate(concentration_history):
-        u_hat_stack[i] = np.fft.fft2(u)
-        v_hat_stack[i] = np.fft.fft2(v)
-
-    print(f"  FFT'd {n_snapshots} snapshots, shape ({ny}, {nx})")
-
-    return {
-        "u_hat": u_hat_stack,
-        "v_hat": v_hat_stack,
-        "times": times,
-    }
+    """Handle k2_delta mode: sample k2 relative to Turing threshold."""
+    k2_delta_range = ic_config.get("k2_delta")
+    if k2_delta_range is not None:
+        k2_c = compute_turing_threshold(
+            k1=sim_params["k1"],
+            D_u=sim_params["D_u"],
+            D_v=sim_params["D_v"],
+        )
+        delta = rng.uniform(k2_delta_range[0], k2_delta_range[1])
+        sim_params = sim_params.copy()
+        sim_params["k2"] = k2_c + delta
+    return sim_params
 
 
-def load_config(config_path: Path) -> dict:
-    """Load configuration from YAML file."""
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    return config
-
+# ---------------------------------------------------------------------------
+# Visualization
+# ---------------------------------------------------------------------------
 
 def save_brusselator_evolution(
     concentration_history: list,
@@ -86,22 +68,15 @@ def save_brusselator_evolution(
     y: np.ndarray,
     output_path: str,
     n_snapshots: int = 8,
-):
+) -> None:
     """
     Save a multi-panel figure showing Brusselator evolution over time.
 
-    Creates a 4×n_snapshots grid:
+    Creates a 4xn_snapshots grid:
     - Row 1: u concentration (2D contour)
     - Row 2: v concentration (2D contour)
     - Row 3: u concentration (3D surface)
     - Row 4: v concentration (3D surface)
-
-    Args:
-        concentration_history: List of (u, v) tuples at different times
-        times: Array of time values
-        x, y: Coordinate arrays
-        output_path: Path to save the figure
-        n_snapshots: Number of snapshots to show
     """
     import matplotlib.pyplot as plt
 
@@ -109,13 +84,11 @@ def save_brusselator_evolution(
 
     fig = plt.figure(figsize=(5 * n_snapshots, 20))
 
-    # Prepare grid
     if x.ndim == 1 and y.ndim == 1:
         x_grid, y_grid = np.meshgrid(x, y)
     else:
         x_grid, y_grid = x, y
 
-    # Get global min/max for consistent colorbars
     all_u = [concentration_history[i][0] for i in indices]
     all_v = [concentration_history[i][1] for i in indices]
     u_min, u_max = min(a.min() for a in all_u), max(a.max() for a in all_u)
@@ -146,15 +119,12 @@ def save_brusselator_evolution(
         ax_u_3d = plt.subplot(
             4, n_snapshots, 2 * n_snapshots + col + 1, projection="3d"
         )
-
         assert isinstance(ax_u_3d, Axes3D)
         step = max(1, x_grid.shape[0] // 32)
-
         surf_u = ax_u_3d.plot_surface(
             x_grid[::step, ::step], y_grid[::step, ::step], u[::step, ::step],
             cmap="YlOrRd", linewidth=0, antialiased=True, alpha=0.9,
         )
-
         ax_u_3d.set_xlabel("x")
         ax_u_3d.set_ylabel("y")
         ax_u_3d.set_zlabel("u")
@@ -165,9 +135,7 @@ def save_brusselator_evolution(
         ax_v_3d = plt.subplot(
             4, n_snapshots, 3 * n_snapshots + col + 1, projection="3d"
         )
-
         assert isinstance(ax_v_3d, Axes3D)
-
         surf_v = ax_v_3d.plot_surface(
             x_grid[::step, ::step], y_grid[::step, ::step], v[::step, ::step],
             cmap="YlGnBu", linewidth=0, antialiased=True, alpha=0.9,
@@ -178,521 +146,47 @@ def save_brusselator_evolution(
         ax_v_3d.view_init(elev=30, azim=45)
         fig.colorbar(surf_v, ax=ax_v_3d, fraction=0.03, pad=0.1, shrink=0.5)
 
-    # Add row labels
-    fig.text(
-        0.02,
-        0.88,
-        "u conc (2D)",
-        va="center",
-        rotation="vertical",
-        fontsize=11,
-        weight="bold",
-    )
-    fig.text(
-        0.02,
-        0.65,
-        "v conc (2D)",
-        va="center",
-        rotation="vertical",
-        fontsize=11,
-        weight="bold",
-    )
-    fig.text(
-        0.02,
-        0.42,
-        "u conc (3D)",
-        va="center",
-        rotation="vertical",
-        fontsize=11,
-        weight="bold",
-    )
-    fig.text(
-        0.02,
-        0.18,
-        "v conc (3D)",
-        va="center",
-        rotation="vertical",
-        fontsize=11,
-        weight="bold",
-    )
+    fig.text(0.02, 0.88, "u conc (2D)", va="center", rotation="vertical", fontsize=11, weight="bold")
+    fig.text(0.02, 0.65, "v conc (2D)", va="center", rotation="vertical", fontsize=11, weight="bold")
+    fig.text(0.02, 0.42, "u conc (3D)", va="center", rotation="vertical", fontsize=11, weight="bold")
+    fig.text(0.02, 0.18, "v conc (3D)", va="center", rotation="vertical", fontsize=11, weight="bold")
 
     fig.suptitle("Brusselator Evolution", fontsize=16, y=0.99)
     fig.tight_layout(rect=(0.03, 0, 1, 0.98))
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Saved evolution visualization to {output_path}")
 
-
-def process_single_ic(args_tuple):
-    """
-    Worker function for multiprocessing Pool.
-
-    Processes a single IC configuration, including retry logic for divergence.
-
-    Args:
-        args_tuple: (ic_config, simulation_params, data_dir, ic_idx, total_count, x, y)
-
-    Returns:
-        (status, ic_name, error_msg, retry_count)
-        status: 'success', 'skipped', or 'failed'
-    """
-    ic_config, simulation_params, data_dir, ic_idx, x, y = args_tuple
-
-    ic_name = ic_config.get("name", f"ic_{ic_idx}")
-
-    # Check if already generated
-    output_file = Path(data_dir) / f"{ic_name}_fourier.npz"
-    if output_file.exists():
-        return ("skipped", ic_name, None, 0)
-
-    # Validate list params upfront
-    k2_delta_range = ic_config.get("k2_delta")
-    for param in ["D_u", "D_v", "k1", "k2"]:
-        raw_val = ic_config.get(param, simulation_params[param])
-        if isinstance(raw_val, list) and len(raw_val) != 2:
-            return (
-                "failed",
-                ic_name,
-                f"{param} as list must have 2 elements, got {len(raw_val)}",
-                0,
-            )
-
-    # Retry loop for divergence
-    max_retries = 800
-    base_seed = ic_config.get("seed", None)
-    k2_c: float = 0.0
-
-    for attempt in range(max_retries):
-        param_rng = np.random.default_rng(
-            base_seed + attempt * 1000 if base_seed is not None else None
-        )
-
-        task_sim_params = simulation_params.copy()
-        for param in ["D_u", "D_v", "k1", "k2"]:
-            raw_val = ic_config.get(param, task_sim_params[param])
-            if isinstance(raw_val, list):
-                task_sim_params[param] = param_rng.uniform(raw_val[0], raw_val[1])
-            elif raw_val != task_sim_params[param]:
-                task_sim_params[param] = raw_val
-
-        # k2_delta: sample k2 relative to Turing threshold instead of absolute range
-        if k2_delta_range is not None:
-            k2_c = compute_turing_threshold(
-                k1=task_sim_params["k1"],
-                D_u=task_sim_params["D_u"],
-                D_v=task_sim_params["D_v"],
-            )
-            delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
-            task_sim_params["k2"] = k2_c + delta
-
-        # Inject k1, k2 into IC config for steady state calculation
-        ic_config_with_params = ic_config.copy()
-        ic_config_with_params["k1"] = task_sim_params["k1"]
-        ic_config_with_params["k2"] = task_sim_params["k2"]
-
-        ic_config_attempt = ic_config_with_params.copy()
-        if base_seed is not None:
-            ic_config_attempt["seed"] = base_seed + attempt * 1000
-
-        try:
-            # Create initial condition
-            u_init, v_init, _ = (
-                create_brusselator_ic(  # u_init, v_init, generated_params
-                    ic_config_attempt, x, y
-                )
-            )
-
-            # Solve Brusselator
-            concentration_history, times, x_result, y_result = solve_brusselator(
-                initial_concentration=(u_init, v_init),
-                D_u=task_sim_params["D_u"],
-                D_v=task_sim_params["D_v"],
-                k1=task_sim_params["k1"],
-                k2=task_sim_params["k2"],
-                domain_size=task_sim_params["domain_size"],
-                t_end=task_sim_params["t_end"],
-                dt=task_sim_params["dt"],
-                save_interval=task_sim_params.get("save_interval"),
-                task_name=ic_name,
-            )
-
-            # Validate raw concentrations for divergence
-            max_magnitude = 1e6
-            last_u, last_v = concentration_history[-1]
-            for label, arr in [("u", last_u), ("v", last_v)]:
-                max_val = np.abs(arr).max()
-                if (
-                    max_val > max_magnitude
-                    or np.any(np.isnan(arr))
-                    or np.any(np.isinf(arr))
-                ):
-                    raise ValueError(
-                        f"Silent divergence: {label} has max magnitude {max_val:.2e}"
-                    )
-
-            ic_config_to_save = ic_config.copy()
-            ic_config_to_save["k1_used"] = task_sim_params["k1"]
-            ic_config_to_save["k2_used"] = task_sim_params["k2"]
-            ic_config_to_save["D_u_used"] = task_sim_params["D_u"]
-            ic_config_to_save["D_v_used"] = task_sim_params["D_v"]
-            ic_config_to_save["seed_used"] = ic_config_attempt.get("seed")
-            ic_config_to_save["retry_attempt"] = attempt
-            if k2_delta_range is not None:
-                assert k2_c > 0
-                ic_config_to_save["k2_c"] = k2_c
-                ic_config_to_save["k2_delta_used"] = task_sim_params["k2"] - k2_c
-
-            fourier_data = generate_fourier_data(concentration_history, times)
-            np.savez(
-                output_file,
-                **fourier_data,
-                ic_config=ic_config_to_save,
-                simulation_params=task_sim_params,
-            )
-
-            # Generate visualization
-            vis_file = Path(data_dir) / f"{ic_name}_evolution.png"
-            save_brusselator_evolution(
-                concentration_history,
-                times,
-                x_result,
-                y_result,
-                str(vis_file),
-                n_snapshots=8,
-            )
-
-            return ("success", ic_name, None, attempt)
-
-        except ValueError as e:
-            if "divergence" in str(e).lower() and attempt < max_retries - 1:
-                continue
-            if attempt >= max_retries - 1:
-                return ("failed", ic_name, str(e), max_retries)
-            continue
-
-        except Exception as e:
-            # Check if it's a divergence-related error
-            error_str = str(e).lower()
-            if (
-                any(kw in error_str for kw in ["diverge", "nan", "inf", "overflow"])
-                and attempt < max_retries - 1
-            ):
-                continue
-            return ("failed", ic_name, f"{type(e).__name__}: {str(e)}", attempt)
-
-    return ("failed", ic_name, f"Exhausted {max_retries} retries", max_retries)
-
-
-def main():
-    """Main data generation workflow."""
-    parser = argparse.ArgumentParser(description="Generate Brusselator training data")
-    parser.add_argument(
-        "--config", type=str, required=True, help="Path to YAML configuration file"
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="Number of parallel workers (default: 1 = serial)",
-    )
-    args = parser.parse_args()
-
-    # Load configuration
-    config_path = Path(args.config)
-    if not config_path.exists():
-        print(f"Error: Config file not found: {config_path}")
-        sys.exit(1)
-
-    config = load_config(config_path)
-
-    print("=" * 60)
-    print("Brusselator Data Generation for PDE Discovery")
-    print("=" * 60)
-    print(f"Config file: {config_path}")
-
-    # Extract simulation parameters
-    sim_params = config["simulation"]
-    simulation_params = {
-        "D_u": sim_params["D_u"],
-        "D_v": sim_params["D_v"],
-        "k1": sim_params["k1"],
-        "k2": sim_params["k2"],
-        "domain_size": tuple(sim_params["domain_size"]),
-        "resolution": tuple(sim_params["resolution"]),
-        "t_end": sim_params["t_end"],
-        "dt": sim_params["dt"],
-        "save_interval": sim_params["save_interval"],
-    }
-
-    print("\nSimulation parameters:")
-    for key, value in simulation_params.items():
-        print(f"  {key}: {value}")
-    print(
-        f"  Steady state: u* = {simulation_params['k1']:.4f}, v* = {simulation_params['k2'] / simulation_params['k1']:.4f}"
-    )
-
-    # Extract IC configurations
-    ic_configs = config["initial_conditions"]
-    print(f"\nInitial conditions: {len(ic_configs)} configurations")
-
-    # Create output directory
-    sim_name = config.get("simulation", {}).get("name") or config.get(
-        "output_dir", "brusselator"
-    )
-    base_dir = config.get("output", {}).get("base_dir", "data/datasets")
-    data_dir = Path(__file__).parent.parent / base_dir / sim_name
-    data_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\nOutput directory: {data_dir}")
-
-    # Setup coordinate arrays
-    domain_size = simulation_params["domain_size"]
-    resolution = simulation_params["resolution"]
-    x = np.linspace(0, domain_size[0], resolution[1], endpoint=False)
-    y = np.linspace(0, domain_size[1], resolution[0], endpoint=False)
-
-    # Build work items for processing
-    work_items = [
-        (
-            ic_config,
-            simulation_params,
-            str(data_dir),
-            ic_idx,
-            x,
-            y,
-        )
-        for ic_idx, ic_config in enumerate(ic_configs)
-    ]
-
-    # Process ICs (parallel or serial)
-    if args.workers > 1:
-        # Parallel execution with compact progress output
-        # Use 'spawn' context to avoid JAX fork() deadlock
-        import multiprocessing
-
-        ctx = multiprocessing.get_context("spawn")
-
-        print(f"\nUsing {args.workers} parallel workers")
-
-        results = []
-        with ctx.Pool(args.workers) as pool:
-            for result in pool.imap_unordered(process_single_ic, work_items):
-                status, name, error, retries = result
-                results.append(result)
-
-                # Progress reporting
-                done = len(results)
-                if status == "success":
-                    retry_info = f" (after {retries} retries)" if retries > 0 else ""
-                    print(f"[{done}/{len(ic_configs)}] {name}: ✓ SUCCESS{retry_info}")
-                elif status == "skipped":
-                    print(f"[{done}/{len(ic_configs)}] {name}: ⊘ SKIPPED (exists)")
-                else:
-                    print(f"[{done}/{len(ic_configs)}] {name}: ✗ FAILED - {error}")
-
-        # Tally results
-        successful = sum(1 for r in results if r[0] in ("success", "skipped"))
-        skipped_existing = sum(1 for r in results if r[0] == "skipped")
-        failed_tasks = [(r[1], r[2]) for r in results if r[0] == "failed"]
-
-    else:
-        # Serial execution with original verbose output
-        successful = 0
-        failed_tasks = []
-        skipped_existing = 0
-
-        for ic_idx, ic_config in enumerate(ic_configs):
-            ic_name = ic_config.get("name", f"ic_{ic_idx}")
-
-            # Check if already generated
-            output_file = data_dir / f"{ic_name}_fourier.npz"
-            if output_file.exists():
-                print(
-                    f"[{ic_idx + 1}/{len(ic_configs)}] {ic_name}: already exists, skipping"
-                )
-                skipped_existing += 1
-                successful += 1
-                continue
-
-            print(f"\n{'-' * 60}")
-            print(f"IC {ic_idx + 1}/{len(ic_configs)}: {ic_name} ({ic_config['type']})")
-            print(f"{'-' * 60}")
-
-            # Retry loop for divergence
-            k2_delta_range = ic_config.get("k2_delta")
-            max_retries = 800
-            k2_c: float = 0.0
-            base_seed = ic_config.get("seed", None)
-
-            for attempt in range(max_retries):
-                param_rng = np.random.default_rng(
-                    base_seed + attempt * 1000 if base_seed is not None else None
-                )
-
-                task_sim_params = simulation_params.copy()
-                for param in ["D_u", "D_v", "k1", "k2"]:
-                    raw_val = ic_config.get(param, task_sim_params[param])
-                    if isinstance(raw_val, list):
-                        task_sim_params[param] = param_rng.uniform(
-                            raw_val[0], raw_val[1]
-                        )
-                        print(
-                            f"Sampled {param} = {task_sim_params[param]:.6f} from range {raw_val}"
-                        )
-                    elif raw_val != task_sim_params[param]:
-                        task_sim_params[param] = raw_val
-
-                # k2_delta: sample k2 relative to Turing threshold
-                if k2_delta_range is not None:
-                    k2_c = compute_turing_threshold(
-                        k1=task_sim_params["k1"],
-                        D_u=task_sim_params["D_u"],
-                        D_v=task_sim_params["D_v"],
-                    )
-                    delta = param_rng.uniform(k2_delta_range[0], k2_delta_range[1])
-                    task_sim_params["k2"] = k2_c + delta
-                    print(
-                        f"k2_delta mode: k2_c={k2_c:.4f}, delta={delta:.4f}, k2={task_sim_params['k2']:.4f}"
-                    )
-
-                # Inject k1, k2 into IC config for steady state calculation
-                ic_config_with_params = ic_config.copy()
-                ic_config_with_params["k1"] = task_sim_params["k1"]
-                ic_config_with_params["k2"] = task_sim_params["k2"]
-
-                ic_config_attempt = ic_config_with_params.copy()
-                if base_seed is not None:
-                    ic_config_attempt["seed"] = base_seed + attempt * 1000
-                    if attempt > 0:
-                        print(
-                            f"  Retry {attempt}/{max_retries - 1} with seed {ic_config_attempt['seed']}"
-                        )
-
-                try:
-                    # Create initial condition
-                    u_init, v_init, _ = (
-                        create_brusselator_ic(  # u_init, v_init, generated_params
-                            ic_config_attempt, x, y
-                        )
-                    )
-
-                    # Solve Brusselator
-                    concentration_history, times, x_result, y_result = (
-                        solve_brusselator(
-                            initial_concentration=(u_init, v_init),
-                            D_u=task_sim_params["D_u"],
-                            D_v=task_sim_params["D_v"],
-                            k1=task_sim_params["k1"],
-                            k2=task_sim_params["k2"],
-                            domain_size=task_sim_params["domain_size"],
-                            t_end=task_sim_params["t_end"],
-                            dt=task_sim_params["dt"],
-                            save_interval=task_sim_params.get("save_interval"),
-                            task_name=ic_name,
-                        )
-                    )
-
-                    # Validate raw concentrations for divergence
-                    max_magnitude = 1e6
-                    last_u, last_v = concentration_history[-1]
-                    for label, arr in [("u", last_u), ("v", last_v)]:
-                        max_val = np.abs(arr).max()
-                        if (
-                            max_val > max_magnitude
-                            or np.any(np.isnan(arr))
-                            or np.any(np.isinf(arr))
-                        ):
-                            raise ValueError(
-                                f"Silent divergence: {label} has max magnitude {max_val:.2e}"
-                            )
-
-                    ic_config_to_save = ic_config.copy()
-                    ic_config_to_save["k1_used"] = task_sim_params["k1"]
-                    ic_config_to_save["k2_used"] = task_sim_params["k2"]
-                    ic_config_to_save["D_u_used"] = task_sim_params["D_u"]
-                    ic_config_to_save["D_v_used"] = task_sim_params["D_v"]
-                    ic_config_to_save["seed_used"] = ic_config_attempt.get("seed")
-                    ic_config_to_save["retry_attempt"] = attempt
-                    if k2_delta_range is not None:
-                        assert k2_c > 0
-                        ic_config_to_save["k2_c"] = k2_c
-                        ic_config_to_save["k2_delta_used"] = (
-                            task_sim_params["k2"] - k2_c
-                        )
-
-                    fourier_data = generate_fourier_data(concentration_history, times)
-                    np.savez(
-                        output_file,
-                        **fourier_data,
-                        ic_config=ic_config_to_save,
-                        simulation_params=task_sim_params,  # type: ignore[reportArgumentType]
-                    )
-                    print(f"\nSaved Fourier data to {output_file}")
-
-                    if attempt > 0:
-                        print(f"  (succeeded after {attempt} retries)")
-
-                    # Generate visualization
-                    vis_file = data_dir / f"{ic_name}_evolution.png"
-                    save_brusselator_evolution(
-                        concentration_history,
-                        times,
-                        x_result,
-                        y_result,
-                        str(vis_file),
-                        n_snapshots=8,
-                    )
-
-                    successful += 1
-                    break  # Success, exit retry loop
-
-                except ValueError as e:
-                    if "divergence" in str(e).lower() and attempt < max_retries - 1:
-                        print(f"  ⚠️  {str(e)}, will retry...")
-                        continue
-                    if attempt >= max_retries - 1:
-                        print(f"\n⚠️  SKIPPED: {ic_name}")
-                        print(f"    Reason: {str(e)}")
-                        print(f"    (failed all {max_retries} attempts)")
-                        failed_tasks.append((ic_name, str(e)))
-                        break
-                    continue
-
-                except Exception as e:
-                    error_str = str(e).lower()
-                    if (
-                        any(
-                            kw in error_str
-                            for kw in ["diverge", "nan", "inf", "overflow"]
-                        )
-                        and attempt < max_retries - 1
-                    ):
-                        print(f"  ⚠️  {type(e).__name__}: {str(e)}, will retry...")
-                        continue
-                    print(f"\n⚠️  SKIPPED: {ic_name}")
-                    print(f"    Error: {type(e).__name__}: {str(e)}")
-                    failed_tasks.append((ic_name, str(e)))
-                    break
-
-    print(f"\n{'=' * 60}")
-    print("Data generation complete!")
-    print(f"{'=' * 60}")
-    print("\nSummary:")
-    print(f"  Total tasks: {len(ic_configs)}")
-    print(f"  ✓ Successful: {successful} ({skipped_existing} already existed)")
-    print(f"  ✗ Failed: {len(failed_tasks)}")
-    print(f"\nOutput directory: {data_dir}")
-
-    if failed_tasks:
-        print("\n⚠️  Failed tasks:")
-        for name, error in failed_tasks:
-            print(f"    - {name}: {error}")
-
-    if successful > 0:
-        print("\nEach successful dataset contains:")
-        print("  - Fourier coefficients: u_hat, v_hat (complex128)")
-        print("  - Metadata: ic_config, simulation_params")
-
+# ---------------------------------------------------------------------------
+# PDESpec
+# ---------------------------------------------------------------------------
+
+br_spec = PDESpec(
+    name="Brusselator",
+    pde_param_keys=["D_u", "D_v", "k1", "k2"],
+    create_ic=create_brusselator_ic,
+    solve=solve_br,
+    field_type=FieldType.PAIRED,
+    default_output_name="brusselator",
+    history_key="concentration_history",
+    prepare_ic_config=prepare_br_ic_config,
+    post_sample_params=post_sample_br_params,
+    max_physical_magnitude=1e6,
+    broad_divergence_catch=True,
+    save_visualization=save_brusselator_evolution,
+)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate Brusselator training data")
+    parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    args = parser.parse_args()
+
+    run_generation(br_spec, args.config, args.workers)

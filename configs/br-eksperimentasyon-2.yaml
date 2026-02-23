@@ -5,7 +5,6 @@
 experiment:
   name: "br-maml-2"
   pde_type: br
-  data_format: fourier
   seed: 42
   device: "cuda"
 

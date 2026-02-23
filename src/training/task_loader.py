@@ -584,8 +584,10 @@ class NavierStokesTask(PDETask):
     """
     Navier-Stokes PDE task (Fourier-native).
 
-    Stores u_hat/v_hat/u_t_hat/v_t_hat FFT coefficients. Targets come from
-    temporal central differences (NOT from PDE RHS — pressure term is implicit).
+    Stores u_hat/v_hat/p_hat FFT coefficients. Targets computed from
+    the NS momentum equation using pressure from Dedalus:
+        u_t = -(u*u_x + v*u_y) - p_x + nu*(u_xx + u_yy)
+        v_t = -(u*v_x + v*v_y) - p_y + nu*(v_xx + v_yy)
 
     Diffusion coefficient: nu (kinematic viscosity)
     """
@@ -599,11 +601,8 @@ class NavierStokesTask(PDETask):
         self.v_hat = torch.tensor(
             data["v_hat"], dtype=torch.complex128, device=self.device
         )
-        self.u_t_hat = torch.tensor(
-            data["u_t_hat"], dtype=torch.complex128, device=self.device
-        )
-        self.v_t_hat = torch.tensor(
-            data["v_t_hat"], dtype=torch.complex128, device=self.device
+        self.p_hat = torch.tensor(
+            data["p_hat"], dtype=torch.complex128, device=self.device
         )
 
     def _extract_pde_params(self) -> None:
@@ -622,12 +621,12 @@ class NavierStokesTask(PDETask):
         return evaluate_ns_features(
             self.u_hat[snap_idx],
             self.v_hat[snap_idx],
-            self.u_t_hat[snap_idx],
-            self.v_t_hat[snap_idx],
+            self.p_hat[snap_idx],
             self.kx,
             self.ky,
             E_x,
             E_y,
+            self.nu,
         )
 
     def inject_noise(
@@ -647,7 +646,8 @@ class NavierStokesTask(PDETask):
         ) * (noise_level * feat_std)
         features = features + feat_noise
 
-        # Can't recompute targets from noisy features (pressure is implicit).
+        # Can't recompute targets from noisy features (p_hat is in Fourier
+        # space, not derivable from noisy pointwise features).
         # Add proportional noise to targets independently.
         tgt_std = targets.std(dim=0, keepdim=True)
         tgt_noise = torch.randn(

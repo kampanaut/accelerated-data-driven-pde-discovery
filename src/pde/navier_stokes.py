@@ -25,18 +25,14 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
 import dedalus.public as d3
-from typing import Tuple, List
+from typing import Tuple, List, Any
 
 
-def solve_navier_stokes(
-    initial_velocity: Tuple[np.ndarray, np.ndarray],
-    nu: float,
-    domain_size: Tuple[float, float],
-    t_end: float,
-    dt: float,
-    save_interval: float,
+def solve_ns(
+    initial_fields: Tuple[np.ndarray, np.ndarray],
+    simulation_params: dict[str, Any],
     task_name: str = "",
-) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], np.ndarray, np.ndarray, np.ndarray]:
+) -> dict[str, Any]:
     """
     Solve 2D incompressible Navier-Stokes equations using Dedalus.
 
@@ -44,24 +40,30 @@ def solve_navier_stokes(
         u_t + (u . grad)u = -grad(p) + nu * lap(u)
         div(u) = 0
 
+    Extracts pressure at each snapshot for analytical target computation
+    downstream (no more temporal central differences).
+
     Args:
-        initial_velocity: Tuple of (u, v) numpy arrays, shape (ny, nx)
-        nu: Kinematic viscosity
-        domain_size: (Lx, Ly) physical domain size
-        t_end: Final simulation time
-        dt: Timestep for time integration
-        save_interval: How often to save snapshots.
+        initial_fields: Tuple of (u, v) numpy arrays, shape (ny, nx)
+        simulation_params: Dict with keys: nu, domain_size, resolution,
+            t_end, dt, save_interval
+        task_name: Optional label for log messages
 
     Returns:
-        Tuple of:
-        - velocity_history: List of (u, v) tuples at saved timesteps
-        - times: Array of time values for saved snapshots
-        - x: 1D array of x-coordinates
-        - y: 1D array of y-coordinates
+        Dict containing:
+        - 'velocity_history': List of (u, v) tuples
+        - 'pressure_history': List of pressure arrays
+        - 'times': Time values array
+        - 'x', 'y': Coordinate arrays
     """
-    u_init, v_init = initial_velocity
+    u_init, v_init = initial_fields
     ny, nx = u_init.shape
-    Lx, Ly = domain_size
+
+    nu = simulation_params["nu"]
+    Lx, Ly = simulation_params["domain_size"]
+    t_end = simulation_params["t_end"]
+    dt = simulation_params["dt"]
+    save_interval = simulation_params["save_interval"]
 
     x = np.linspace(0, Lx, nx, endpoint=False)
     y = np.linspace(0, Ly, ny, endpoint=False)
@@ -96,16 +98,23 @@ def solve_navier_stokes(
 
     # --- Snapshot loop ---
     velocity_history: List[Tuple[np.ndarray, np.ndarray]] = []
+    pressure_history: List[np.ndarray] = []
     times: List[float] = []
 
     save_every = max(1, int(save_interval / dt))
     step = 0
 
     # Save initial condition
+    # Note: at t=0 before any timestep, pressure hasn't been solved yet.
+    # We take one implicit step first, then save. But for consistency with
+    # other solvers that save t=0, we save the IC velocity with p=0.
+    # The first real pressure snapshot comes after the first save_every steps.
     u_vec.change_scales(1)
+    p.change_scales(1)
     velocity_history.append(
         (np.array(u_vec["g"][0]).T.copy(), np.array(u_vec["g"][1]).T.copy())  # (nx, ny) → (ny, nx)
     )
+    pressure_history.append(np.array(p["g"]).T.copy())
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""
@@ -122,8 +131,10 @@ def solve_navier_stokes(
 
         if step % save_every == 0:
             u_vec.change_scales(1)
+            p.change_scales(1)
             u_snap = np.array(u_vec["g"][0]).T.copy()  # (nx, ny) → (ny, nx)
             v_snap = np.array(u_vec["g"][1]).T.copy()
+            p_snap = np.array(p["g"]).T.copy()
 
             if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
                 raise RuntimeError(
@@ -131,6 +142,7 @@ def solve_navier_stokes(
                 )
 
             velocity_history.append((u_snap, v_snap))
+            pressure_history.append(p_snap)
             times.append(solver.sim_time)
 
             if step % (save_every * 5) == 0:
@@ -138,61 +150,10 @@ def solve_navier_stokes(
 
     print(f"{tag}Simulation complete. Saved {len(velocity_history)} snapshots.")
 
-    return velocity_history, np.array(times), x, y
-
-
-def solve_navier_stokes_with_params(
-    ic_params: dict, simulation_params: dict, task_name: str = ""
-) -> dict:
-    """
-    High-level interface: generate IC from parameters and solve N-S.
-
-    Args:
-        ic_params: Dict with keys:
-            - 'type': 'gaussian_vortex', 'multi_vortex', or 'taylor_green'
-            - type-specific parameters
-        simulation_params: Dict with keys:
-            - 'nu': viscosity
-            - 'domain_size': (Lx, Ly)
-            - 'resolution': (nx, ny)
-            - 't_end': final time
-            - 'dt': timestep
-            - 'save_interval': snapshot interval
-
-    Returns:
-        Dict containing:
-        - 'velocity_history': List of (u, v) tuples
-        - 'times': Time values
-        - 'x', 'y': Coordinate arrays
-        - 'ic_params': Copy of IC parameters
-        - 'simulation_params': Copy of simulation parameters
-    """
-
-    # Generate initial condition
-    ic_type = ic_params["type"]
-
-    if ic_type == "custom":
-        u_init = ic_params["u_init"]
-        v_init = ic_params["v_init"]
-    else:
-        raise ValueError(f"Unknown IC type: {ic_type}")
-
-    # Solve Navier-Stokes
-    velocity_history, times, x_out, y_out = solve_navier_stokes(
-        initial_velocity=(u_init, v_init),
-        nu=simulation_params["nu"],
-        domain_size=simulation_params["domain_size"],
-        t_end=simulation_params["t_end"],
-        dt=simulation_params["dt"],
-        save_interval=simulation_params["save_interval"],
-        task_name=task_name,
-    )
-
     return {
         "velocity_history": velocity_history,
-        "times": times,
-        "x": x_out,
-        "y": y_out,
-        "ic_params": ic_params.copy(),
-        "simulation_params": simulation_params.copy(),
+        "pressure_history": pressure_history,
+        "times": np.array(times),
+        "x": x,
+        "y": y,
     }
