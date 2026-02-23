@@ -78,8 +78,8 @@ def solve_navier_stokes(
     tau_p = dist.Field(name="tau_p")
 
     # Set initial velocity: component 0 = x-velocity, component 1 = y-velocity
-    u_vec["g"][0] = u_init
-    u_vec["g"][1] = v_init
+    u_vec["g"][0] = u_init.T  # (ny, nx) → (nx, ny) for Dedalus axis convention
+    u_vec["g"][1] = v_init.T
 
     # IMEX: LHS = implicit (viscosity + pressure), RHS = explicit (advection)
     #   dt(u) + grad(p) - nu*lap(u) = -(u . grad)(u)
@@ -104,7 +104,7 @@ def solve_navier_stokes(
     # Save initial condition
     u_vec.change_scales(1)
     velocity_history.append(
-        (np.array(u_vec["g"][0]).copy(), np.array(u_vec["g"][1]).copy())
+        (np.array(u_vec["g"][0]).T.copy(), np.array(u_vec["g"][1]).T.copy())  # (nx, ny) → (ny, nx)
     )
     times.append(0.0)
 
@@ -122,8 +122,8 @@ def solve_navier_stokes(
 
         if step % save_every == 0:
             u_vec.change_scales(1)
-            u_snap = np.array(u_vec["g"][0]).copy()
-            v_snap = np.array(u_vec["g"][1]).copy()
+            u_snap = np.array(u_vec["g"][0]).T.copy()  # (nx, ny) → (ny, nx)
+            v_snap = np.array(u_vec["g"][1]).T.copy()
 
             if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
                 raise RuntimeError(

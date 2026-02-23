@@ -76,7 +76,7 @@ def solve_heat(
     ybasis = d3.RealFourier(coords["y"], size=ny, bounds=(0, Ly), dealias=3 / 2)
 
     u = dist.Field(name="u", bases=(xbasis, ybasis))
-    u["g"] = initial_field
+    u["g"] = initial_field.T  # (ny, nx) → (nx, ny) for Dedalus axis convention
 
     problem = d3.IVP([u], namespace={"u": u, "D": D})
     problem.add_equation("dt(u) - D*lap(u) = 0")
@@ -95,7 +95,7 @@ def solve_heat(
 
     # Save initial condition
     u.change_scales(1)
-    field_history.append(np.array(u["g"]).copy())
+    field_history.append(np.array(u["g"]).T.copy())  # (nx, ny) → (ny, nx) for caller
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""
@@ -111,7 +111,7 @@ def solve_heat(
 
         if step % save_every == 0:
             u.change_scales(1)
-            snapshot = np.array(u["g"]).copy()
+            snapshot = np.array(u["g"]).T.copy()  # (nx, ny) → (ny, nx)
 
             if not np.isfinite(np.mean(snapshot)):
                 raise RuntimeError(

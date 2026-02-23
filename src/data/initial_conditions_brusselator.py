@@ -284,8 +284,8 @@ def multi_patch_perturbation_ic(
     patch_centers = []
 
     for _ in range(n_patches):
-        cx = rng.uniform(x[0] + margin, x[-1] - margin)
-        cy = rng.uniform(y[0] + margin, y[-1] - margin)
+        cx = rng.uniform(x[0] + margin, x[-1] + (x[1] - x[0]) - margin)
+        cy = rng.uniform(y[0] + margin, y[-1] + (y[1] - y[0]) - margin)
         patch_centers.append((cx, cy))
 
     # Apply perturbations in each patch
@@ -355,7 +355,7 @@ def gradient_perturbation_ic(
     # Create meshgrid
     X, Y = np.meshgrid(x, y)
     ny, nx = X.shape
-    Lx, Ly = x[-1] - x[0], y[-1] - y[0]
+    Lx, Ly = x[-1] - x[0] + (x[1] - x[0]), y[-1] - y[0] + (y[1] - y[0])
 
     # Initialize perturbations
     delta_u = np.zeros((ny, nx))
@@ -456,7 +456,7 @@ def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tupl
 
     elif ic_type == 'localized_perturbation':
         # Default to domain center
-        Lx, Ly = x[-1], y[-1]
+        Lx, Ly = x[-1] + (x[1] - x[0]), y[-1] + (y[1] - y[0])
         default_center = (Lx / 2, Ly / 2)
         default_radius = min(Lx, Ly) / 4
 
@@ -473,7 +473,7 @@ def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tupl
 
     elif ic_type == 'multi_patch_perturbation':
         # Default to 3 patches distributed across domain
-        Lx, Ly = x[-1], y[-1]
+        Lx, Ly = x[-1] + (x[1] - x[0]), y[-1] + (y[1] - y[0])
         n_patches = ic_config.get('n_patches', 3)
         default_radius = min(Lx, Ly) / 8
 

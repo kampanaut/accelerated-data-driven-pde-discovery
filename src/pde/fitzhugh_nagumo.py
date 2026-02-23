@@ -110,8 +110,8 @@ def solve_fhn(
 
     u = dist.Field(name="u", bases=(xbasis, ybasis))
     v = dist.Field(name="v", bases=(xbasis, ybasis))
-    u["g"] = u_init
-    v["g"] = v_init
+    u["g"] = u_init.T  # (ny, nx) → (nx, ny) for Dedalus axis convention
+    v["g"] = v_init.T
 
     # IMEX: LHS = implicit linear, RHS = explicit nonlinear
     #   u_t = D_u*lap(u) + u - u^3 - v
@@ -146,7 +146,7 @@ def solve_fhn(
     # Save initial condition
     u.change_scales(1)
     v.change_scales(1)
-    field_history.append((np.array(u["g"]).copy(), np.array(v["g"]).copy()))
+    field_history.append((np.array(u["g"]).T.copy(), np.array(v["g"]).T.copy()))  # (nx, ny) → (ny, nx)
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""
@@ -165,8 +165,8 @@ def solve_fhn(
         if step % save_every == 0:
             u.change_scales(1)
             v.change_scales(1)
-            u_snap = np.array(u["g"]).copy()
-            v_snap = np.array(v["g"]).copy()
+            u_snap = np.array(u["g"]).T.copy()  # (nx, ny) → (ny, nx)
+            v_snap = np.array(v["g"]).T.copy()
 
             if not (np.isfinite(np.mean(u_snap)) and np.isfinite(np.mean(v_snap))):
                 raise RuntimeError(

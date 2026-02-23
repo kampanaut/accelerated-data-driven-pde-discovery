@@ -390,8 +390,8 @@ def main():
     # Coordinate arrays
     domain_size = simulation_params["domain_size"]
     resolution = simulation_params["resolution"]
-    x = np.linspace(0, domain_size[0], resolution[1])
-    y = np.linspace(0, domain_size[1], resolution[0])
+    x = np.linspace(0, domain_size[0], resolution[1], endpoint=False)
+    y = np.linspace(0, domain_size[1], resolution[0], endpoint=False)
 
     # Build work items
     work_items = [
