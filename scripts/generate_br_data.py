@@ -85,16 +85,16 @@ def save_brusselator_evolution(
     x: np.ndarray,
     y: np.ndarray,
     output_path: str,
-    n_snapshots: int = 4,
+    n_snapshots: int = 8,
 ):
     """
     Save a multi-panel figure showing Brusselator evolution over time.
 
     Creates a 4×n_snapshots grid:
-    - Row 1: A concentration (2D contour)
-    - Row 2: B concentration (2D contour)
-    - Row 3: A concentration (3D surface)
-    - Row 4: B concentration (3D surface)
+    - Row 1: u concentration (2D contour)
+    - Row 2: v concentration (2D contour)
+    - Row 3: u concentration (3D surface)
+    - Row 4: v concentration (3D surface)
 
     Args:
         concentration_history: List of (u, v) tuples at different times
@@ -148,9 +148,11 @@ def save_brusselator_evolution(
         )
 
         assert isinstance(ax_u_3d, Axes3D)
+        step = max(1, x_grid.shape[0] // 32)
 
         surf_u = ax_u_3d.plot_surface(
-            x_grid, y_grid, u, cmap="YlOrRd", linewidth=0, antialiased=True, alpha=0.9
+            x_grid[::step, ::step], y_grid[::step, ::step], u[::step, ::step],
+            cmap="YlOrRd", linewidth=0, antialiased=True, alpha=0.9,
         )
 
         ax_u_3d.set_xlabel("x")
@@ -167,7 +169,8 @@ def save_brusselator_evolution(
         assert isinstance(ax_v_3d, Axes3D)
 
         surf_v = ax_v_3d.plot_surface(
-            x_grid, y_grid, v, cmap="YlGnBu", linewidth=0, antialiased=True, alpha=0.9
+            x_grid[::step, ::step], y_grid[::step, ::step], v[::step, ::step],
+            cmap="YlGnBu", linewidth=0, antialiased=True, alpha=0.9,
         )
         ax_v_3d.set_xlabel("x")
         ax_v_3d.set_ylabel("y")
@@ -356,7 +359,7 @@ def process_single_ic(args_tuple):
                 x_result,
                 y_result,
                 str(vis_file),
-                n_snapshots=4,
+                n_snapshots=8,
             )
 
             return ("success", ic_name, None, attempt)
@@ -637,7 +640,7 @@ def main():
                         x_result,
                         y_result,
                         str(vis_file),
-                        n_snapshots=4,
+                        n_snapshots=8,
                     )
 
                     successful += 1

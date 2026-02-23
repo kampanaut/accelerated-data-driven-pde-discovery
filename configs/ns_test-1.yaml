@@ -168,28 +168,28 @@ initial_conditions:
 
   # sl (shear_layer) - 3 tasks, seeds 104-106
   # ==========================================================================
-  - name: "sl_thick0.25_s104_104"
+  - name: "sl_thick0.15_s104_104"
     type: "shear_layer"
     y_center: 3.14
-    thickness: 0.25
-    velocity_jump: 2.0
-    perturbation_amplitude: 0.08
+    thickness: 0.15
+    velocity_jump: 4.0
+    perturbation_amplitude: 0.8
     seed: 1330001
 
-  - name: "sl_thick0.35_s105_105"
+  - name: "sl_thick0.24_s105_105"
     type: "shear_layer"
     y_center: 3.14
-    thickness: 0.35
-    velocity_jump: 2.5
-    perturbation_amplitude: 0.12
+    thickness: 0.24
+    velocity_jump: 8.0
+    perturbation_amplitude: 0.8
     seed: 1330002
 
-  - name: "sl_thick0.45_s106_106"
+  - name: "sl_thick0.34_s106_106"
     type: "shear_layer"
     y_center: 3.14
-    thickness: 0.45
-    velocity_jump: 2.8
-    perturbation_amplitude: 0.15
+    thickness: 0.34
+    velocity_jump: 7.0
+    perturbation_amplitude: 1.2
     seed: 1330003
 
   # vk (von_karman) - 3 tasks, seeds 107-109
