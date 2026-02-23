@@ -1,24 +1,51 @@
 """
-SVD and correlation analysis of PDE input features.
+SVD and R² analysis of PDE input features.
 
 Usage:
     uv run scripts/dataset_analyser.py <directory> [--n_points 500] [--k_snapshots 5] [--seed 42]
 
 Loads all *_fourier.npz files from the given directory, evaluates input
 features at random spatial points across multiple timesteps, then runs
-SVD and correlation analysis.
+SVD, Pearson correlation, and R² redundancy analysis.
+
+Outputs two figures:
+  - feature_analysis[name].png  — 2x2: SVD spectrum, weakest direction,
+                                   Pearson correlation heatmap, R²(feature|rest) bars
+  - lap_analysis[name].png      — Laplacian-specific R² checks (2-field PDEs only)
 
 Two-field PDEs (BR, NS, FHN, LO): 10 features [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy]
 Single-field PDEs (heat, nl_heat):  5 features [u, u_x, u_y, u_xx, u_yy]
 """
 
 import argparse
+import io
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
+from typing import Any
+
 import matplotlib.pyplot as plt
+
+
+class TeeStream:
+    """Write to both stdout and a StringIO buffer."""
+
+    def __init__(self, original: io.TextIOWrapper):  # type: ignore[type-arg]
+        self.original = original
+        self.buffer = io.StringIO()
+
+    def write(self, text: str) -> int:
+        self.original.write(text)
+        self.buffer.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self.original.flush()  # type: ignore[union-attr]
+
+    def getvalue(self) -> str:
+        return self.buffer.getvalue()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -190,6 +217,20 @@ def collect_features(
     return torch.cat(all_features, dim=0), n_fields
 
 
+# ---------------------------------------------------------------------------
+# Analysis functions
+# ---------------------------------------------------------------------------
+
+def r_squared(y: torch.Tensor, X: torch.Tensor) -> float:
+    """OLS R² of regressing y on X (with intercept)."""
+    X_aug = torch.cat([X, torch.ones(X.shape[0], 1)], dim=1)
+    b = torch.linalg.lstsq(X_aug, y).solution
+    y_pred = X_aug @ b
+    ss_res = torch.sum((y - y_pred) ** 2)
+    ss_tot = torch.sum((y - torch.mean(y)) ** 2)
+    return float(1 - (ss_res / ss_tot))
+
+
 def run_svd_analysis(features: torch.Tensor, feature_names: list[str]):
     """Run SVD on the standardized feature matrix and print results."""
     n_feats = len(feature_names)
@@ -237,49 +278,185 @@ def run_correlation_analysis(features: torch.Tensor, feature_names: list[str]):
     return corr
 
 
-def plot_results(S, Vt, corr, feature_names: list[str], output_dir: Path):
-    """Generate plots for singular values, weakest direction, and correlation."""
+def run_r2_analysis(features: torch.Tensor, feature_names: list[str]):
+    """Compute R²(feature_i | all other features) for each feature."""
+    n_feats = len(feature_names)
+    r2_values = []
+
+    print("\n=== R²(feature | rest) ===")
+    for i in range(n_feats):
+        y = features[:, i]
+        others = torch.cat([features[:, :i], features[:, i + 1 :]], dim=1)
+        val = r_squared(y, others)
+        r2_values.append(val)
+        print(f"  R²({feature_names[i]:>5s} | rest) = {val:.6f}")
+
+    return r2_values
+
+
+def run_lap_analysis(features: torch.Tensor, feature_names: list[str]):
+    """Laplacian-specific R² analysis for 2-field PDEs.
+
+    Tests whether field values [u, v] and other feature groups
+    can reconstruct the Laplacians ∇²u and ∇²v.
+    """
+    # Feature indices: [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy]
+    #                   0  1   2    3    4     5     6    7    8     9
+    u_xx = features[:, 4]
+    u_yy = features[:, 5]
+    v_xx = features[:, 8]
+    v_yy = features[:, 9]
+
+    lap_u = u_xx + u_yy
+    lap_v = v_xx + v_yy
+
+    targets = {"∇²u": lap_u, "∇²v": lap_v}
+
+    groups = {
+        "[u, v]": [0, 1],
+        "[u_x, u_y]": [2, 3],
+        "[v_x, v_y]": [6, 7],
+        "[u, v, u_x, u_y]": [0, 1, 2, 3],
+        "[all \\ {u_xx,u_yy}]": [0, 1, 2, 3, 6, 7, 8, 9],
+        "[all \\ {v_xx,v_yy}]": [0, 1, 2, 3, 4, 5, 6, 7],
+    }
+
+    results: dict[str, dict[str, float]] = {}
+
+    print("\n=== Laplacian R² Analysis ===")
+    for tname, target in targets.items():
+        results[tname] = {}
+        # Per-feature pairwise r²
+        print(f"\n  Pairwise r²({tname}, feature):")
+        for i, fname in enumerate(feature_names):
+            r = torch.corrcoef(torch.stack([target, features[:, i]]))[0, 1].item()
+            results[tname][f"r²({fname})"] = r ** 2
+            print(f"    r²({tname}, {fname:>5s}) = {r ** 2:.6f}")
+
+        # Group R²
+        print(f"\n  R²({tname} | group):")
+        for gname, indices in groups.items():
+            val = r_squared(target, features[:, indices])
+            results[tname][gname] = val
+            print(f"    R²({tname} | {gname:20s}) = {val:.6f}")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+def plot_feature_analysis(
+    S, Vt, corr, r2_values: list[float], feature_names: list[str], output_dir: Path
+):
+    """2x2 figure: SVD spectrum, weakest direction, correlation heatmap, R² bars."""
     n_feats = len(feature_names)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
-    # 1. Singular value bar chart
-    axes[0].bar(range(1, n_feats + 1), S.numpy(), color="steelblue")
-    axes[0].set_xlabel("Component")
-    axes[0].set_ylabel("Singular Value")
-    axes[0].set_title("Singular Value Spectrum")
-    axes[0].set_xticks(range(1, n_feats + 1))
+    # Top-left: Singular value bar chart
+    axes[0, 0].bar(range(1, n_feats + 1), S.numpy(), color="steelblue")
+    axes[0, 0].set_xlabel("Component")
+    axes[0, 0].set_ylabel("Singular Value")
+    axes[0, 0].set_title(f"Singular Value Spectrum  (κ = {S[0] / S[-1]:.2f})")
+    axes[0, 0].set_xticks(range(1, n_feats + 1))
 
-    # 2. Weakest direction weights
+    # Top-right: Weakest direction weights
     v_last = Vt[-1].numpy()
     colors = ["tab:red" if abs(w) > 0.2 else "tab:gray" for w in v_last]
-    axes[1].barh(range(n_feats), v_last, color=colors)
-    axes[1].set_yticks(range(n_feats))
-    axes[1].set_yticklabels(feature_names)
-    axes[1].set_xlabel("Weight")
-    axes[1].set_title(f"Weakest Direction (v_{n_feats})")
-    axes[1].axvline(x=0, color="black", linewidth=0.5)
+    axes[0, 1].barh(range(n_feats), v_last, color=colors)
+    axes[0, 1].set_yticks(range(n_feats))
+    axes[0, 1].set_yticklabels(feature_names)
+    axes[0, 1].set_xlabel("Weight")
+    axes[0, 1].set_title(f"Weakest Direction (v_{n_feats})")
+    axes[0, 1].axvline(x=0, color="black", linewidth=0.5)
 
-    # 3. Correlation heatmap
-    im = axes[2].imshow(corr.numpy(), cmap="RdBu_r", vmin=-1, vmax=1)
-    axes[2].set_xticks(range(n_feats))
-    axes[2].set_xticklabels(feature_names, rotation=45, ha="right")
-    axes[2].set_yticks(range(n_feats))
-    axes[2].set_yticklabels(feature_names)
-    axes[2].set_title("Pearson Correlation")
-    fig.colorbar(im, ax=axes[2], shrink=0.8)
+    # Bottom-left: Correlation heatmap
+    im = axes[1, 0].imshow(corr.numpy(), cmap="RdBu_r", vmin=-1, vmax=1)
+    axes[1, 0].set_xticks(range(n_feats))
+    axes[1, 0].set_xticklabels(feature_names, rotation=45, ha="right")
+    axes[1, 0].set_yticks(range(n_feats))
+    axes[1, 0].set_yticklabels(feature_names)
+    axes[1, 0].set_title("Pearson Correlation (r)")
+    fig.colorbar(im, ax=axes[1, 0], shrink=0.8)
+
+    # Bottom-right: R²(feature | rest) bar chart
+    bar_colors = ["#d64545" if v > 0.5 else "#4a90d9" for v in r2_values]
+    bars = axes[1, 1].bar(feature_names, r2_values, color=bar_colors, edgecolor="black", linewidth=0.5)
+    axes[1, 1].set_ylim(0, 1.05)
+    axes[1, 1].set_ylabel("R²")
+    axes[1, 1].set_title("R²(feature | all others)  —  redundancy check")
+    axes[1, 1].set_xticks(range(len(feature_names)))
+    axes[1, 1].set_xticklabels(feature_names, rotation=45, ha="right")
+    for bar, val in zip(bars, r2_values):
+        axes[1, 1].text(
+            bar.get_x() + (bar.get_width() / 2), bar.get_height() + 0.015,
+            f"{val:.3f}", ha="center", va="bottom", fontsize=8, fontweight="bold",
+        )
 
     plt.tight_layout()
-    out_path = output_dir / f"svd_correlation_analysis[{output_dir.stem}].png"
+    out_path = output_dir / f"feature_analysis[{output_dir.stem}].png"
     plt.savefig(out_path, dpi=150)
     print(f"\nFigure saved to {out_path}")
     plt.close()
 
 
+def _draw_lap_panel(
+    ax: Any, labels: list[str], values: list[float], title: str
+) -> None:
+    """Draw a single bar chart panel for Laplacian R² analysis."""
+    colors = ["#d64545" if v > 0.5 else "#4a90d9" for v in values]
+    bars = ax.bar(labels, values, color=colors, edgecolor="black", linewidth=0.5)
+    ax.set_ylim(0, max(0.05, max(values) * 1.5))
+    ax.set_ylabel("R²")
+    ax.set_title(title)
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+    for bar, val in zip(bars, values):
+        ax.text(
+            bar.get_x() + (bar.get_width() / 2), bar.get_height() + 0.001,
+            f"{val:.4f}", ha="center", va="bottom", fontsize=8, fontweight="bold",
+        )
+
+
+def plot_lap_analysis(
+    results: dict[str, dict[str, float]], feature_names: list[str], output_dir: Path
+):
+    """Laplacian-specific R² figure for 2-field PDEs. 2x2 layout."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    targets = list(results.keys())
+    groups = [k for k in results[targets[0]] if k.startswith("[")]
+
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+
+    for row, tname in enumerate(targets):
+        # Left: pairwise r²(target, each feature)
+        pair_labels = list(feature_names)
+        pair_vals = [results[tname][f"r²({fn})"] for fn in feature_names]
+        _draw_lap_panel(axes[row, 0], pair_labels, pair_vals, f"r²({tname}, single feature)")
+
+        # Right: group R²(target | feature group)
+        group_labels = list(groups)
+        group_vals = [results[tname][gn] for gn in groups]
+        _draw_lap_panel(axes[row, 1], group_labels, group_vals, f"R²({tname} | feature group)")
+
+    plt.tight_layout()
+    out_path = output_dir / f"lap_analysis[{output_dir.stem}].png"
+    plt.savefig(out_path, dpi=150)
+    print(f"Figure saved to {out_path}")
+    plt.close()
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(
-        description="SVD/correlation analysis of PDE features"
+        description="SVD/R² analysis of PDE features"
     )
     parser.add_argument(
         "directory", type=Path, help="Directory containing *_fourier.npz files"
@@ -302,6 +479,10 @@ def main():
     if args.output_dir is None:
         args.output_dir = args.directory
 
+    # Tee stdout to capture all print output for log file
+    tee = TeeStream(sys.stdout)  # type: ignore[arg-type]
+    sys.stdout = tee  # type: ignore[assignment]
+
     features, n_fields = collect_features(
         args.directory, args.n_points, args.seed, args.k_snapshots
     )
@@ -312,7 +493,18 @@ def main():
 
     S, Vt = run_svd_analysis(features, feature_names)
     corr = run_correlation_analysis(features, feature_names)
-    plot_results(S, Vt, corr, feature_names, args.output_dir)
+    r2_values = run_r2_analysis(features, feature_names)
+    plot_feature_analysis(S, Vt, corr, r2_values, feature_names, args.output_dir)
+
+    if n_fields == 2:
+        lap_results = run_lap_analysis(features, feature_names)
+        plot_lap_analysis(lap_results, feature_names, args.output_dir)
+
+    # Restore stdout and save log
+    sys.stdout = tee.original
+    log_path = args.output_dir / f"dataset_analyser[{args.output_dir.stem}].log"
+    log_path.write_text(tee.getvalue())
+    print(f"Log saved to {log_path}")
 
 
 if __name__ == "__main__":
