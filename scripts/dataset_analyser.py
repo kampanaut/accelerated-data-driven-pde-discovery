@@ -319,6 +319,8 @@ def run_lap_analysis(features: torch.Tensor, feature_names: list[str]):
         "[u, v, u_x, u_y]": [0, 1, 2, 3],
         "[all \\ {u_xx,u_yy}]": [0, 1, 2, 3, 6, 7, 8, 9],
         "[all \\ {v_xx,v_yy}]": [0, 1, 2, 3, 4, 5, 6, 7],
+        "{u_xx, u_yy}": [4, 5],
+        "{v_xx, v_yy}": [8, 9],
     }
 
     results: dict[str, dict[str, float]] = {}
