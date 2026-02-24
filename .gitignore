@@ -10,5 +10,6 @@ wheels/
 .venv
 
 Machine Learning for Chaos
-docs/
+docs/*
+!docs/report/
 ./data/
