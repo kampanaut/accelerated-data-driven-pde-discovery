@@ -80,7 +80,7 @@ def localized_bump_ic(
     X, Y = np.meshgrid(x, y)
     cx, cy = center
 
-    u = amp * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * radius ** 2))
+    u = amp * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * radius**2))
     v = np.zeros_like(u)
 
     params = {
@@ -127,7 +127,7 @@ def multi_bump_ic(
         cx = rng.uniform(x[0] + margin, x[-1] + (x[1] - x[0]) - margin)
         cy = rng.uniform(y[0] + margin, y[-1] + (y[1] - y[0]) - margin)
         bump_centers.append((cx, cy))
-        u += amp * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * radius ** 2))
+        u += amp * np.exp(-((X - cx) ** 2 + (Y - cy) ** 2) / (2 * radius**2))
 
     v = np.zeros_like(u)
 

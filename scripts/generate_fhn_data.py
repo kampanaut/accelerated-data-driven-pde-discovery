@@ -29,6 +29,7 @@ from src.pde.fitzhugh_nagumo import solve_fhn
 # Visualization
 # ---------------------------------------------------------------------------
 
+
 def save_fhn_evolution(
     field_history: list,
     times: np.ndarray,
@@ -183,9 +184,13 @@ fhn_spec = PDESpec(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate FitzHugh-Nagumo training data")
+    parser = argparse.ArgumentParser(
+        description="Generate FitzHugh-Nagumo training data"
+    )
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Parallel workers (default: 1)"
+    )
     args = parser.parse_args()
 
     run_generation(fhn_spec, args.config, args.workers)

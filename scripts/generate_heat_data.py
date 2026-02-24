@@ -29,6 +29,7 @@ from src.pde.heat_equation import solve_heat
 # Visualization (bespoke per PDE, stays in script)
 # ---------------------------------------------------------------------------
 
+
 def save_heat_evolution(
     field_history: list,
     times: np.ndarray,
@@ -153,7 +154,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate heat equation training data")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Parallel workers (default: 1)"
+    )
     args = parser.parse_args()
 
     run_generation(heat_spec, args.config, args.workers)

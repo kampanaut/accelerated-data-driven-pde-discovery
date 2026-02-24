@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 
 from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
+
 class TeeStream:
     """Write to both stdout and a StringIO buffer."""
 
@@ -219,6 +220,7 @@ def collect_features(
 # Analysis functions
 # ---------------------------------------------------------------------------
 
+
 def r_squared(y: torch.Tensor, X: torch.Tensor) -> float:
     """OLS R² of regressing y on X (with intercept)."""
     X_aug = torch.cat([X, torch.ones(X.shape[0], 1)], dim=1)
@@ -330,8 +332,8 @@ def run_lap_analysis(features: torch.Tensor, feature_names: list[str]):
         print(f"\n  Pairwise r²({tname}, feature):")
         for i, fname in enumerate(feature_names):
             r = torch.corrcoef(torch.stack([target, features[:, i]]))[0, 1].item()
-            results[tname][f"r²({fname})"] = r ** 2
-            print(f"    r²({tname}, {fname:>5s}) = {r ** 2:.6f}")
+            results[tname][f"r²({fname})"] = r**2
+            print(f"    r²({tname}, {fname:>5s}) = {r**2:.6f}")
 
         # Group R²
         print(f"\n  R²({tname} | group):")
@@ -346,6 +348,7 @@ def run_lap_analysis(features: torch.Tensor, feature_names: list[str]):
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
+
 
 def plot_feature_analysis(
     S, Vt, corr, r2_values: list[float], feature_names: list[str], output_dir: Path
@@ -384,7 +387,9 @@ def plot_feature_analysis(
 
     # Bottom-right: R²(feature | rest) bar chart
     bar_colors = ["#d64545" if v > 0.5 else "#4a90d9" for v in r2_values]
-    bars = axes[1, 1].bar(feature_names, r2_values, color=bar_colors, edgecolor="black", linewidth=0.5)
+    bars = axes[1, 1].bar(
+        feature_names, r2_values, color=bar_colors, edgecolor="black", linewidth=0.5
+    )
     axes[1, 1].set_ylim(0, 1.05)
     axes[1, 1].set_ylabel("R²")
     axes[1, 1].set_title("R²(feature | all others)  —  redundancy check")
@@ -392,8 +397,13 @@ def plot_feature_analysis(
     axes[1, 1].set_xticklabels(feature_names, rotation=45, ha="right")
     for bar, val in zip(bars, r2_values):
         axes[1, 1].text(
-            bar.get_x() + (bar.get_width() / 2), bar.get_height() + 0.015,
-            f"{val:.3f}", ha="center", va="bottom", fontsize=8, fontweight="bold",
+            bar.get_x() + (bar.get_width() / 2),
+            bar.get_height() + 0.015,
+            f"{val:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            fontweight="bold",
         )
 
     plt.tight_layout()
@@ -416,8 +426,13 @@ def _draw_lap_panel(
     ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
     for bar, val in zip(bars, values):
         ax.text(
-            bar.get_x() + (bar.get_width() / 2), bar.get_height() + 0.001,
-            f"{val:.4f}", ha="center", va="bottom", fontsize=8, fontweight="bold",
+            bar.get_x() + (bar.get_width() / 2),
+            bar.get_height() + 0.001,
+            f"{val:.4f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            fontweight="bold",
         )
 
 
@@ -436,12 +451,16 @@ def plot_lap_analysis(
         # Left: pairwise r²(target, each feature)
         pair_labels = list(feature_names)
         pair_vals = [results[tname][f"r²({fn})"] for fn in feature_names]
-        _draw_lap_panel(axes[row, 0], pair_labels, pair_vals, f"r²({tname}, single feature)")
+        _draw_lap_panel(
+            axes[row, 0], pair_labels, pair_vals, f"r²({tname}, single feature)"
+        )
 
         # Right: group R²(target | feature group)
         group_labels = list(groups)
         group_vals = [results[tname][gn] for gn in groups]
-        _draw_lap_panel(axes[row, 1], group_labels, group_vals, f"R²({tname} | feature group)")
+        _draw_lap_panel(
+            axes[row, 1], group_labels, group_vals, f"R²({tname} | feature group)"
+        )
 
     plt.tight_layout()
     out_path = output_dir / f"lap_analysis[{output_dir.stem}].png"
@@ -454,10 +473,9 @@ def plot_lap_analysis(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="SVD/R² analysis of PDE features"
-    )
+    parser = argparse.ArgumentParser(description="SVD/R² analysis of PDE features")
     parser.add_argument(
         "directory", type=Path, help="Directory containing *_fourier.npz files"
     )

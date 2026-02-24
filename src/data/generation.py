@@ -29,6 +29,7 @@ import yaml
 # FieldType enum
 # ---------------------------------------------------------------------------
 
+
 class FieldType(Enum):
     SCALAR = "scalar"
     PAIRED = "paired"
@@ -37,6 +38,7 @@ class FieldType(Enum):
 # ---------------------------------------------------------------------------
 # PDESpec dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class PDESpec:
@@ -60,7 +62,9 @@ class PDESpec:
     prepare_ic_config: Callable | None = None  # (ic_config, sim_params) -> ic_config
 
     # Hook: mutate sim_params after sampling (e.g. BR k2_delta mode).
-    post_sample_params: Callable | None = None  # (ic_config, sim_params, rng) -> sim_params
+    post_sample_params: Callable | None = (
+        None  # (ic_config, sim_params, rng) -> sim_params
+    )
 
     # Hook: post-process fourier_data after FFT (e.g. NS adds p_hat from solver results).
     # Signature: (fourier_data, solver_results) -> fourier_data
@@ -87,6 +91,7 @@ class PDESpec:
 # Config loading
 # ---------------------------------------------------------------------------
 
+
 def load_config(config_path: str | Path) -> dict:
     """Load YAML configuration."""
     with open(config_path, "r") as f:
@@ -96,6 +101,7 @@ def load_config(config_path: str | Path) -> dict:
 # ---------------------------------------------------------------------------
 # Simulation parameter extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_simulation_params(config: dict, spec: PDESpec) -> dict:
     """Pull universal + PDE-specific keys from config['simulation']."""
@@ -116,6 +122,7 @@ def extract_simulation_params(config: dict, spec: PDESpec) -> dict:
 # Per-task parameter sampling
 # ---------------------------------------------------------------------------
 
+
 def sample_params(
     ic_config: dict,
     sim_params: dict,
@@ -128,7 +135,11 @@ def sample_params(
     Returns a shallow copy of sim_params with sampled values filled in.
     """
     task_sim_params = sim_params.copy()
-    samplable = spec.samplable_params if spec.samplable_params is not None else spec.pde_param_keys
+    samplable = (
+        spec.samplable_params
+        if spec.samplable_params is not None
+        else spec.pde_param_keys
+    )
 
     for key in samplable:
         raw = ic_config.get(key, task_sim_params[key])
@@ -154,6 +165,7 @@ def sample_params(
 # ---------------------------------------------------------------------------
 # Fourier transform
 # ---------------------------------------------------------------------------
+
 
 def generate_fourier_data(
     field_history: list,
@@ -189,6 +201,7 @@ def generate_fourier_data(
 # Fourier validation
 # ---------------------------------------------------------------------------
 
+
 def validate_fourier_data(fourier_data: dict, field_type: FieldType) -> None:
     """Raise ValueError if any Fourier arrays contain NaN/Inf."""
     if field_type == FieldType.SCALAR:
@@ -207,6 +220,7 @@ def validate_fourier_data(fourier_data: dict, field_type: FieldType) -> None:
 # ---------------------------------------------------------------------------
 # Physical magnitude validation
 # ---------------------------------------------------------------------------
+
 
 def validate_physical_magnitude(
     field_history: list,
@@ -232,6 +246,7 @@ def validate_physical_magnitude(
 # ---------------------------------------------------------------------------
 # Worker function (must be module-level for pickling)
 # ---------------------------------------------------------------------------
+
 
 def process_single_ic(args_tuple):
     """
@@ -265,7 +280,9 @@ def process_single_ic(args_tuple):
         # Prepare IC config (hooks like BR k1/k2 injection, LO a injection)
         ic_config_attempt = ic_config.copy()
         if spec.prepare_ic_config is not None:
-            ic_config_attempt = spec.prepare_ic_config(ic_config_attempt, task_sim_params)
+            ic_config_attempt = spec.prepare_ic_config(
+                ic_config_attempt, task_sim_params
+            )
 
         if base_seed is not None:
             ic_config_attempt["seed"] = base_seed + attempt * 1000
@@ -341,9 +358,7 @@ def process_single_ic(args_tuple):
                         field_history, times, x_res, y_res, dx, dy, str(vis_file)
                     )
                 else:
-                    spec.save_visualization(
-                        field_history, times, x, y, str(vis_file)
-                    )
+                    spec.save_visualization(field_history, times, x, y, str(vis_file))
 
             return ("success", ic_name, None, attempt)
 
@@ -380,6 +395,7 @@ def process_single_ic(args_tuple):
 # ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
+
 
 def run_generation(spec: PDESpec, config_path: str | Path, workers: int = 1) -> None:
     """

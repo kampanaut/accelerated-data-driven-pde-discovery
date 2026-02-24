@@ -55,7 +55,7 @@ def single_spiral_ic(
 
     dx = X - cx
     dy = Y - cy
-    r = np.sqrt(dx ** 2 + dy ** 2)
+    r = np.sqrt(dx**2 + dy**2)
     theta = np.arctan2(dy, dx)
 
     R_0 = np.sqrt(a)
@@ -145,7 +145,7 @@ def target_pattern_ic(
     cx, cy = center
 
     r2 = (X - cx) ** 2 + (Y - cy) ** 2
-    u = amp * np.exp(-r2 / (2 * radius ** 2))
+    u = amp * np.exp(-r2 / (2 * radius**2))
     v = np.zeros_like(u)
 
     params = {
@@ -195,7 +195,7 @@ def multi_pacemaker_ic(
         cy = rng.uniform(y[0] + margin, y[-1] + (y[1] - y[0]) - margin)
         bump_centers.append((cx, cy))
         r2 = (X - cx) ** 2 + (Y - cy) ** 2
-        u += amp * np.exp(-r2 / (2 * radius ** 2))
+        u += amp * np.exp(-r2 / (2 * radius**2))
 
     v = np.zeros_like(u)
 
@@ -299,7 +299,7 @@ def multi_arm_spiral_ic(
 
     dx = X - cx
     dy = Y - cy
-    r = np.sqrt(dx ** 2 + dy ** 2)
+    r = np.sqrt(dx**2 + dy**2)
     theta = np.arctan2(dy, dx)
 
     R_0 = np.sqrt(a)
@@ -347,7 +347,7 @@ def plane_wave_ic(
     """
     X, _ = np.meshgrid(x, y)
 
-    amp = np.sqrt(max(a - q ** 2, 0.0))
+    amp = np.sqrt(max(a - q**2, 0.0))
     u = amp * np.cos(q * X)
     v = amp * np.sin(q * X)
 

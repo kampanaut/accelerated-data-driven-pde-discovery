@@ -29,6 +29,7 @@ from src.pde.lambda_omega import solve_lo
 # Hooks
 # ---------------------------------------------------------------------------
 
+
 def prepare_lo_ic_config(ic_config: dict, sim_params: dict) -> dict:
     """Inject amplitude parameter 'a' into IC config for limit-cycle scaling."""
     ic_config = ic_config.copy()
@@ -39,6 +40,7 @@ def prepare_lo_ic_config(ic_config: dict, sim_params: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Visualization
 # ---------------------------------------------------------------------------
+
 
 def save_lo_evolution(
     field_history: list,
@@ -197,7 +199,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate Lambda-Omega training data")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Parallel workers (default: 1)"
+    )
     args = parser.parse_args()
 
     run_generation(lo_spec, args.config, args.workers)

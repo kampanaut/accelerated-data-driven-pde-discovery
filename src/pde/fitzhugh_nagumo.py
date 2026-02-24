@@ -113,7 +113,9 @@ def solve_fhn(
     # Save initial condition
     u.change_scales(1)
     v.change_scales(1)
-    field_history.append((np.array(u["g"]).T.copy(), np.array(v["g"]).T.copy()))  # (nx, ny) → (ny, nx)
+    field_history.append(
+        (np.array(u["g"]).T.copy(), np.array(v["g"]).T.copy())
+    )  # (nx, ny) → (ny, nx)
     times.append(0.0)
 
     tag = f"[{task_name}] " if task_name else ""

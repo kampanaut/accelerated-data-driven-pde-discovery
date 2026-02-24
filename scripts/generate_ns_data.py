@@ -26,6 +26,7 @@ from src.pde.navier_stokes import solve_ns
 # Post-Fourier hook: FFT pressure snapshots → p_hat
 # ---------------------------------------------------------------------------
 
+
 def ns_post_fourier(fourier_data: dict, solver_results: dict) -> dict:
     """Add p_hat to fourier_data from solver's pressure_history."""
     pressure_history = solver_results["pressure_history"]
@@ -42,6 +43,7 @@ def ns_post_fourier(fourier_data: dict, solver_results: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Visualization
 # ---------------------------------------------------------------------------
+
 
 def save_flow_evolution(
     velocity_history: list,
@@ -153,11 +155,51 @@ def save_flow_evolution(
         fig.colorbar(surf_mag, ax=ax_mag_3d, fraction=0.03, pad=0.1, shrink=0.5)
 
     # Row labels
-    fig.text(0.02, 0.88, "Velocity vectors", va="center", rotation="vertical", fontsize=11, weight="bold")
-    fig.text(0.02, 0.72, "Vorticity (2D)", va="center", rotation="vertical", fontsize=11, weight="bold")
-    fig.text(0.02, 0.55, "Vorticity (3D)", va="center", rotation="vertical", fontsize=11, weight="bold")
-    fig.text(0.02, 0.38, "Velocity mag (2D)", va="center", rotation="vertical", fontsize=11, weight="bold")
-    fig.text(0.02, 0.20, "Velocity mag (3D)", va="center", rotation="vertical", fontsize=11, weight="bold")
+    fig.text(
+        0.02,
+        0.88,
+        "Velocity vectors",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
+    fig.text(
+        0.02,
+        0.72,
+        "Vorticity (2D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
+    fig.text(
+        0.02,
+        0.55,
+        "Vorticity (3D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
+    fig.text(
+        0.02,
+        0.38,
+        "Velocity mag (2D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
+    fig.text(
+        0.02,
+        0.20,
+        "Velocity mag (3D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
 
     fig.suptitle("Flow Evolution", fontsize=16, y=0.99)
     fig.tight_layout(rect=(0.03, 0, 1, 0.98))
@@ -193,7 +235,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate Navier-Stokes training data")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Parallel workers (default: 1)"
+    )
     args = parser.parse_args()
 
     run_generation(ns_spec, args.config, args.workers)

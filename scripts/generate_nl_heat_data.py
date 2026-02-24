@@ -29,6 +29,7 @@ from src.pde.nl_heat_equation import solve_nl_heat
 # Visualization
 # ---------------------------------------------------------------------------
 
+
 def save_nl_heat_evolution(
     field_history: list,
     times: np.ndarray,
@@ -151,9 +152,13 @@ nl_heat_spec = PDESpec(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate nonlinear heat equation training data")
+    parser = argparse.ArgumentParser(
+        description="Generate nonlinear heat equation training data"
+    )
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Parallel workers (default: 1)"
+    )
     args = parser.parse_args()
 
     run_generation(nl_heat_spec, args.config, args.workers)

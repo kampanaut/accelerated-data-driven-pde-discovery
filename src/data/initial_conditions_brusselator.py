@@ -48,7 +48,7 @@ def perturbed_uniform_ic(
     perturbation_amplitude: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Uniform steady state with small random perturbations.
@@ -74,7 +74,7 @@ def perturbed_uniform_ic(
     v_star = k2 / k1
 
     # Create meshgrid
-    X, _ = np.meshgrid(x, y) # X, Y
+    X, _ = np.meshgrid(x, y)  # X, Y
     ny, nx = X.shape
 
     # Add small random perturbations around steady state
@@ -87,13 +87,13 @@ def perturbed_uniform_ic(
     v = np.maximum(v, 1e-6)
 
     params = {
-        'type': 'perturbed_uniform',
-        'k1': k1,
-        'k2': k2,
-        'u_star': u_star,
-        'v_star': v_star,
-        'perturbation_amplitude': perturbation_amplitude,
-        'seed': seed
+        "type": "perturbed_uniform",
+        "k1": k1,
+        "k2": k2,
+        "u_star": u_star,
+        "v_star": v_star,
+        "perturbation_amplitude": perturbation_amplitude,
+        "seed": seed,
     }
 
     return u, v, params
@@ -106,7 +106,7 @@ def random_smooth_ic(
     smoothing_scale: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Smooth random field around steady state.
@@ -131,15 +131,15 @@ def random_smooth_ic(
     v_star = k2 / k1
 
     # Create meshgrid
-    X, _ = np.meshgrid(x, y) # X, Y
+    X, _ = np.meshgrid(x, y)  # X, Y
     ny, nx = X.shape
 
     # Generate smooth random fields
     noise_u = rng.standard_normal((ny, nx))
     noise_v = rng.standard_normal((ny, nx))
 
-    smooth_u = gaussian_filter(noise_u, sigma=smoothing_scale, mode='wrap')
-    smooth_v = gaussian_filter(noise_v, sigma=smoothing_scale, mode='wrap')
+    smooth_u = gaussian_filter(noise_u, sigma=smoothing_scale, mode="wrap")
+    smooth_v = gaussian_filter(noise_v, sigma=smoothing_scale, mode="wrap")
 
     # Normalize to unit variance then scale
     smooth_u = smooth_u / (np.std(smooth_u) + 1e-8) * perturbation_amplitude * u_star
@@ -154,14 +154,14 @@ def random_smooth_ic(
     v = np.maximum(v, 1e-6)
 
     params = {
-        'type': 'random_smooth',
-        'k1': k1,
-        'k2': k2,
-        'u_star': u_star,
-        'v_star': v_star,
-        'perturbation_amplitude': perturbation_amplitude,
-        'smoothing_scale': smoothing_scale,
-        'seed': seed
+        "type": "random_smooth",
+        "k1": k1,
+        "k2": k2,
+        "u_star": u_star,
+        "v_star": v_star,
+        "perturbation_amplitude": perturbation_amplitude,
+        "smoothing_scale": smoothing_scale,
+        "seed": seed,
     }
 
     return u, v, params
@@ -175,7 +175,7 @@ def localized_perturbation_ic(
     patch_radius: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Localized random perturbation in a circular patch.
@@ -210,7 +210,7 @@ def localized_perturbation_ic(
     v = np.full((ny, nx), v_star)
 
     # Create mask for perturbation region
-    r = np.sqrt((X - cx)**2 + (Y - cy)**2)
+    r = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
     mask = r < patch_radius
 
     # Add perturbations only inside the patch
@@ -223,15 +223,15 @@ def localized_perturbation_ic(
     v = np.maximum(v, 1e-6)
 
     params = {
-        'type': 'localized_perturbation',
-        'k1': k1,
-        'k2': k2,
-        'u_star': u_star,
-        'v_star': v_star,
-        'perturbation_amplitude': perturbation_amplitude,
-        'patch_center': patch_center,
-        'patch_radius': patch_radius,
-        'seed': seed
+        "type": "localized_perturbation",
+        "k1": k1,
+        "k2": k2,
+        "u_star": u_star,
+        "v_star": v_star,
+        "perturbation_amplitude": perturbation_amplitude,
+        "patch_center": patch_center,
+        "patch_radius": patch_radius,
+        "seed": seed,
     }
 
     return u, v, params
@@ -245,7 +245,7 @@ def multi_patch_perturbation_ic(
     patch_radius: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Multiple localized perturbation patches at random locations.
@@ -290,7 +290,7 @@ def multi_patch_perturbation_ic(
 
     # Apply perturbations in each patch
     for cx, cy in patch_centers:
-        r = np.sqrt((X - cx)**2 + (Y - cy)**2)
+        r = np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)
         mask = r < patch_radius
 
         n_perturbed = int(np.sum(mask))
@@ -302,16 +302,16 @@ def multi_patch_perturbation_ic(
     v = np.maximum(v, 1e-6)
 
     params = {
-        'type': 'multi_patch_perturbation',
-        'k1': k1,
-        'k2': k2,
-        'u_star': u_star,
-        'v_star': v_star,
-        'perturbation_amplitude': perturbation_amplitude,
-        'n_patches': n_patches,
-        'patch_radius': patch_radius,
-        'patch_centers': patch_centers,
-        'seed': seed
+        "type": "multi_patch_perturbation",
+        "k1": k1,
+        "k2": k2,
+        "u_star": u_star,
+        "v_star": v_star,
+        "perturbation_amplitude": perturbation_amplitude,
+        "n_patches": n_patches,
+        "patch_radius": patch_radius,
+        "patch_centers": patch_centers,
+        "seed": seed,
     }
 
     return u, v, params
@@ -324,7 +324,7 @@ def gradient_perturbation_ic(
     n_modes: int,
     x: np.ndarray,
     y: np.ndarray,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Sinusoidal gradient perturbations on steady state.
@@ -379,14 +379,16 @@ def gradient_perturbation_ic(
         delta_u += amp_u * np.sin(kx * X + ky * Y + phase_u)
         delta_v += amp_v * np.sin(kx * X + ky * Y + phase_v)
 
-        modes.append({
-            'n_waves_x': int(n_waves_x),
-            'n_waves_y': int(n_waves_y),
-            'phase_u': phase_u,
-            'phase_v': phase_v,
-            'amp_u': amp_u,
-            'amp_v': amp_v
-        })
+        modes.append(
+            {
+                "n_waves_x": int(n_waves_x),
+                "n_waves_y": int(n_waves_y),
+                "phase_u": phase_u,
+                "phase_v": phase_v,
+                "amp_u": amp_u,
+                "amp_v": amp_v,
+            }
+        )
 
     # Normalize and scale
     delta_u = delta_u / n_modes * gradient_amplitude * u_star
@@ -401,21 +403,23 @@ def gradient_perturbation_ic(
     v = np.maximum(v, 1e-6)
 
     params = {
-        'type': 'gradient_perturbation',
-        'k1': k1,
-        'k2': k2,
-        'u_star': u_star,
-        'v_star': v_star,
-        'gradient_amplitude': gradient_amplitude,
-        'n_modes': n_modes,
-        'modes': modes,
-        'seed': seed
+        "type": "gradient_perturbation",
+        "k1": k1,
+        "k2": k2,
+        "u_star": u_star,
+        "v_star": v_star,
+        "gradient_amplitude": gradient_amplitude,
+        "n_modes": n_modes,
+        "modes": modes,
+        "seed": seed,
     }
 
     return u, v, params
 
 
-def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict]:
+def create_brusselator_ic(
+    ic_config: dict, x: np.ndarray, y: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Factory function to create Brusselator IC from configuration dict.
 
@@ -426,35 +430,35 @@ def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tupl
     Returns:
         (u, v, params_dict)
     """
-    ic_type = ic_config['type']
+    ic_type = ic_config["type"]
 
     # Extract k1, k2 from config (required for all ICs)
-    k1 = ic_config['k1']
-    k2 = ic_config['k2']
-    seed = ic_config.get('seed', None)
+    k1 = ic_config["k1"]
+    k2 = ic_config["k2"]
+    seed = ic_config.get("seed", None)
 
-    if ic_type == 'perturbed_uniform':
+    if ic_type == "perturbed_uniform":
         return perturbed_uniform_ic(
             k1=k1,
             k2=k2,
-            perturbation_amplitude=ic_config.get('perturbation_amplitude', 0.05),
+            perturbation_amplitude=ic_config.get("perturbation_amplitude", 0.05),
             x=x,
             y=y,
-            seed=seed
+            seed=seed,
         )
 
-    elif ic_type == 'random_smooth':
+    elif ic_type == "random_smooth":
         return random_smooth_ic(
             k1=k1,
             k2=k2,
-            perturbation_amplitude=ic_config.get('perturbation_amplitude', 0.05),
-            smoothing_scale=ic_config.get('smoothing_scale', 3.0),
+            perturbation_amplitude=ic_config.get("perturbation_amplitude", 0.05),
+            smoothing_scale=ic_config.get("smoothing_scale", 3.0),
             x=x,
             y=y,
-            seed=seed
+            seed=seed,
         )
 
-    elif ic_type == 'localized_perturbation':
+    elif ic_type == "localized_perturbation":
         # Default to domain center
         Lx, Ly = x[-1] + (x[1] - x[0]), y[-1] + (y[1] - y[0])
         default_center = (Lx / 2, Ly / 2)
@@ -463,40 +467,40 @@ def create_brusselator_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> Tupl
         return localized_perturbation_ic(
             k1=k1,
             k2=k2,
-            perturbation_amplitude=ic_config.get('perturbation_amplitude', 0.10),
-            patch_center=tuple(ic_config.get('patch_center', default_center)),
-            patch_radius=ic_config.get('patch_radius', default_radius),
+            perturbation_amplitude=ic_config.get("perturbation_amplitude", 0.10),
+            patch_center=tuple(ic_config.get("patch_center", default_center)),
+            patch_radius=ic_config.get("patch_radius", default_radius),
             x=x,
             y=y,
-            seed=seed
+            seed=seed,
         )
 
-    elif ic_type == 'multi_patch_perturbation':
+    elif ic_type == "multi_patch_perturbation":
         # Default to 3 patches distributed across domain
         Lx, Ly = x[-1] + (x[1] - x[0]), y[-1] + (y[1] - y[0])
-        n_patches = ic_config.get('n_patches', 3)
+        n_patches = ic_config.get("n_patches", 3)
         default_radius = min(Lx, Ly) / 8
 
         return multi_patch_perturbation_ic(
             k1=k1,
             k2=k2,
-            perturbation_amplitude=ic_config.get('perturbation_amplitude', 0.10),
+            perturbation_amplitude=ic_config.get("perturbation_amplitude", 0.10),
             n_patches=n_patches,
-            patch_radius=ic_config.get('patch_radius', default_radius),
+            patch_radius=ic_config.get("patch_radius", default_radius),
             x=x,
             y=y,
-            seed=seed
+            seed=seed,
         )
 
-    elif ic_type == 'gradient_perturbation':
+    elif ic_type == "gradient_perturbation":
         return gradient_perturbation_ic(
             k1=k1,
             k2=k2,
-            gradient_amplitude=ic_config.get('gradient_amplitude', 0.15),
-            n_modes=ic_config.get('n_modes', 2),
+            gradient_amplitude=ic_config.get("gradient_amplitude", 0.15),
+            n_modes=ic_config.get("n_modes", 2),
             x=x,
             y=y,
-            seed=seed
+            seed=seed,
         )
 
     else:

@@ -184,9 +184,7 @@ class MAMLTrainer:
         query_x, query_y = query
 
         # Inner loop optimizer (recreated each task)
-        inner_opt = torch.optim.SGD(
-            self.model.parameters(), lr=self.config.inner_lr
-        )
+        inner_opt = torch.optim.SGD(self.model.parameters(), lr=self.config.inner_lr)
 
         #  source: https://github.com/dragen1860/MAML-Pytorch/blob/master/meta.py
 
@@ -203,9 +201,7 @@ class MAMLTrainer:
             for _ in range(self.config.inner_steps):
                 support_pred = fmodel(support_x)
                 support_loss = F.mse_loss(support_pred, support_y)
-                diffopt.step(
-                    support_loss
-                ) # \phi_i = U_{\tau}(\theta). 
+                diffopt.step(support_loss)  # \phi_i = U_{\tau}(\theta).
                 # 1. Computes gradient via autograd.grad in respect to the intermediate adapted parameter \phi_i
                 # 2. Then applies the gradient to the update rule as differentiable ops
                 # 3. Appends the computational graph segment for `fmodel` subgraph that diverged from \theta.
@@ -238,7 +234,9 @@ class MAMLTrainer:
             total_loss += task_loss
 
         # Average loss
-        avg_loss = total_loss / len(tasks) # Every task subgraph that was extended inner_step times converges right here. This is where they connect.
+        avg_loss = (
+            total_loss / len(tasks)
+        )  # Every task subgraph that was extended inner_step times converges right here. This is where they connect.
 
         # Meta-gradient update
         avg_loss.backward()

@@ -28,6 +28,7 @@ from src.pde.brusselator import solve_br
 # Hooks
 # ---------------------------------------------------------------------------
 
+
 def prepare_br_ic_config(ic_config: dict, sim_params: dict) -> dict:
     """Inject k1/k2 into IC config for steady-state calculation."""
     ic_config = ic_config.copy()
@@ -56,6 +57,7 @@ def post_sample_br_params(
 # ---------------------------------------------------------------------------
 # Visualization
 # ---------------------------------------------------------------------------
+
 
 def save_brusselator_evolution(
     concentration_history: list,
@@ -118,8 +120,13 @@ def save_brusselator_evolution(
         assert isinstance(ax_u_3d, Axes3D)
         step = max(1, x_grid.shape[0] // 32)
         surf_u = ax_u_3d.plot_surface(
-            x_grid[::step, ::step], y_grid[::step, ::step], u[::step, ::step],
-            cmap="YlOrRd", linewidth=0, antialiased=True, alpha=0.9,
+            x_grid[::step, ::step],
+            y_grid[::step, ::step],
+            u[::step, ::step],
+            cmap="YlOrRd",
+            linewidth=0,
+            antialiased=True,
+            alpha=0.9,
         )
         ax_u_3d.set_xlabel("x")
         ax_u_3d.set_ylabel("y")
@@ -133,8 +140,13 @@ def save_brusselator_evolution(
         )
         assert isinstance(ax_v_3d, Axes3D)
         surf_v = ax_v_3d.plot_surface(
-            x_grid[::step, ::step], y_grid[::step, ::step], v[::step, ::step],
-            cmap="YlGnBu", linewidth=0, antialiased=True, alpha=0.9,
+            x_grid[::step, ::step],
+            y_grid[::step, ::step],
+            v[::step, ::step],
+            cmap="YlGnBu",
+            linewidth=0,
+            antialiased=True,
+            alpha=0.9,
         )
         ax_v_3d.set_xlabel("x")
         ax_v_3d.set_ylabel("y")
@@ -142,10 +154,42 @@ def save_brusselator_evolution(
         ax_v_3d.view_init(elev=30, azim=45)
         fig.colorbar(surf_v, ax=ax_v_3d, fraction=0.03, pad=0.1, shrink=0.5)
 
-    fig.text(0.02, 0.88, "u conc (2D)", va="center", rotation="vertical", fontsize=11, weight="bold")
-    fig.text(0.02, 0.65, "v conc (2D)", va="center", rotation="vertical", fontsize=11, weight="bold")
-    fig.text(0.02, 0.42, "u conc (3D)", va="center", rotation="vertical", fontsize=11, weight="bold")
-    fig.text(0.02, 0.18, "v conc (3D)", va="center", rotation="vertical", fontsize=11, weight="bold")
+    fig.text(
+        0.02,
+        0.88,
+        "u conc (2D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
+    fig.text(
+        0.02,
+        0.65,
+        "v conc (2D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
+    fig.text(
+        0.02,
+        0.42,
+        "u conc (3D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
+    fig.text(
+        0.02,
+        0.18,
+        "v conc (3D)",
+        va="center",
+        rotation="vertical",
+        fontsize=11,
+        weight="bold",
+    )
 
     fig.suptitle("Brusselator Evolution", fontsize=16, y=0.99)
     fig.tight_layout(rect=(0.03, 0, 1, 0.98))
@@ -182,7 +226,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generate Brusselator training data")
     parser.add_argument("--config", type=str, required=True, help="Path to YAML config")
-    parser.add_argument("--workers", type=int, default=1, help="Parallel workers (default: 1)")
+    parser.add_argument(
+        "--workers", type=int, default=1, help="Parallel workers (default: 1)"
+    )
     args = parser.parse_args()
 
     run_generation(br_spec, args.config, args.workers)

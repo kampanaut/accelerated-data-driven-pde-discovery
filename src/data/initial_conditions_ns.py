@@ -17,7 +17,7 @@ def gaussian_hill_ic(
     width: float,
     strength: float,
     x: np.ndarray,
-    y: np.ndarray
+    y: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate velocity field from a single Gaussian vorticity "hill".
@@ -48,7 +48,7 @@ def gaussian_hill_ic(
     X, Y = np.meshgrid(x, y)
 
     # Compute distance from vortex center
-    r_squared = (X - center[0])**2 + (Y - center[1])**2
+    r_squared = (X - center[0]) ** 2 + (Y - center[1]) ** 2
 
     # Gaussian vorticity distribution
     vorticity = strength * np.exp(-r_squared / (2 * width**2))
@@ -61,22 +61,15 @@ def gaussian_hill_ic(
     dy = y[1] - y[0]
 
     u = -np.gradient(psi, dy, axis=0)  # u = -∂ψ/∂y
-    v = np.gradient(psi, dx, axis=1)    # v = ∂ψ/∂x
+    v = np.gradient(psi, dx, axis=1)  # v = ∂ψ/∂x
 
-    params = {
-        'center': center,
-        'width': width,
-        'strength': strength
-    }
+    params = {"center": center, "width": width, "strength": strength}
 
     return u, v, params
 
 
 def solve_poisson_2d(
-    rhs: np.ndarray,
-    x: np.ndarray,
-    y: np.ndarray,
-    periodic
+    rhs: np.ndarray, x: np.ndarray, y: np.ndarray, periodic
 ) -> np.ndarray:
     """
     Solve 2D Poisson equation: ∇²φ = rhs
@@ -104,11 +97,7 @@ def solve_poisson_2d(
         return solve_poisson_dirichlet(rhs, dx, dy)
 
 
-def solve_poisson_periodic(
-    rhs: np.ndarray,
-    dx: float,
-    dy: float
-) -> np.ndarray:
+def solve_poisson_periodic(rhs: np.ndarray, dx: float, dy: float) -> np.ndarray:
     """
     Solve 2D Poisson equation with periodic BCs using FFT.
 
@@ -150,9 +139,7 @@ def solve_poisson_periodic(
 
 
 def solve_poisson_dirichlet(
-    rhs: NDArray[np.floating[Any]],
-    dx: float,
-    dy: float
+    rhs: NDArray[np.floating[Any]], dx: float, dy: float
 ) -> np.ndarray:
     """
     Solve 2D Poisson equation with Dirichlet BCs (φ=0 on boundary).
@@ -180,16 +167,16 @@ def solve_poisson_dirichlet(
     diag_y = 1.0 / dy**2
 
     diagonals = [
-        np.full(n_interior, diag_main),      # main diagonal
-        np.full(n_interior - 1, diag_x),      # super-diagonal (x-direction)
-        np.full(n_interior - 1, diag_x),      # sub-diagonal (x-direction)
-        np.full(n_interior - (nx-2), diag_y), # super-diagonal (y-direction)
-        np.full(n_interior - (nx-2), diag_y), # sub-diagonal (y-direction)
+        np.full(n_interior, diag_main),  # main diagonal
+        np.full(n_interior - 1, diag_x),  # super-diagonal (x-direction)
+        np.full(n_interior - 1, diag_x),  # sub-diagonal (x-direction)
+        np.full(n_interior - (nx - 2), diag_y),  # super-diagonal (y-direction)
+        np.full(n_interior - (nx - 2), diag_y),  # sub-diagonal (y-direction)
     ]
 
-    offsets = [0, 1, -1, nx-2, -(nx-2)]
+    offsets = [0, 1, -1, nx - 2, -(nx - 2)]
 
-    A = diags(diagonals, offsets, shape=(n_interior, n_interior), format='csr')  # type: ignore[reportArgumentType]
+    A = diags(diagonals, offsets, shape=(n_interior, n_interior), format="csr")  # type: ignore[reportArgumentType]
 
     # Flatten RHS (interior points only)
     b = rhs[1:-1, 1:-1].flatten()
@@ -205,9 +192,7 @@ def solve_poisson_dirichlet(
 
 
 def multi_vortex_ic(
-    vortex_params: list,
-    x: np.ndarray,
-    y: np.ndarray
+    vortex_params: list, x: np.ndarray, y: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate velocity field from multiple Gaussian vortices.
@@ -233,11 +218,11 @@ def multi_vortex_ic(
 
     # Sum contributions from all vortices
     for params in vortex_params:
-        center = params['center']
-        width = params['width']
-        strength = params['strength']
+        center = params["center"]
+        width = params["width"]
+        strength = params["strength"]
 
-        r_squared = (X - center[0])**2 + (Y - center[1])**2
+        r_squared = (X - center[0]) ** 2 + (Y - center[1]) ** 2
         vorticity_total += strength * np.exp(-r_squared / (2 * width**2))
 
     # Solve for stream function
@@ -254,9 +239,7 @@ def multi_vortex_ic(
 
 
 def taylor_green_vortex(
-    x: np.ndarray,
-    y: np.ndarray,
-    amplitude: float = 1.0
+    x: np.ndarray, y: np.ndarray, amplitude: float = 1.0
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate Taylor-Green vortex initial condition.
@@ -280,9 +263,7 @@ def taylor_green_vortex(
     u = -amplitude * np.sin(X) * np.cos(Y)
     v = amplitude * np.cos(X) * np.sin(Y)
 
-    params = {
-        'amplitude': amplitude
-    }
+    params = {"amplitude": amplitude}
 
     return u, v, params
 
@@ -293,7 +274,7 @@ def shear_layer_ic(
     velocity_jump: float,
     perturbation_amplitude: float,
     x: np.ndarray,
-    y: np.ndarray
+    y: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate double shear layer initial condition (Kelvin-Helmholtz setup).
@@ -336,10 +317,10 @@ def shear_layer_ic(
     v = v_pert
 
     params = {
-        'y_center': y_center,
-        'thickness': thickness,
-        'velocity_jump': velocity_jump,
-        'perturbation_amplitude': perturbation_amplitude
+        "y_center": y_center,
+        "thickness": thickness,
+        "velocity_jump": velocity_jump,
+        "perturbation_amplitude": perturbation_amplitude,
     }
 
     return u, v, params
@@ -350,7 +331,7 @@ def lamb_oseen_vortex_ic(
     core_radius: float,
     circulation: float,
     x: np.ndarray,
-    y: np.ndarray
+    y: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate Lamb-Oseen vortex (smooth vortex with finite core).
@@ -383,18 +364,14 @@ def lamb_oseen_vortex_ic(
     r = np.maximum(r, 1e-10)
 
     # Tangential velocity magnitude
-    v_theta = (circulation / (2 * np.pi * r)) * (1 - np.exp(-r**2 / core_radius**2))
+    v_theta = (circulation / (2 * np.pi * r)) * (1 - np.exp(-(r**2) / core_radius**2))
 
     # Convert to Cartesian components: u = -v_θ * sin(θ), v = v_θ * cos(θ)
     # sin(θ) = dy/r, cos(θ) = dx/r
     u = -v_theta * (dy_grid / r)
     v = v_theta * (dx_grid / r)
 
-    params = {
-        'center': center,
-        'core_radius': core_radius,
-        'circulation': circulation
-    }
+    params = {"center": center, "core_radius": core_radius, "circulation": circulation}
 
     return u, v, params
 
@@ -405,7 +382,7 @@ def dipole_vortex_ic(
     width: float,
     strength: float,
     x: np.ndarray,
-    y: np.ndarray
+    y: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate dipole (vortex pair) - two counter-rotating vortices.
@@ -429,15 +406,15 @@ def dipole_vortex_ic(
     # Two vortices: one at center - separation/2, one at center + separation/2
     vortex_params = [
         {
-            'center': (center[0] - separation / 2, center[1]),
-            'width': width,
-            'strength': strength
+            "center": (center[0] - separation / 2, center[1]),
+            "width": width,
+            "strength": strength,
         },
         {
-            'center': (center[0] + separation / 2, center[1]),
-            'width': width,
-            'strength': -strength  # Opposite sign
-        }
+            "center": (center[0] + separation / 2, center[1]),
+            "width": width,
+            "strength": -strength,  # Opposite sign
+        },
     ]
 
     return multi_vortex_ic(vortex_params, x, y)
@@ -450,7 +427,7 @@ def perturbed_uniform_flow_ic(
     perturbation_wavelength: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: int
+    seed: int,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate uniform flow with small random perturbations.
@@ -493,12 +470,7 @@ def perturbed_uniform_flow_ic(
         u_pert += np.sin(kx * X + ky * Y + phase_u)
         v_pert += np.sin(kx * X + ky * Y + phase_v)
 
-        modes.append({
-            'kx': kx,
-            'ky': ky,
-            'phase_u': phase_u,
-            'phase_v': phase_v
-        })
+        modes.append({"kx": kx, "ky": ky, "phase_u": phase_u, "phase_v": phase_v})
 
     # Normalize perturbations
     u_pert = perturbation_amplitude * u_pert / np.sqrt(n_modes)
@@ -508,11 +480,11 @@ def perturbed_uniform_flow_ic(
     v = v_mean + v_pert
 
     params = {
-        'u_mean': u_mean,
-        'v_mean': v_mean,
-        'perturbation_amplitude': perturbation_amplitude,
-        'perturbation_wavelength': perturbation_wavelength,
-        'modes': modes
+        "u_mean": u_mean,
+        "v_mean": v_mean,
+        "perturbation_amplitude": perturbation_amplitude,
+        "perturbation_wavelength": perturbation_wavelength,
+        "modes": modes,
     }
 
     return u, v, params
@@ -524,7 +496,7 @@ def random_vortex_soup_ic(
     width_range: Tuple[float, float],
     x: np.ndarray,
     y: np.ndarray,
-    seed: int
+    seed: int,
 ) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate random collection of vortices (turbulent-like initial state).
@@ -560,11 +532,9 @@ def random_vortex_soup_ic(
         strength = rng.uniform(strength_range[0], strength_range[1])
         width = rng.uniform(width_range[0], width_range[1])
 
-        vortex_params.append({
-            'center': (center_x, center_y),
-            'width': width,
-            'strength': strength
-        })
+        vortex_params.append(
+            {"center": (center_x, center_y), "width": width, "strength": strength}
+        )
 
     return multi_vortex_ic(vortex_params, x, y)
 
@@ -575,7 +545,7 @@ def gaussian_vortex_ic(
     width_range: Tuple[float, float],
     x: np.ndarray,
     y: np.ndarray,
-    seed: int
+    seed: int,
 ) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate velocity field from sum of random Gaussian vorticity distributions.
@@ -633,11 +603,9 @@ def gaussian_vortex_ic(
         amplitude = rng.uniform(amplitude_range[0], amplitude_range[1])
         width = rng.uniform(width_range[0], width_range[1])
 
-        vortex_params.append({
-            'center': (center_x, center_y),
-            'width': width,
-            'strength': amplitude
-        })
+        vortex_params.append(
+            {"center": (center_x, center_y), "width": width, "strength": amplitude}
+        )
 
     # Use existing multi_vortex infrastructure to compute velocity
     return multi_vortex_ic(vortex_params, x, y)
@@ -650,7 +618,7 @@ def gaussian_direct_ic(
     width_range: Tuple[float, float],
     x: np.ndarray,
     y: np.ndarray,
-    seed: int
+    seed: int,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate velocity field by directly constructing u and v from independent Gaussian sums.
@@ -715,14 +683,12 @@ def gaussian_direct_ic(
         amplitude = rng.uniform(amplitude_range[0], amplitude_range[1])
         width = rng.uniform(width_range[0], width_range[1])
 
-        r_squared = (X - center_x)**2 + (Y - center_y)**2
+        r_squared = (X - center_x) ** 2 + (Y - center_y) ** 2
         u += amplitude * np.exp(-r_squared / (2 * width**2))
 
-        u_gaussians.append({
-            'center': (center_x, center_y),
-            'width': width,
-            'amplitude': amplitude
-        })
+        u_gaussians.append(
+            {"center": (center_x, center_y), "width": width, "amplitude": amplitude}
+        )
 
     # Build v component from different independent Gaussians
     for _ in range(n_gaussians_v):
@@ -731,19 +697,14 @@ def gaussian_direct_ic(
         amplitude = rng.uniform(amplitude_range[0], amplitude_range[1])
         width = rng.uniform(width_range[0], width_range[1])
 
-        r_squared = (X - center_x)**2 + (Y - center_y)**2
+        r_squared = (X - center_x) ** 2 + (Y - center_y) ** 2
         v += amplitude * np.exp(-r_squared / (2 * width**2))
 
-        v_gaussians.append({
-            'center': (center_x, center_y),
-            'width': width,
-            'amplitude': amplitude
-        })
+        v_gaussians.append(
+            {"center": (center_x, center_y), "width": width, "amplitude": amplitude}
+        )
 
-    params = {
-        'u_gaussians': u_gaussians,
-        'v_gaussians': v_gaussians
-    }
+    params = {"u_gaussians": u_gaussians, "v_gaussians": v_gaussians}
 
     return u, v, params
 
@@ -758,7 +719,7 @@ def gaussian_hybrid_ic(
     beta: float,
     x: np.ndarray,
     y: np.ndarray,
-    seed: int
+    seed: int,
 ) -> Tuple[np.ndarray, np.ndarray, dict]:
     """
     Generate hybrid velocity field combining vorticity-based and direct construction.
@@ -809,20 +770,22 @@ def gaussian_hybrid_ic(
         n_gaussians=n_gaussians_vorticity,
         amplitude_range=amplitude_range,
         width_range=width_range,
-        x=x, y=y,
-        seed=seed
+        x=x,
+        y=y,
+        seed=seed,
     )
 
     # Generate direct component (arbitrary directions, not divergence-free)
     # Use seed offset to ensure decorrelation when seed is specified
-    seed_direct = (seed + 1000)
+    seed_direct = seed + 1000
     u_direct, v_direct, direct_params = gaussian_direct_ic(
         n_gaussians_u=n_gaussians_u,
         n_gaussians_v=n_gaussians_v,
         amplitude_range=amplitude_range,
         width_range=width_range,
-        x=x, y=y,
-        seed=seed_direct
+        x=x,
+        y=y,
+        seed=seed_direct,
     )
 
     # Weighted combination
@@ -830,10 +793,10 @@ def gaussian_hybrid_ic(
     v = alpha * v_vort + beta * v_direct
 
     params = {
-        'vorticity_gaussians': vorticity_params,
-        'direct_params': direct_params,
-        'alpha': alpha,
-        'beta': beta
+        "vorticity_gaussians": vorticity_params,
+        "direct_params": direct_params,
+        "alpha": alpha,
+        "beta": beta,
     }
 
     return u, v, params
@@ -846,7 +809,7 @@ def von_karman_street_ic(
     width: float,
     strength: float,
     x: np.ndarray,
-    y: np.ndarray
+    y: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray, list]:
     """
     Generate Von Kármán vortex street (alternating wake pattern).
@@ -881,18 +844,22 @@ def von_karman_street_ic(
         x_pos = x[0] + spacing * (i + 0.5)
 
         # Top row (positive circulation)
-        vortex_params.append({
-            'center': (x_pos, center_y + offset / 2),
-            'width': width,
-            'strength': strength
-        })
+        vortex_params.append(
+            {
+                "center": (x_pos, center_y + offset / 2),
+                "width": width,
+                "strength": strength,
+            }
+        )
 
         # Bottom row (negative circulation, staggered by spacing/2)
-        vortex_params.append({
-            'center': (x_pos + spacing / 2, center_y - offset / 2),
-            'width': width,
-            'strength': -strength
-        })
+        vortex_params.append(
+            {
+                "center": (x_pos + spacing / 2, center_y - offset / 2),
+                "width": width,
+                "strength": -strength,
+            }
+        )
 
     return multi_vortex_ic(vortex_params, x, y)
 
@@ -915,11 +882,16 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             center=tuple(ic_config["center"]),
             width=ic_config["width"],
             strength=ic_config["strength"],
-            x=x, y=y,
+            x=x,
+            y=y,
         )
     elif ic_type == "multi_vortex":
         vortex_params = [
-            {"center": tuple(v["center"]), "width": v["width"], "strength": v["strength"]}
+            {
+                "center": tuple(v["center"]),
+                "width": v["width"],
+                "strength": v["strength"],
+            }
             for v in ic_config["vortices"]
         ]
         return multi_vortex_ic(vortex_params, x, y)
@@ -931,14 +903,16 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             thickness=ic_config["thickness"],
             velocity_jump=ic_config["velocity_jump"],
             perturbation_amplitude=ic_config["perturbation_amplitude"],
-            x=x, y=y,
+            x=x,
+            y=y,
         )
     elif ic_type == "lamb_oseen":
         return lamb_oseen_vortex_ic(
             center=tuple(ic_config["center"]),
             core_radius=ic_config["core_radius"],
             circulation=ic_config["circulation"],
-            x=x, y=y,
+            x=x,
+            y=y,
         )
     elif ic_type == "dipole":
         return dipole_vortex_ic(
@@ -946,7 +920,8 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             separation=ic_config["separation"],
             width=ic_config["width"],
             strength=ic_config["strength"],
-            x=x, y=y,
+            x=x,
+            y=y,
         )
     elif ic_type == "perturbed_flow":
         return perturbed_uniform_flow_ic(
@@ -954,7 +929,8 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             v_mean=ic_config["v_mean"],
             perturbation_amplitude=ic_config["perturbation_amplitude"],
             perturbation_wavelength=ic_config["perturbation_wavelength"],
-            x=x, y=y,
+            x=x,
+            y=y,
             seed=ic_config["seed"],
         )
     elif ic_type == "random_soup":
@@ -962,7 +938,8 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             n_vortices=ic_config["n_vortices"],
             strength_range=tuple(ic_config["strength_range"]),
             width_range=tuple(ic_config["width_range"]),
-            x=x, y=y,
+            x=x,
+            y=y,
             seed=ic_config["seed"],
         )
     elif ic_type == "von_karman":
@@ -972,14 +949,16 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             offset=ic_config["offset"],
             width=ic_config["width"],
             strength=ic_config["strength"],
-            x=x, y=y,
+            x=x,
+            y=y,
         )
     elif ic_type == "gaussian_vortex":
         return gaussian_vortex_ic(
             n_gaussians=ic_config["n_gaussians"],
             amplitude_range=tuple(ic_config["amplitude_range"]),
             width_range=tuple(ic_config["width_range"]),
-            x=x, y=y,
+            x=x,
+            y=y,
             seed=ic_config["seed"],
         )
     elif ic_type == "gaussian_direct":
@@ -988,7 +967,8 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             n_gaussians_v=ic_config["n_gaussians_v"],
             amplitude_range=tuple(ic_config["amplitude_range"]),
             width_range=tuple(ic_config["width_range"]),
-            x=x, y=y,
+            x=x,
+            y=y,
             seed=ic_config["seed"],
         )
     elif ic_type == "gaussian_hybrid":
@@ -1000,7 +980,8 @@ def create_ns_ic(ic_config: dict, x: np.ndarray, y: np.ndarray) -> tuple:
             width_range=tuple(ic_config["width_range"]),
             alpha=ic_config["alpha"],
             beta=ic_config["beta"],
-            x=x, y=y,
+            x=x,
+            y=y,
             seed=ic_config["seed"],
         )
     else:

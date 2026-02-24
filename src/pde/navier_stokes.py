@@ -112,7 +112,10 @@ def solve_ns(
     u_vec.change_scales(1)
     p.change_scales(1)
     velocity_history.append(
-        (np.array(u_vec["g"][0]).T.copy(), np.array(u_vec["g"][1]).T.copy())  # (nx, ny) → (ny, nx)
+        (
+            np.array(u_vec["g"][0]).T.copy(),
+            np.array(u_vec["g"][1]).T.copy(),
+        )  # (nx, ny) → (ny, nx)
     )
     pressure_history.append(np.array(p["g"]).T.copy())
     times.append(0.0)

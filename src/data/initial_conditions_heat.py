@@ -146,7 +146,8 @@ def create_heat_ic(
 
     if ic_type == "gaussian_bump":
         u, params = gaussian_bump(
-            x=x, y=y,
+            x=x,
+            y=y,
             x0=ic_config.get("x0", Lx / 2),
             y0=ic_config.get("y0", Ly / 2),
             sigma=ic_config.get("sigma", 0.5),
@@ -155,21 +156,24 @@ def create_heat_ic(
         )
     elif ic_type == "multi_bump":
         u, params = multi_bump(
-            x=x, y=y,
+            x=x,
+            y=y,
             n_bumps=ic_config.get("n_bumps", 3),
             sigma_range=tuple(ic_config.get("sigma_range", [0.2, 0.8])),
             seed=seed,
         )
     elif ic_type == "random_perturbation":
         u, params = random_perturbation(
-            x=x, y=y,
+            x=x,
+            y=y,
             amplitude=ic_config.get("amplitude", 0.5),
             n_modes=ic_config.get("n_modes", 10),
             seed=seed,
         )
     elif ic_type == "sine_superposition":
         u, params = sine_superposition(
-            x=x, y=y,
+            x=x,
+            y=y,
             modes=ic_config.get("modes", 3),
             seed=seed,
         )
