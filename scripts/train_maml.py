@@ -14,12 +14,32 @@ Usage:
     python scripts/train_maml.py --config configs/experiment.yaml --resume
 """
 
+import io
 import sys
 import argparse
 import json
 import shutil
 from pathlib import Path
 from datetime import datetime
+
+
+class _TeeStream:
+    """Write to both stdout and a StringIO buffer."""
+
+    def __init__(self, original: object):  # type: ignore[arg-type]
+        self.original = original
+        self.buffer = io.StringIO()
+
+    def write(self, text: str) -> int:
+        self.original.write(text)  # type: ignore[union-attr]
+        self.buffer.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self.original.flush()  # type: ignore[union-attr]
+
+    def getvalue(self) -> str:
+        return self.buffer.getvalue()
 
 import yaml
 import torch
@@ -82,6 +102,10 @@ def main():
 
     config = load_config(args.config)
     exp_dir = setup_output_dirs(config)
+
+    # Tee stdout to capture all print output for log file
+    _tee = _TeeStream(sys.stdout)
+    sys.stdout = _tee  # type: ignore[assignment]
 
     print(f"Experiment: {config['experiment']['name']}")
     print(f"Output directory: {exp_dir}")
@@ -279,6 +303,12 @@ def main():
     print("Next steps:")
     print(f"  python scripts/evaluate.py --config {args.config}")
     print()
+
+    # Save log
+    sys.stdout = _tee.original  # type: ignore[assignment]
+    log_path = exp_dir / "training" / "train_maml.log"
+    log_path.write_text(_tee.getvalue())
+    print(f"Log saved to {log_path}")
 
 
 if __name__ == "__main__":

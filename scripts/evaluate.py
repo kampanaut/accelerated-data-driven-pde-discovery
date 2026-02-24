@@ -15,6 +15,7 @@ Usage:
     python scripts/evaluate.py --config configs/experiment.yaml
 """
 
+import io
 import sys
 import copy
 import json
@@ -23,6 +24,25 @@ from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
+
+
+class _TeeStream:
+    """Write to both stdout and a StringIO buffer."""
+
+    def __init__(self, original: object):  # type: ignore[arg-type]
+        self.original = original
+        self.buffer = io.StringIO()
+
+    def write(self, text: str) -> int:
+        self.original.write(text)  # type: ignore[union-attr]
+        self.buffer.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self.original.flush()  # type: ignore[union-attr]
+
+    def getvalue(self) -> str:
+        return self.buffer.getvalue()
 
 import yaml
 import torch
@@ -387,6 +407,10 @@ def main():
             f"Experiment directory not found: {exp_dir}\nRun train_maml.py first."
         )
 
+    # Tee stdout to capture all print output for log file
+    _tee = _TeeStream(sys.stdout)
+    sys.stdout = _tee  # type: ignore[assignment]
+
     print(f"Experiment: {exp_name}")
     print(f"Experiment directory: {exp_dir}")
     print()
@@ -656,6 +680,12 @@ def main():
     print("Next steps:")
     print(f"  python scripts/visualize.py --config {args.config}")
     print()
+
+    # Save log
+    sys.stdout = _tee.original  # type: ignore[assignment]
+    log_path = eval_dir / "evaluate.log"
+    log_path.write_text(_tee.getvalue())
+    print(f"Log saved to {log_path}")
 
 
 if __name__ == "__main__":
