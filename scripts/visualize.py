@@ -18,7 +18,6 @@ Usage:
     python scripts/visualize.py --config configs/experiment.yaml
 """
 
-import sys
 import json
 import argparse
 from pathlib import Path
@@ -31,9 +30,6 @@ import matplotlib
 
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.evaluation.metrics import (
     compute_comparison_metrics,

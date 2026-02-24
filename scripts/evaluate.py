@@ -49,9 +49,6 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
 from src.evaluation.jacobian import analyze_jacobian

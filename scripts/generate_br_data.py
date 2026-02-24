@@ -9,16 +9,12 @@ Usage:
     python scripts/generate_br_data.py --config configs/br_train-1.yaml --workers 4
 """
 
-import sys
 import os
-from pathlib import Path
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.generation import PDESpec, FieldType, run_generation
 from src.data.initial_conditions_brusselator import (

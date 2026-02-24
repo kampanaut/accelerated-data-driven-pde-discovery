@@ -48,7 +48,6 @@ class TeeStream:
     def getvalue(self) -> str:
         return self.buffer.getvalue()
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 FEATURE_NAMES_2F = [
     "u",
