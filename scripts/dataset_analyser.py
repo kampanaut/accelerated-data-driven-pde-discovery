@@ -428,7 +428,7 @@ def plot_lap_analysis(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     targets = list(results.keys())
-    groups = [k for k in results[targets[0]] if k.startswith("[")]
+    groups = [k for k in results[targets[0]] if k.startswith(("[", "{"))]
 
     _, axes = plt.subplots(2, 2, figsize=(18, 12))
 
