@@ -28,6 +28,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 
+from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
 class TeeStream:
     """Write to both stdout and a StringIO buffer."""
@@ -48,8 +49,6 @@ class TeeStream:
         return self.buffer.getvalue()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
 FEATURE_NAMES_2F = [
     "u",
@@ -97,30 +96,30 @@ def load_fourier_fields(npz_path: Path) -> dict:
     return result
 
 
-def evaluate_features_1f(field1_hat, kx, ky, E_x, E_y):
+def evaluate_features_1f(field1_hat, kx, ky, E_x, E_y, device):
     """Evaluate 5 features for a single-field PDE: [u, u_x, u_y, u_xx, u_yy]."""
-    u = fourier_eval_2d(field1_hat, E_x, E_y)
-    u_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field1_hat, E_x, E_y)
-    u_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field1_hat, E_x, E_y)
-    u_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field1_hat, E_x, E_y)
-    u_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field1_hat, E_x, E_y)
+    u = fourier_eval_2d(field1_hat, E_x, E_y, device)
+    u_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field1_hat, E_x, E_y, device)
+    u_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field1_hat, E_x, E_y, device)
+    u_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field1_hat, E_x, E_y, device)
+    u_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field1_hat, E_x, E_y, device)
     return torch.stack([u, u_x, u_y, u_xx, u_yy], dim=1)
 
 
-def evaluate_features_2f(field1_hat, field2_hat, kx, ky, E_x, E_y):
+def evaluate_features_2f(field1_hat, field2_hat, kx, ky, E_x, E_y, device):
     """Evaluate 10 features for a two-field PDE."""
-    u = fourier_eval_2d(field1_hat, E_x, E_y)
-    v = fourier_eval_2d(field2_hat, E_x, E_y)
+    u = fourier_eval_2d(field1_hat, E_x, E_y, device)
+    v = fourier_eval_2d(field2_hat, E_x, E_y, device)
 
-    u_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field1_hat, E_x, E_y)
-    u_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field1_hat, E_x, E_y)
-    u_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field1_hat, E_x, E_y)
-    u_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field1_hat, E_x, E_y)
+    u_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field1_hat, E_x, E_y, device)
+    u_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field1_hat, E_x, E_y, device)
+    u_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field1_hat, E_x, E_y, device)
+    u_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field1_hat, E_x, E_y, device)
 
-    v_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field2_hat, E_x, E_y)
-    v_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field2_hat, E_x, E_y)
-    v_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field2_hat, E_x, E_y)
-    v_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field2_hat, E_x, E_y)
+    v_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field2_hat, E_x, E_y, device)
+    v_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field2_hat, E_x, E_y, device)
+    v_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field2_hat, E_x, E_y, device)
+    v_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field2_hat, E_x, E_y, device)
 
     return torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
 
@@ -208,9 +207,9 @@ def collect_features(
             f1 = torch.tensor(loaded["field1_hat"][idx], device=device)
             if n_fields == 2:
                 f2 = torch.tensor(loaded["field2_hat"][idx], device=device)
-                feats = evaluate_features_2f(f1, f2, kx, ky, E_x, E_y)
+                feats = evaluate_features_2f(f1, f2, kx, ky, E_x, E_y, device)
             else:
-                feats = evaluate_features_1f(f1, kx, ky, E_x, E_y)
+                feats = evaluate_features_1f(f1, kx, ky, E_x, E_y, device)
             all_features.append(feats.cpu())
 
     assert n_fields is not None
@@ -432,7 +431,7 @@ def plot_lap_analysis(
     targets = list(results.keys())
     groups = [k for k in results[targets[0]] if k.startswith("[")]
 
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+    _, axes = plt.subplots(2, 2, figsize=(18, 12))
 
     for row, tname in enumerate(targets):
         # Left: pairwise r²(target, each feature)

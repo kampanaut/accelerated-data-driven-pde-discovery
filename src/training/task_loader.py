@@ -16,7 +16,7 @@ from typing import Tuple, List, Optional, Type
 import numpy as np
 import torch
 
-from src.data.fourier_eval import build_wavenumbers
+from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
 
 @dataclass
@@ -260,10 +260,10 @@ class BrusselatorTask(PDETask):
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
         self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device=self.device
+            data["u_hat"], dtype=torch.complex128, device='cpu'
         )
         self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device=self.device
+            data["v_hat"], dtype=torch.complex128, device='cpu'
         )
 
     def _extract_pde_params(self) -> None:
@@ -288,20 +288,35 @@ class BrusselatorTask(PDETask):
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from src.data.fourier_eval import evaluate_br_features
+        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
 
-        return evaluate_br_features(
-            self.u_hat[snap_idx],
-            self.v_hat[snap_idx],
-            self.kx,
-            self.ky,
-            E_x,
-            E_y,
-            self.D_u,
-            self.D_v,
-            self.k1,
-            self.k2,
-        )
+        u_hat = self.u_hat[snap_idx].to(device=self.device)
+        v_hat = self.v_hat[snap_idx].to(device=self.device)
+
+        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
+        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
+        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+
+        u = _eval(u_hat)
+        v = _eval(v_hat)
+        u_x = _eval(ikx * u_hat)
+        u_y = _eval(iky * u_hat)
+        v_x = _eval(ikx * v_hat)
+        v_y = _eval(iky * v_hat)
+        u_xx = _eval(neg_kx2 * u_hat)
+        u_yy = _eval(neg_ky2 * u_hat)
+        v_xx = _eval(neg_kx2 * v_hat)
+        v_yy = _eval(neg_ky2 * v_hat)
+
+        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1).to(device=self.device)
+
+        u_sq_v = u ** 2 * v
+        u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + u_sq_v
+        v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - u_sq_v
+        targets = torch.stack([u_t, v_t], dim=1)
+
+        return features.float(), targets.float()
 
     def inject_noise(
         self,
@@ -361,10 +376,10 @@ class FitzHughNagumoTask(PDETask):
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
         self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device=self.device
+            data["u_hat"], dtype=torch.complex128, device='cpu'
         )
         self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device=self.device
+            data["v_hat"], dtype=torch.complex128, device='cpu'
         )
 
     def _extract_pde_params(self) -> None:
@@ -409,21 +424,34 @@ class FitzHughNagumoTask(PDETask):
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from src.data.fourier_eval import evaluate_fhn_features
+        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
 
-        return evaluate_fhn_features(
-            self.u_hat[snap_idx],
-            self.v_hat[snap_idx],
-            self.kx,
-            self.ky,
-            E_x,
-            E_y,
-            self.D_u,
-            self.D_v,
-            self.eps,
-            self.a,
-            self.b,
-        )
+        u_hat = self.u_hat[snap_idx].to(device=self.device)
+        v_hat = self.v_hat[snap_idx].to(device=self.device)
+
+        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
+        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
+        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+
+        u = _eval(u_hat)
+        v = _eval(v_hat)
+        u_x = _eval(ikx * u_hat)
+        u_y = _eval(iky * u_hat)
+        v_x = _eval(ikx * v_hat)
+        v_y = _eval(iky * v_hat)
+        u_xx = _eval(neg_kx2 * u_hat)
+        u_yy = _eval(neg_ky2 * u_hat)
+        v_xx = _eval(neg_kx2 * v_hat)
+        v_yy = _eval(neg_ky2 * v_hat)
+
+        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
+
+        u_t = self.D_u * (u_xx + u_yy) + u - u ** 3 - v
+        v_t = self.D_v * (v_xx + v_yy) + self.eps * (u - self.a * v - self.b)
+        targets = torch.stack([u_t, v_t], dim=1)
+
+        return features.float(), targets.float()
 
     def inject_noise(
         self,
@@ -482,10 +510,10 @@ class LambdaOmegaTask(PDETask):
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
         self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device=self.device
+            data["u_hat"], dtype=torch.complex128, device='cpu'
         )
         self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device=self.device
+            data["v_hat"], dtype=torch.complex128, device='cpu'
         )
 
     def _extract_pde_params(self) -> None:
@@ -522,20 +550,35 @@ class LambdaOmegaTask(PDETask):
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from src.data.fourier_eval import evaluate_lo_features
+        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
 
-        return evaluate_lo_features(
-            self.u_hat[snap_idx],
-            self.v_hat[snap_idx],
-            self.kx,
-            self.ky,
-            E_x,
-            E_y,
-            self.D_u,
-            self.D_v,
-            self.a,
-            self.c,
-        )
+        u_hat = self.u_hat[snap_idx].to(device=self.device)
+        v_hat = self.v_hat[snap_idx].to(device=self.device)
+
+        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
+        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
+        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+
+        u = _eval(u_hat)
+        v = _eval(v_hat)
+        u_x = _eval(ikx * u_hat)
+        u_y = _eval(iky * u_hat)
+        v_x = _eval(ikx * v_hat)
+        v_y = _eval(iky * v_hat)
+        u_xx = _eval(neg_kx2 * u_hat)
+        u_yy = _eval(neg_ky2 * u_hat)
+        v_xx = _eval(neg_kx2 * v_hat)
+        v_yy = _eval(neg_ky2 * v_hat)
+
+        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
+
+        r2 = u ** 2 + v ** 2
+        u_t = self.D_u * (u_xx + u_yy) + self.a * u - (u + self.c * v) * r2
+        v_t = self.D_v * (v_xx + v_yy) + self.a * v + (self.c * u - v) * r2
+        targets = torch.stack([u_t, v_t], dim=1)
+
+        return features.float(), targets.float()
 
     def inject_noise(
         self,
@@ -596,13 +639,13 @@ class NavierStokesTask(PDETask):
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
         self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device=self.device
+            data["u_hat"], dtype=torch.complex128, device='cpu'
         )
         self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device=self.device
+            data["v_hat"], dtype=torch.complex128, device='cpu'
         )
         self.p_hat = torch.tensor(
-            data["p_hat"], dtype=torch.complex128, device=self.device
+            data["p_hat"], dtype=torch.complex128, device='cpu'
         )
 
     def _extract_pde_params(self) -> None:
@@ -616,18 +659,40 @@ class NavierStokesTask(PDETask):
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from src.data.fourier_eval import evaluate_ns_features
+        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
 
-        return evaluate_ns_features(
-            self.u_hat[snap_idx],
-            self.v_hat[snap_idx],
-            self.p_hat[snap_idx],
-            self.kx,
-            self.ky,
-            E_x,
-            E_y,
-            self.nu,
-        )
+        u_hat = self.u_hat[snap_idx].to(device=self.device)
+        v_hat = self.v_hat[snap_idx].to(device=self.device)
+        p_hat = self.p_hat[snap_idx].to(device=self.device)
+
+        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
+        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
+        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+
+        u = _eval(u_hat)
+        v = _eval(v_hat)
+        u_x = _eval(ikx * u_hat)
+        u_y = _eval(iky * u_hat)
+        v_x = _eval(ikx * v_hat)
+        v_y = _eval(iky * v_hat)
+        u_xx = _eval(neg_kx2 * u_hat)
+        u_yy = _eval(neg_ky2 * u_hat)
+        v_xx = _eval(neg_kx2 * v_hat)
+        v_yy = _eval(neg_ky2 * v_hat)
+
+        # Pressure gradient from p_hat
+        p_x = _eval(ikx * p_hat)
+        p_y = _eval(iky * p_hat)
+
+        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
+
+        # NS momentum equation
+        u_t = -(u * u_x + v * u_y) - p_x + self.nu * (u_xx + u_yy)
+        v_t = -(u * v_x + v * v_y) - p_y + self.nu * (v_xx + v_yy)
+        targets = torch.stack([u_t, v_t], dim=1)
+
+        return features.float(), targets.float()
 
     def inject_noise(
         self,
@@ -701,7 +766,7 @@ class HeatEquationTask(PDETask):
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
         self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device=self.device
+            data["u_hat"], dtype=torch.complex128, device='cpu'
         )
 
     def _extract_pde_params(self) -> None:
@@ -720,16 +785,26 @@ class HeatEquationTask(PDETask):
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from src.data.fourier_eval import evaluate_heat_features
+        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
 
-        return evaluate_heat_features(
-            self.u_hat[snap_idx],
-            self.kx,
-            self.ky,
-            E_x,
-            E_y,
-            self.D,
-        )
+        u_hat = self.u_hat[snap_idx].to(device=self.device)
+
+        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
+        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
+        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+
+        u = _eval(u_hat)
+        u_x = _eval(ikx * u_hat)
+        u_y = _eval(iky * u_hat)
+        u_xx = _eval(neg_kx2 * u_hat)
+        u_yy = _eval(neg_ky2 * u_hat)
+
+        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=1)
+        u_t = self.D * (u_xx + u_yy)
+        targets = torch.stack([u_t], dim=1)
+
+        return features.float(), targets.float()
 
     def inject_noise(
         self,
@@ -784,7 +859,7 @@ class NLHeatEquationTask(PDETask):
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
         self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device=self.device
+            data["u_hat"], dtype=torch.complex128, device='cpu'
         )
 
     def _extract_pde_params(self) -> None:
@@ -803,16 +878,26 @@ class NLHeatEquationTask(PDETask):
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        from src.data.fourier_eval import evaluate_nl_heat_features
+        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
 
-        return evaluate_nl_heat_features(
-            self.u_hat[snap_idx],
-            self.kx,
-            self.ky,
-            E_x,
-            E_y,
-            self.K,
-        )
+        u_hat = self.u_hat[snap_idx].to(device=self.device)
+
+        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
+        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
+        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+
+        u = _eval(u_hat)
+        u_x = _eval(ikx * u_hat)
+        u_y = _eval(iky * u_hat)
+        u_xx = _eval(neg_kx2 * u_hat)
+        u_yy = _eval(neg_ky2 * u_hat)
+
+        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=1)
+        u_t = self.K * (1 - u) * (u_xx + u_yy)
+        targets = torch.stack([u_t], dim=1)
+
+        return features.float(), targets.float()
 
     def inject_noise(
         self,
