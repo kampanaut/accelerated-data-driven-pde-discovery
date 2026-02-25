@@ -95,6 +95,8 @@ def compute_gradient_check(
         output_dim=config.get("output_dim", 2),
         hidden_dims=config.get("hidden_dims", [100, 100]),
         activation=config.get("activation", "tanh"),
+        conv_filters=config.get("conv_filters", 0),
+        conv_kernel_size=config.get("conv_kernel_size", 3),
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

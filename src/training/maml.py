@@ -197,6 +197,12 @@ class MAMLTrainer:
                 track_higher_grads=not self.config.first_order,  # FOMAML skips second derivatives
             ) as (fmodel, diffopt)
         ):
+            # Pre-adaptation loss (logging only)
+            with torch.no_grad():
+                pre_pred = fmodel(support_x)
+                pre_loss = F.mse_loss(pre_pred, support_y)
+                print(f"      pre-adapt: support_loss={pre_loss.item():.6f}")
+
             # Inner loop: adapt on support set
             for _ in range(self.config.inner_steps):
                 support_pred = fmodel(support_x)
@@ -206,9 +212,15 @@ class MAMLTrainer:
                 # 2. Then applies the gradient to the update rule as differentiable ops
                 # 3. Appends the computational graph segment for `fmodel` subgraph that diverged from \theta.
 
+            # Post-adaptation support loss
+            with torch.no_grad():
+                post_pred = fmodel(support_x)
+                post_loss = F.mse_loss(post_pred, support_y)
+                print(f"      post-adapt ({self.config.inner_steps} steps): support_loss={post_loss.item():.6f}")
+
             # Evaluate adapted model on query set
             query_pred = fmodel(query_x)
-            query_loss = F.mse_loss(query_pred, query_y)
+            query_loss = F.mse_loss(query_pred, query_y) / (query_y ** 2).mean()
 
         return query_loss
 

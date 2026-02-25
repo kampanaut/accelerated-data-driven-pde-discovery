@@ -185,6 +185,8 @@ def main():
         output_dim=output_dim,
         hidden_dims=hidden_dims,
         activation=activation,
+        conv_filters=train_cfg.get("conv_filters", 0),
+        conv_kernel_size=train_cfg.get("conv_kernel_size", 3),
     )
     print(model)
     print()

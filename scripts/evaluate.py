@@ -83,6 +83,8 @@ def load_model_from_checkpoint(
         output_dim=model_config.get("output_dim", 2),
         hidden_dims=model_config.get("hidden_dims", [100, 100]),
         activation=model_config.get("activation", "tanh"),
+        conv_filters=model_config.get("conv_filters", 0),
+        conv_kernel_size=model_config.get("conv_kernel_size", 3),
     )
 
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -131,9 +133,9 @@ def fine_tune(
     holdout_losses = []
 
     for _ in range(max_steps):
-        # Training loss (with gradients)
+        # Training loss (with gradients) — normalized so all tasks get comparable gradients
         pred = model(x)
-        loss = F.mse_loss(pred, y)
+        loss = F.mse_loss(pred, y) / (y ** 2).mean()
         train_losses.append(loss.item())
 
         opt.zero_grad()
@@ -144,7 +146,7 @@ def fine_tune(
         if has_holdout:
             with torch.no_grad():
                 pred_holdout = model(x_holdout)
-                holdout_loss = F.mse_loss(pred_holdout, y_holdout)
+                holdout_loss = F.mse_loss(pred_holdout, y_holdout) / (y_holdout ** 2).mean()
                 holdout_losses.append(holdout_loss.item())
 
     result = {"train_losses": train_losses}
@@ -458,6 +460,8 @@ def main():
         "output_dim": train_cfg.get("output_dim", 2),
         "hidden_dims": train_cfg.get("hidden_dims", [100, 100]),
         "activation": train_cfg.get("activation", "tanh"),
+        "conv_filters": train_cfg.get("conv_filters", 0),
+        "conv_kernel_size": train_cfg.get("conv_kernel_size", 3),
     }
 
     theta_star = load_model_from_checkpoint(theta_star_path, device, model_config)
