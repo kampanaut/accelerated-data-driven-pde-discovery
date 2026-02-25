@@ -15,12 +15,12 @@ data:
 
 training:
   inner_lr: 0.0001
-  outer_lr: 0.00001
-  inner_steps: 8
-  meta_batch_size: 20
-  k_shot: 500
-  query_size: 1000
-  max_iterations: 1000
+  outer_lr: 0.0001
+  inner_steps: 14
+  meta_batch_size: 4
+  k_shot: 800
+  query_size: 1600
+  max_iterations: 5000
   patience: 300
   log_interval: 1
   hidden_dims: [100, 100]
@@ -36,13 +36,13 @@ training:
   min_lr: 0.000001
 
 evaluation:
-  k_values: [10, 50, 100, 500, 1000]
+  k_values: [10, 20, 50, 100, 500, 1000]
   noise_levels: [0.0, 0.01, 0.05, 0.10]
-  fine_tune_lr: 0.001
+  fine_tune_lr: 0.0001
   max_steps: 1000
   deriv_threshold: 0.0005
   fixed_steps: [50, 100, 150, 200, 250, 300, 350, 400, 450, 500]
-  holdout_size: 1500
+  holdout_size: 5000
 
 visualization:
   dpi: 300
