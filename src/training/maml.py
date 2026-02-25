@@ -231,6 +231,7 @@ class MAMLTrainer:
             # Use iteration + task index as seed for reproducibility
             seed = self.iteration * len(tasks) + i
             task_loss = self.compute_task(task, seed)
+            print(f"    task [{i}/{len(tasks)}]: {task.task_name}  loss={task_loss.item():.2f}")
             total_loss += task_loss
 
         # Average loss

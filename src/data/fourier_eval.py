@@ -37,24 +37,36 @@ def build_wavenumbers(
 
 
 def fourier_eval_2d(
-    f_hat: torch.Tensor,
-    E_x: torch.Tensor,
-    E_y: torch.Tensor,
-    device: str
+    f_hat: torch.Tensor, E_x: torch.Tensor, E_y: torch.Tensor, device: str
 ) -> torch.Tensor:
     """
-    Evaluate a 2D Fourier series at arbitrary points using precomputed phase matrices.
+    Evaluate 2D Fourier series at all arbitrary points across snapshots
 
     Args:
-        f_hat: 2D FFT coefficients, shape (ny, nx), complex128
-        E_x: x phase matrix, shape (n_points, nx), complex128
-        E_y: y phase matrix, shape (n_points, ny), complex128
+        f_hat: FFT coefficients, shape (coeffs, snapshots, ny, nx)
+        E_x: x phase matrix, shape (snapshots, n_points, nx)
+        E_y: y phase matrix, shape (snapshots, n_points, ny)
 
     Returns:
-        Real values at the query points, shape (n_points,), float64
+        Real values at query points
     """
     f_hat = f_hat.to(device=device)
-    ny, nx = f_hat.shape
-    tmp = f_hat @ E_x.T                          # (ny, n_points)
-    result = torch.sum(E_y.T * tmp, dim=0) / (nx * ny)
+
+    # (n_pts, nx)
+    if f_hat.ndim == 2:
+        ny, nx = f_hat.shape
+        tmp = f_hat @ E_x.T # (ny, n_points)
+        result = torch.sum(E_y.T * tmp, dim=0) / (nx * ny)
+        return result.real
+
+    # (fields, snapshots, ny, nx)
+    # Sum a weighted combination of E_x and f_hat components in the direction of ny, reducing ny to 0
+    tmp = (
+        E_y @ f_hat
+    )  # (snapshots, n_pts, ny) @ (fields, snapshots, ny, nx) → (fields, snapshots, n_pts, nx)
+    # Sum along the ny direction, reducing nx to 0.
+    result = torch.sum(tmp * E_x, dim=3) / (
+        f_hat.shape[2] * f_hat.shape[3]
+    )  # (fields, snapshots, n_pts)
+    # You can collapse the snapshots as all columns in snapshots x n_points matrix only has one non-zero value.
     return result.real

@@ -19,6 +19,7 @@ import torch
 from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
 
+
 @dataclass
 class CoefficientSpec:
     """Specification for one coefficient to extract via JVP.
@@ -116,22 +117,22 @@ class PDETask(ABC):
         pass
 
     @abstractmethod
-    def _evaluate_snapshot(
+    def evaluate_collocations(
         self,
-        snap_idx: int,
+        snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Evaluate features and targets for one snapshot at given points.
+        Evaluate features and targets for all collocation points across snapshots.
 
         Args:
-            snap_idx: Snapshot index
-            E_x: Phase matrix, shape (n_points, nx), complex128
-            E_y: Phase matrix, shape (n_points, ny), complex128
+            snap_idx_list: Unique snapshot indices, shape (n_unique,)
+            E_x: Masked x phase matrix, shape (n_unique, n_points, nx)
+            E_y: Masked y phase matrix, shape (n_unique, n_points, ny)
 
         Returns:
-            (features, targets): float32 tensors, shapes (n_points, 10) and (n_points, 2)
+            (features, targets): float32 tensors, shapes (n_points, n_features) and (n_points, n_targets)
         """
         pass
 
@@ -209,27 +210,28 @@ class PDETask(ABC):
         E_x = torch.exp(1j * torch.outer(x_pts, self.kx))  # (n_total, nx)
         E_y = torch.exp(1j * torch.outer(y_pts, self.ky))  # (n_total, ny)
 
-        # Group points by snapshot for efficient evaluation
-        all_features = torch.empty(
-            (n_total, self.n_features), dtype=torch.float32, device=self.device
-        )
-        all_targets = torch.empty(
-            (n_total, self.n_targets), dtype=torch.float32, device=self.device
-        )
+        unique_snaps, inverse = torch.unique(snap_idx, return_inverse=True)
+        sort_order = torch.argsort(inverse, stable=True)
+        counts = torch.bincount(inverse)
+        
+        chunks_x = torch.split(E_x[sort_order], counts.tolist())
+        chunks_y = torch.split(E_y[sort_order], counts.tolist())
 
-        unique_snaps = torch.unique(snap_idx)
-        for si in unique_snaps:
-            mask_idx = torch.where(snap_idx == si)[0]
-            feats, tgts = self._evaluate_snapshot(
-                si.item(),
-                E_x[mask_idx],
-                E_y[mask_idx],
-            )
-            all_features[mask_idx] = feats
-            all_targets[mask_idx] = tgts
+        E_x_compact = torch.nn.utils.rnn.pad_sequence(list(chunks_x), batch_first=True) # (len(unique_snaps), max(counts), nx)
+        E_y_compact = torch.nn.utils.rnn.pad_sequence(list(chunks_y), batch_first=True) # (len(unique_snaps), max(counts), ny)
 
-        support = (all_features[:K_shot], all_targets[:K_shot])
-        query = (all_features[K_shot:], all_targets[K_shot:])
+        feats, tgts = self.evaluate_collocations(unique_snaps.to(device='cpu'), E_x_compact, E_y_compact)
+
+        mask_idx = torch.arange(0, E_x_compact.shape[1], device=self.device).unsqueeze(0) < counts.unsqueeze(1)
+        feats = feats[mask_idx]
+        tgts = tgts[mask_idx]
+
+        unsort = torch.argsort(sort_order)
+        feats = feats[unsort]
+        tgts = tgts[unsort]
+
+        support = (feats[:K_shot], tgts[:K_shot])
+        query = (feats[K_shot:], tgts[K_shot:])
 
         return support, query
 
@@ -259,12 +261,8 @@ class BrusselatorTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device='cpu'
-        )
-        self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device='cpu'
-        )
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
 
     def _extract_pde_params(self) -> None:
         self.D_u = self.simulation_params.get("D_u") or self.ic_config.get("D_u_used")
@@ -282,39 +280,48 @@ class BrusselatorTask(PDETask):
         self.k1 = float(self.k1)
         self.k2 = float(self.k2)
 
-    def _evaluate_snapshot(
+    def evaluate_collocations(
         self,
-        snap_idx: int,
+        snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
+        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
-        u_hat = self.u_hat[snap_idx].to(device=self.device)
-        v_hat = self.v_hat[snap_idx].to(device=self.device)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+        v_hat = self.v_hat[snap_idx_list].to(device=self.device)
 
-        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
-        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
-        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+        coeff_batch = torch.stack(
+            [
+                u_hat,
+                v_hat,
+                ikx * u_hat,
+                iky * u_hat,
+                neg_kx2 * u_hat,
+                neg_ky2 * u_hat,
+                ikx * v_hat,
+                iky * v_hat,
+                neg_kx2 * v_hat,
+                neg_ky2 * v_hat,
+            ],
+            dim=0,
+        ) # (10, len(snap_idx_list), nx, ny)
 
-        u = _eval(u_hat)
-        v = _eval(v_hat)
-        u_x = _eval(ikx * u_hat)
-        u_y = _eval(iky * u_hat)
-        v_x = _eval(ikx * v_hat)
-        v_y = _eval(iky * v_hat)
-        u_xx = _eval(neg_kx2 * u_hat)
-        u_yy = _eval(neg_ky2 * u_hat)
-        v_xx = _eval(neg_kx2 * v_hat)
-        v_yy = _eval(neg_ky2 * v_hat)
+        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device
+        )
 
-        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1).to(device=self.device)
-
-        u_sq_v = u ** 2 * v
+        u_sq_v = u**2 * v
         u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + u_sq_v
         v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - u_sq_v
-        targets = torch.stack([u_t, v_t], dim=1)
+
+        features = torch.stack(
+            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
+        )  # (n_unique, n_pts, 10)
+        targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
         return features.float(), targets.float()
 
@@ -375,12 +382,8 @@ class FitzHughNagumoTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device='cpu'
-        )
-        self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device='cpu'
-        )
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
 
     def _extract_pde_params(self) -> None:
         self.b = self.simulation_params.get("b", 0.0)
@@ -418,38 +421,47 @@ class FitzHughNagumoTask(PDETask):
         self.a = float(self.a)
         self.b = float(self.b)
 
-    def _evaluate_snapshot(
+    def evaluate_collocations(
         self,
-        snap_idx: int,
+        snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
+        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
-        u_hat = self.u_hat[snap_idx].to(device=self.device)
-        v_hat = self.v_hat[snap_idx].to(device=self.device)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+        v_hat = self.v_hat[snap_idx_list].to(device=self.device)
 
-        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
-        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
-        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+        coeff_batch = torch.stack(
+            [
+                u_hat,
+                v_hat,
+                ikx * u_hat,
+                iky * u_hat,
+                neg_kx2 * u_hat,
+                neg_ky2 * u_hat,
+                ikx * v_hat,
+                iky * v_hat,
+                neg_kx2 * v_hat,
+                neg_ky2 * v_hat,
+            ],
+            dim=0,
+        ) # (10, len(snap_idx_list), nx, ny)
 
-        u = _eval(u_hat)
-        v = _eval(v_hat)
-        u_x = _eval(ikx * u_hat)
-        u_y = _eval(iky * u_hat)
-        v_x = _eval(ikx * v_hat)
-        v_y = _eval(iky * v_hat)
-        u_xx = _eval(neg_kx2 * u_hat)
-        u_yy = _eval(neg_ky2 * u_hat)
-        v_xx = _eval(neg_kx2 * v_hat)
-        v_yy = _eval(neg_ky2 * v_hat)
+        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device
+        )
 
-        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
-
-        u_t = self.D_u * (u_xx + u_yy) + u - u ** 3 - v
+        u_t = self.D_u * (u_xx + u_yy) + u - u**3 - v
         v_t = self.D_v * (v_xx + v_yy) + self.eps * (u - self.a * v - self.b)
-        targets = torch.stack([u_t, v_t], dim=1)
+
+        features = torch.stack(
+            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
+        )  # (n_unique, n_pts, 10)
+        targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
         return features.float(), targets.float()
 
@@ -509,12 +521,8 @@ class LambdaOmegaTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device='cpu'
-        )
-        self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device='cpu'
-        )
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
 
     def _extract_pde_params(self) -> None:
         D_u = self.simulation_params.get("D_u")
@@ -544,39 +552,48 @@ class LambdaOmegaTask(PDETask):
         self.a = float(a)
         self.c = float(c)
 
-    def _evaluate_snapshot(
+    def evaluate_collocations(
         self,
-        snap_idx: int,
+        snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
+        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
-        u_hat = self.u_hat[snap_idx].to(device=self.device)
-        v_hat = self.v_hat[snap_idx].to(device=self.device)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+        v_hat = self.v_hat[snap_idx_list].to(device=self.device)
 
-        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
-        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
-        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+        coeff_batch = torch.stack(
+            [
+                u_hat,
+                v_hat,
+                ikx * u_hat,
+                iky * u_hat,
+                neg_kx2 * u_hat,
+                neg_ky2 * u_hat,
+                ikx * v_hat,
+                iky * v_hat,
+                neg_kx2 * v_hat,
+                neg_ky2 * v_hat,
+            ],
+            dim=0,
+        ) # (10, len(snap_idx_list), nx, ny)
 
-        u = _eval(u_hat)
-        v = _eval(v_hat)
-        u_x = _eval(ikx * u_hat)
-        u_y = _eval(iky * u_hat)
-        v_x = _eval(ikx * v_hat)
-        v_y = _eval(iky * v_hat)
-        u_xx = _eval(neg_kx2 * u_hat)
-        u_yy = _eval(neg_ky2 * u_hat)
-        v_xx = _eval(neg_kx2 * v_hat)
-        v_yy = _eval(neg_ky2 * v_hat)
+        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device
+        )
 
-        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
-
-        r2 = u ** 2 + v ** 2
+        r2 = u**2 + v**2
         u_t = self.D_u * (u_xx + u_yy) + self.a * u - (u + self.c * v) * r2
         v_t = self.D_v * (v_xx + v_yy) + self.a * v + (self.c * u - v) * r2
-        targets = torch.stack([u_t, v_t], dim=1)
+
+        features = torch.stack(
+            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
+        )  # (n_unique, n_pts, 10)
+        targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
         return features.float(), targets.float()
 
@@ -638,59 +655,60 @@ class NavierStokesTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device='cpu'
-        )
-        self.v_hat = torch.tensor(
-            data["v_hat"], dtype=torch.complex128, device='cpu'
-        )
-        self.p_hat = torch.tensor(
-            data["p_hat"], dtype=torch.complex128, device='cpu'
-        )
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
+        self.p_hat = torch.tensor(data["p_hat"], dtype=torch.complex128, device="cpu")
 
     def _extract_pde_params(self) -> None:
         self.nu = float(self.simulation_params.get("nu") or self.ic_config.get("nu"))
         if self.nu is None:
             raise Exception("NS coefficient nu is None")
 
-    def _evaluate_snapshot(
+    def evaluate_collocations(
         self,
-        snap_idx: int,
+        snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
+        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
-        u_hat = self.u_hat[snap_idx].to(device=self.device)
-        v_hat = self.v_hat[snap_idx].to(device=self.device)
-        p_hat = self.p_hat[snap_idx].to(device=self.device)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+        v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+        p_hat = self.p_hat[snap_idx_list].to(device=self.device)
 
-        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
-        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
-        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+        coeff_batch = torch.stack(
+            [
+                u_hat,
+                v_hat,
+                ikx * u_hat,
+                iky * u_hat,
+                neg_kx2 * u_hat,
+                neg_ky2 * u_hat,
+                ikx * v_hat,
+                iky * v_hat,
+                neg_kx2 * v_hat,
+                neg_ky2 * v_hat,
+                ikx * p_hat,
+                iky * p_hat
+            ],
+            dim=0,
+        ) # (12, len(snap_idx_list), nx, ny)
 
-        u = _eval(u_hat)
-        v = _eval(v_hat)
-        u_x = _eval(ikx * u_hat)
-        u_y = _eval(iky * u_hat)
-        v_x = _eval(ikx * v_hat)
-        v_y = _eval(iky * v_hat)
-        u_xx = _eval(neg_kx2 * u_hat)
-        u_yy = _eval(neg_ky2 * u_hat)
-        v_xx = _eval(neg_kx2 * v_hat)
-        v_yy = _eval(neg_ky2 * v_hat)
-
-        # Pressure gradient from p_hat
-        p_x = _eval(ikx * p_hat)
-        p_y = _eval(iky * p_hat)
-
-        features = torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
+        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy, p_x, p_y = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device
+        )
 
         # NS momentum equation
         u_t = -(u * u_x + v * u_y) - p_x + self.nu * (u_xx + u_yy)
         v_t = -(u * v_x + v * v_y) - p_y + self.nu * (v_xx + v_yy)
-        targets = torch.stack([u_t, v_t], dim=1)
+
+        features = torch.stack(
+            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
+        )  # (n_unique, n_pts, 10)
+        targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
         return features.float(), targets.float()
 
@@ -765,9 +783,7 @@ class HeatEquationTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device='cpu'
-        )
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
 
     def _extract_pde_params(self) -> None:
         D = self.simulation_params.get("D")
@@ -779,30 +795,38 @@ class HeatEquationTask(PDETask):
             )
         self.D = float(D)
 
-    def _evaluate_snapshot(
+    def evaluate_collocations(
         self,
-        snap_idx: int,
+        snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
+        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
-        u_hat = self.u_hat[snap_idx].to(device=self.device)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
 
-        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
-        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
-        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+        coeff_batch = torch.stack(
+            [
+                u_hat,
+                ikx * u_hat,
+                iky * u_hat,
+                neg_kx2 * u_hat,
+                neg_ky2 * u_hat,
+            ],
+            dim=0,
+        ) # (5, len(snap_idx_list), nx, ny)
 
-        u = _eval(u_hat)
-        u_x = _eval(ikx * u_hat)
-        u_y = _eval(iky * u_hat)
-        u_xx = _eval(neg_kx2 * u_hat)
-        u_yy = _eval(neg_ky2 * u_hat)
+        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device
+        )
 
-        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=1)
         u_t = self.D * (u_xx + u_yy)
-        targets = torch.stack([u_t], dim=1)
+
+        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2) # (n_unique, n_pts, 5)
+        targets = torch.stack([u_t], dim=2) # (n_unique, n_pts, 1)
 
         return features.float(), targets.float()
 
@@ -858,9 +882,7 @@ class NLHeatEquationTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(
-            data["u_hat"], dtype=torch.complex128, device='cpu'
-        )
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
 
     def _extract_pde_params(self) -> None:
         K = self.simulation_params.get("K")
@@ -872,30 +894,38 @@ class NLHeatEquationTask(PDETask):
             )
         self.K = float(K)
 
-    def _evaluate_snapshot(
+    def evaluate_collocations(
         self,
-        snap_idx: int,
+        snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        _eval = lambda fh: fourier_eval_2d(fh, E_x, E_y, self.device)
+        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
+        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
-        u_hat = self.u_hat[snap_idx].to(device=self.device)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
 
-        ikx = 1j * self.kx.unsqueeze(0)         # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)         # (ny, 1)
-        neg_kx2 = -(self.kx.unsqueeze(0)) ** 2  # (1, nx)
-        neg_ky2 = -(self.ky.unsqueeze(1)) ** 2  # (ny, 1)
+        coeff_batch = torch.stack(
+            [
+                u_hat,
+                ikx * u_hat,
+                iky * u_hat,
+                neg_kx2 * u_hat,
+                neg_ky2 * u_hat,
+            ],
+            dim=0,
+        ) # (5, len(snap_idx_list), nx, ny)
 
-        u = _eval(u_hat)
-        u_x = _eval(ikx * u_hat)
-        u_y = _eval(iky * u_hat)
-        u_xx = _eval(neg_kx2 * u_hat)
-        u_yy = _eval(neg_ky2 * u_hat)
+        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device
+        )
 
-        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=1)
         u_t = self.K * (1 - u) * (u_xx + u_yy)
-        targets = torch.stack([u_t], dim=1)
+
+        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2) # (n_unique, n_pts, 5)
+        targets = torch.stack([u_t], dim=2) # (n_unique, n_pts, 1)
 
         return features.float(), targets.float()
 
