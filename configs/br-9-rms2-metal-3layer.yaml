@@ -25,7 +25,9 @@ training:
   log_interval: 1
   hidden_dims: [100, 100, 100]
   activation: "silu"
-  use_metal: true
+  metal:
+    enabled: true
+    hidden_dim: 64
   T_0: 200
   T_mult: 2
   first_order: false

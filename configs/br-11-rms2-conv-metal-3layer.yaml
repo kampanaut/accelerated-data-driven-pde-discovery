@@ -26,7 +26,9 @@ training:
   activation: "silu"
   conv_filters: 32
   conv_kernel_size: 3
-  use_metal: true
+  metal:
+    enabled: true
+    hidden_dim: 64
   T_0: 200
   T_mult: 2
   first_order: false

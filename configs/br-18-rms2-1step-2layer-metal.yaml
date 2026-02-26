@@ -1,8 +1,9 @@
-# Brusselator MAML experiment: RMS² + combinatorial conv + MeTAL, 2-layer MLP
-# Combines conv feature expansion with task-adaptive loss.
+# Brusselator MAML experiment: RMS² + 1 inner step, 2-layer MLP, MeTAL
+# Clone of br-3 with learned inner loss (MeTAL, Baik et al. ICCV 2021)
+# Tests whether learned loss steers 1-step adaptation to avoid D_u absorption
 
 experiment:
-  name: "br-10-rms2-conv-metal-2layer"
+  name: "br-18-rms2-1step-2layer-metal"
   pde_type: br
   seed: 42
   device: "cuda"
@@ -15,7 +16,7 @@ data:
 training:
   inner_lr: 0.0001
   outer_lr: 0.001
-  inner_steps: 14
+  inner_steps: 1
   meta_batch_size: 4
   k_shot: 800
   query_size: 1600
@@ -24,14 +25,10 @@ training:
   log_interval: 1
   hidden_dims: [100, 100]
   activation: "silu"
-  conv_filters: 32
-  conv_kernel_size: 3
-  metal:
-    enabled: true
-    hidden_dim: 64
   T_0: 200
   T_mult: 2
   first_order: false
+  use_metal: true
   # LR scheduler
   warmup_iterations: 100
   use_scheduler: true

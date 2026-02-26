@@ -1,8 +1,9 @@
-# Brusselator MAML experiment: RMS² + combinatorial conv + MeTAL, 2-layer MLP
-# Combines conv feature expansion with task-adaptive loss.
+# Brusselator MAML experiment: RMS² + 14 inner steps, 2-layer MLP, high k/q
+# Clone of br-2 with k_shot=5000, query_size=8000 (was 800/1600)
+# Tests whether richer inner-loop signal during meta-training changes θ*
 
 experiment:
-  name: "br-10-rms2-conv-metal-2layer"
+  name: "br-15-rms2-14step-2layer-highkq"
   pde_type: br
   seed: 42
   device: "cuda"
@@ -17,18 +18,13 @@ training:
   outer_lr: 0.001
   inner_steps: 14
   meta_batch_size: 4
-  k_shot: 800
-  query_size: 1600
+  k_shot: 5000
+  query_size: 8000
   max_iterations: 5000
   patience: 300
   log_interval: 1
   hidden_dims: [100, 100]
   activation: "silu"
-  conv_filters: 32
-  conv_kernel_size: 3
-  metal:
-    enabled: true
-    hidden_dim: 64
   T_0: 200
   T_mult: 2
   first_order: false
