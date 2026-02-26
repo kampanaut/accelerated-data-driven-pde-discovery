@@ -14,9 +14,10 @@ from .metrics import (
     loss_at_step,
     compute_comparison_metrics,
     ComparisonMetrics,
+    compress_step_ranges,
 )
 from .graphs import (
-    plot_convergence,
+    plot_train_holdout_convergence,
     plot_speedup_heatmap,
     plot_loss_ratio_heatmap,
     plot_noise_robustness,
@@ -33,8 +34,9 @@ __all__ = [
     "loss_at_step",
     "compute_comparison_metrics",
     "ComparisonMetrics",
+    "compress_step_ranges",
     # Graphs
-    "plot_convergence",
+    "plot_train_holdout_convergence",
     "plot_speedup_heatmap",
     "plot_loss_ratio_heatmap",
     "plot_noise_robustness",

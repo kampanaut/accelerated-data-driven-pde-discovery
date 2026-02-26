@@ -217,6 +217,42 @@ def speedup_ratio_dynamic(
     )
 
 
+def compress_step_ranges(worse_steps: list[int], all_fixed_steps: list[int]) -> str:
+    """Compress consecutive worse steps into range notation.
+
+    3+ consecutive indices in all_fixed_steps → 'first...last'.
+    E.g. steps [1,10,50] in fixed_steps [1,10,50,100,...] → '1...50'
+    """
+    if not worse_steps:
+        return ""
+
+    step_to_idx = {s: i for i, s in enumerate(all_fixed_steps)}
+    worse_indices = sorted(step_to_idx[s] for s in worse_steps if s in step_to_idx)
+
+    if not worse_indices:
+        return ""
+
+    # Group consecutive indices
+    groups: list[list[int]] = []
+    current: list[int] = [worse_indices[0]]
+    for i in range(1, len(worse_indices)):
+        if worse_indices[i] == current[-1] + 1:
+            current.append(worse_indices[i])
+        else:
+            groups.append(current)
+            current = [worse_indices[i]]
+    groups.append(current)
+
+    parts = []
+    for group in groups:
+        if len(group) >= 3:
+            parts.append(f"{all_fixed_steps[group[0]]}...{all_fixed_steps[group[-1]]}")
+        else:
+            for idx in group:
+                parts.append(str(all_fixed_steps[idx]))
+    return ",".join(parts)
+
+
 @dataclass
 class ComparisonMetrics:
     """Metrics comparing MAML to baseline for a single (task, K, noise) run."""

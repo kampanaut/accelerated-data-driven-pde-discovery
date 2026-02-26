@@ -23,8 +23,19 @@ import argparse
 from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Callable, Optional
 
+
+from numpy.typing import NDArray
+import yaml
+import torch
+import torch.nn.functional as F
+import numpy as np
+
+from src.networks.pde_operator_network import PDEOperatorNetwork
+from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
+from src.evaluation.jacobian import analyze_jacobian, JacobianResults
+from src.evaluation.metrics import compress_step_ranges
 
 class _TeeStream:
     """Write to both stdout and a StringIO buffer."""
@@ -43,17 +54,6 @@ class _TeeStream:
 
     def getvalue(self) -> str:
         return self.buffer.getvalue()
-
-
-import yaml
-import torch
-import torch.nn.functional as F
-import numpy as np
-
-from src.networks.pde_operator_network import PDEOperatorNetwork
-from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
-from src.evaluation.jacobian import analyze_jacobian
-
 
 def load_config(config_path: Path) -> dict:
     """Load experiment configuration."""
@@ -99,6 +99,8 @@ def fine_tune(
     max_steps: int,
     holdout_features: torch.Tensor,
     holdout_targets: torch.Tensor,
+    fixed_steps: Optional[List[int]] = None,
+    on_step: Optional[Callable[[torch.nn.Module, int], None]] = None,
 ) -> Dict[str, List[float]]:
     """
     Fine-tune model and return train/holdout loss at each step.
@@ -109,12 +111,13 @@ def fine_tune(
         targets: Training target outputs tensor (N, 2) on device
         lr: Learning rate
         max_steps: Number of gradient steps
-        device: Device to run on
         holdout_features: Holdout input features tensor for generalization eval
         holdout_targets: Holdout targets tensor for generalization eval
+        fixed_steps: Steps at which to call on_step (1-indexed, e.g. [1, 10, 50])
+        on_step: Callback called at each fixed_step with (model, step_number)
 
     Returns:
-        Dict with 'train_losses' and optionally 'holdout_losses'
+        Dict with 'train_losses' and 'holdout_losses'
     """
     model.train()
     opt = torch.optim.SGD(model.parameters(), lr=lr)
@@ -129,10 +132,12 @@ def fine_tune(
     x_holdout = holdout_features
     y_holdout = holdout_targets
 
+    fixed_steps_set = set(fixed_steps) if fixed_steps else set()
+
     train_losses = []
     holdout_losses = []
 
-    for _ in range(max_steps):
+    for i in range(max_steps):
         # Training loss (with gradients) — normalized so all tasks get comparable gradients
         pred = model(x)
         loss = F.mse_loss(pred, y) / (y ** 2).mean()
@@ -149,11 +154,33 @@ def fine_tune(
                 holdout_loss = F.mse_loss(pred_holdout, y_holdout) / (y_holdout ** 2).mean()
                 holdout_losses.append(holdout_loss.item())
 
+        # Callback at fixed steps (after gradient update + holdout eval)
+        step_num = i + 1
+        if on_step is not None and step_num in fixed_steps_set:
+            on_step(model, step_num)
+            model.train()  # Restore train mode after callback
+
     result = {"train_losses": train_losses}
     if has_holdout:
         result["holdout_losses"] = holdout_losses
 
     return result
+
+
+def _snapshots_to_dict(snapshots: List[JacobianResults]) -> Dict[str, Any]:
+    """Convert list of per-step JacobianResults to array-indexed dict for JSON."""
+    d: Dict[str, Any] = {}
+    for name in snapshots[0].estimates:
+        d[f"{name}_true"] = snapshots[0].true_values[name]
+        d[f"{name}_recovered"] = [jac.recovered(name) for jac in snapshots]
+        d[f"{name}_error_pct"] = [jac.coeff_error_pct(name) for jac in snapshots]
+        d[f"{name}_mean"] = [float(np.mean(jac.estimates[name])) for jac in snapshots]
+        d[f"{name}_std"] = [float(np.std(jac.estimates[name])) for jac in snapshots]
+    d["error_pct"] = [
+        float(np.mean([jac.coeff_error_pct(n) for n in jac.true_values]))
+        for jac in snapshots
+    ]
+    return d
 
 
 def evaluate_task(
@@ -166,10 +193,13 @@ def evaluate_task(
     max_steps: int,
     device: str,
     seed: int,
+    fixed_steps: List[int],
     holdout_size: int = 1000,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Evaluate one task across all (K, noise) combinations.
+
+    Extracts Jacobian and pred_errors at every fixed_step during fine-tuning.
 
     Args:
         task: The task to evaluate
@@ -182,24 +212,25 @@ def evaluate_task(
         device: Device to run on
         seed: Base random seed
         holdout_size: Number of samples for holdout evaluation (disjoint from support)
+        fixed_steps: Steps at which to extract Jacobian + pred_errors
 
     Returns:
         Dict with task metadata and samples dict for NPZ storage
     """
     specs = task.coefficient_specs
 
-    task_result = {
+    task_result: Dict[str, Any] = {
         "task_name": task.task_name,
         "coefficients": task.diffusion_coeffs,
         "coefficient_specs": [asdict(s) for s in specs],
         "ic_type": task.ic_config.get("type", "unknown"),
         "n_samples": task.n_samples,
-        "loss_maml_worse": False,
-        "coeff_maml_worse": [],
+        "loss_worse_steps": [],
+        "coeff_worse_steps": {},
     }
 
     # Per-combo arrays stored separately in NPZ
-    samples = {}
+    samples: Dict[str, Any] = {}
 
     for k_idx, k in enumerate(k_values):
         # Evaluate Fourier ONCE per (task, K) — same collocation points for all noise levels
@@ -237,6 +268,27 @@ def evaluate_task(
                     features, targets = feat_s, tgt_s
                     holdout_features, holdout_targets = feat_h, tgt_h
 
+                # --- Build callback for intermediate Jacobian extraction ---
+                maml_jac_snapshots: List[JacobianResults] = []
+                maml_pred_snapshots: List[NDArray[np.integer[Any]]] = []
+                baseline_jac_snapshots: List[JacobianResults] = []
+                baseline_pred_snapshots: List[NDArray[np.integer[Any]]] = []
+
+                def _make_on_step(
+                    jac_list: List[JacobianResults],
+                    pred_list: List[np.ndarray],
+                    h_feat: torch.Tensor,
+                    h_tgt: torch.Tensor,
+                ) -> Callable[[torch.nn.Module, int], None]:
+                    def on_step(model: torch.nn.Module, _: int) -> None:
+                        jac = analyze_jacobian(model, h_feat, specs, device=device)
+                        jac_list.append(jac)
+                        with torch.no_grad():
+                            pred = model(h_feat)
+                            pred_errors = (pred - h_tgt).abs().cpu().numpy()
+                        pred_list.append(pred_errors)
+                    return on_step
+
                 # Fine-tune from θ* (MAML)
                 maml_model = copy.deepcopy(theta_star)
                 maml_result = fine_tune(
@@ -247,6 +299,11 @@ def evaluate_task(
                     max_steps,
                     holdout_features=holdout_features,
                     holdout_targets=holdout_targets,
+                    fixed_steps=fixed_steps,
+                    on_step=_make_on_step(
+                        maml_jac_snapshots, maml_pred_snapshots,
+                        holdout_features, holdout_targets,
+                    ),
                 )
 
                 # Fine-tune from θ₀ (baseline)
@@ -259,6 +316,11 @@ def evaluate_task(
                     max_steps,
                     holdout_features=holdout_features,
                     holdout_targets=holdout_targets,
+                    fixed_steps=fixed_steps,
+                    on_step=_make_on_step(
+                        baseline_jac_snapshots, baseline_pred_snapshots,
+                        holdout_features, holdout_targets,
+                    ),
                 )
 
                 # Store curves for NPZ
@@ -275,80 +337,80 @@ def evaluate_task(
                     baseline_result["holdout_losses"]
                 )
 
-                # Per-point prediction errors on holdout set (for overlay plots)
-                with torch.no_grad():
-                    maml_pred = maml_model(holdout_features)
-                    maml_pred_errors = (maml_pred - holdout_targets).abs().cpu().numpy()
-                    baseline_pred = baseline_model(holdout_features)
-                    baseline_pred_errors = (
-                        (baseline_pred - holdout_targets).abs().cpu().numpy()
-                    )
-                samples[f"{combo_key}/maml/pred_errors"] = maml_pred_errors
-                samples[f"{combo_key}/baseline/pred_errors"] = baseline_pred_errors
+                # Stack per-step Jacobian distributions into NPZ
+                # Shape: (n_fixed_steps, holdout_size)
+                for label, jac_snaps, pred_snaps in [
+                    ("maml", maml_jac_snapshots, maml_pred_snapshots),
+                    ("baseline", baseline_jac_snapshots, baseline_pred_snapshots),
+                ]:
+                    for coeff_name in jac_snaps[0].estimates.keys():
+                        stacked = np.stack(
+                            [jac.estimates[coeff_name] for jac in jac_snaps]
+                        )
+                        samples[f"{combo_key}/{label}/{coeff_name}"] = stacked
+                        samples[f"{combo_key}/{label}/{coeff_name}_true"] = np.array(
+                            [jac_snaps[0].true_values[coeff_name]] # We just get 1 
+                            # arbitrary snapshot, since all true_values are the same
+                        )
+                    # pred_errors: (n_fixed_steps, holdout_size, 2)
+                    samples[f"{combo_key}/{label}/pred_errors"] = np.stack(pred_snaps)
 
-                # Jacobian analysis for coefficient recovery
-                maml_jacobian = analyze_jacobian(
-                    maml_model, holdout_features, specs, device=device
-                )
-                baseline_jacobian = analyze_jacobian(
-                    baseline_model, holdout_features, specs, device=device
-                )
-
-                # Store Jacobian distributions
-                if maml_jacobian is not None:
-                    for key, arr in maml_jacobian.to_npz_dict(
-                        f"{combo_key}/maml"
-                    ).items():
-                        samples[key] = arr
-                if baseline_jacobian is not None:
-                    for key, arr in baseline_jacobian.to_npz_dict(
-                        f"{combo_key}/baseline"
-                    ).items():
-                        samples[key] = arr
-
-                # Store coefficient recovery summary in task_result
+                # Store coefficient recovery summary in task_result (arrays)
                 coeff_key = f"coefficient_recovery_{combo_key}"
-                if maml_jacobian is not None and baseline_jacobian is not None:
-                    task_result[coeff_key] = {
-                        "maml": maml_jacobian.to_dict(),
-                        "baseline": baseline_jacobian.to_dict(),
-                    }
-                else:
-                    task_result[coeff_key] = {"maml": None, "baseline": None}
+                task_result[coeff_key] = {
+                    "fixed_steps": fixed_steps,
+                    "maml": _snapshots_to_dict(maml_jac_snapshots),
+                    "baseline": _snapshots_to_dict(baseline_jac_snapshots),
+                }
 
                 maml_train_final = maml_result["train_losses"][-1]
                 maml_holdout_final = maml_result["holdout_losses"][-1]
                 baseline_train_final = baseline_result["train_losses"][-1]
                 baseline_holdout_final = baseline_result["holdout_losses"][-1]
 
-                # Flag if MAML worse on holdout or coefficient recovery
-                loss_worse = maml_holdout_final > baseline_holdout_final
-                worse_coeffs = []
-                if maml_jacobian is not None and baseline_jacobian is not None:
-                    worse_coeffs = [
-                        n
-                        for n in maml_jacobian.true_values.keys()
-                        if maml_jacobian.coeff_error_pct(n)
-                        > baseline_jacobian.coeff_error_pct(n)
-                    ]
-
-                # Store per-combo flags
-                task_result[f"worse_{combo_key}"] = {
-                    "loss": loss_worse,
-                    "coeff": worse_coeffs,
+                # Per-step worse comparison
+                loss_worse_steps: List[int] = []
+                coeff_worse_steps: Dict[str, List[int]] = {
+                    n: [] for n in maml_jac_snapshots[0].true_values.keys()
                 }
 
-                # Accumulate task-level flags (any combo triggers — used for directory naming)
-                task_result["loss_maml_worse"] |= loss_worse
-                for c in worse_coeffs:
-                    if c not in task_result["coeff_maml_worse"]:
-                        task_result["coeff_maml_worse"].append(c)
+                for si, step in enumerate(fixed_steps):
+                    # Loss: compare holdout at this step
+                    maml_h = maml_result["holdout_losses"][step - 1]
+                    baseline_h = baseline_result["holdout_losses"][step - 1]
+                    if maml_h > baseline_h:
+                        loss_worse_steps.append(step)
 
+                    # Coefficients: compare error at this step
+                    for n in maml_jac_snapshots[si].true_values:
+                        if (maml_jac_snapshots[si].coeff_error_pct(n)
+                                > baseline_jac_snapshots[si].coeff_error_pct(n)):
+                            coeff_worse_steps[n].append(step)
+
+                # Store per-combo flags (step-granular)
+                task_result[f"worse_{combo_key}"] = {
+                    "loss_steps": loss_worse_steps,
+                    "coeff_steps": coeff_worse_steps,
+                }
+
+                # Accumulate task-level flags (union across combos)
+                for step in loss_worse_steps:
+                    if step not in task_result["loss_worse_steps"]:
+                        task_result["loss_worse_steps"].append(step)
+                for n, steps in coeff_worse_steps.items():
+                    if n not in task_result["coeff_worse_steps"]:
+                        task_result["coeff_worse_steps"][n] = []
+                    for step in steps:
+                        if step not in task_result["coeff_worse_steps"][n]:
+                            task_result["coeff_worse_steps"][n].append(step)
+
+                # Print summary
                 flags = []
-                if loss_worse:
-                    flags.append("loss")
-                if worse_coeffs:
-                    flags.append(f"coeff:{','.join(worse_coeffs)}")
+                if loss_worse_steps:
+                    flags.append(f"loss@[{compress_step_ranges(loss_worse_steps, fixed_steps)}]")
+                for n, steps in coeff_worse_steps.items():
+                    if steps:
+                        flags.append(f"{n}@[{compress_step_ranges(steps, fixed_steps)}]")
 
                 flag_str = ""
                 if len(flags) > 0:
@@ -505,6 +567,7 @@ def main():
     noise_levels = eval_cfg.get("noise_levels", [0.0, 0.01, 0.05, 0.10])
     fine_tune_lr = eval_cfg.get("fine_tune_lr", 0.01)
     max_steps = eval_cfg.get("max_steps", 1000)
+    fixed_steps: List[int] = eval_cfg.get("fixed_steps", [50, 100, 200])
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -514,6 +577,7 @@ def main():
     print(f"  Noise levels: {noise_levels}")
     print(f"  Fine-tune LR: {fine_tune_lr}")
     print(f"  Max steps: {max_steps}")
+    print(f"  Fixed steps: {fixed_steps} ({len(fixed_steps)} snapshots)")
     print(f"  Total evaluations: {total_combos}")
     print()
 
@@ -565,6 +629,7 @@ def main():
             device=device,
             seed=seed + task_idx * 10000,
             holdout_size=holdout_size,
+            fixed_steps=fixed_steps,
         )
 
         # Save task metadata to results dict
@@ -596,22 +661,26 @@ def main():
                     f"coefficient_recovery_{combo_key}", {}
                 )
 
+                loss_worse_any = len(worse.get("loss_steps", [])) > 0
+                coeff_worse_any = any(
+                    len(s) > 0 for s in worse.get("coeff_steps", {}).values()
+                )
                 entry: Dict[str, Any] = {
                     "task": task.task_name,
                     "k": k,
                     "noise": noise,
                     "maml_loss": float(maml_holdout[-1]),
                     "baseline_loss": float(baseline_holdout[-1]),
-                    "loss_worse": worse.get("loss", False),
-                    "coeff_worse": worse.get("coeff", False),
+                    "loss_worse": loss_worse_any,
+                    "coeff_worse": coeff_worse_any,
                 }
 
                 maml_coeff = coeff_recovery.get("maml")
                 baseline_coeff = coeff_recovery.get("baseline")
                 if maml_coeff is not None:
-                    entry["maml_coeff_error"] = maml_coeff["error_pct"]
+                    entry["maml_coeff_error"] = maml_coeff["error_pct"][-1]
                 if baseline_coeff is not None:
-                    entry["baseline_coeff_error"] = baseline_coeff["error_pct"]
+                    entry["baseline_coeff_error"] = baseline_coeff["error_pct"][-1]
 
                 combo_stats_by_ic[ic_type].append(entry)
 
