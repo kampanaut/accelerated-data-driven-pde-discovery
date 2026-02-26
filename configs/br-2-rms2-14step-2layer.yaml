@@ -1,9 +1,9 @@
-# Brusselator MAML experiment: RMS² + MeTAL (task-adaptive loss), 3-layer MLP
-# Baseline: br-3-rms2-3layer. Added use_metal=true for learned inner-loop loss.
-# Reference: Baik et al. "MeTAL" (ICCV 2021)
+# Brusselator MAML experiment v2
+# Early-transient regime, wider parameter ranges, k2_delta
+# Split: 42 train / 14 val / 30 test
 
 experiment:
-  name: "br-9-rms2-metal-3layer"
+  name: "br-2-rms2-14step-2layer"
   pde_type: br
   seed: 42
   device: "cuda"
@@ -23,9 +23,8 @@ training:
   max_iterations: 5000
   patience: 300
   log_interval: 1
-  hidden_dims: [100, 100, 100]
+  hidden_dims: [100, 100]
   activation: "silu"
-  use_metal: true
   T_0: 200
   T_mult: 2
   first_order: false
