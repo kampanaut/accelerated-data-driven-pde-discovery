@@ -39,7 +39,6 @@ from src.evaluation.metrics import (
 )
 from src.evaluation.graphs import (
     plot_train_holdout_convergence,
-    plot_speedup_heatmap,
     plot_loss_ratio_heatmap,
     plot_noise_robustness,
     plot_sample_efficiency,
@@ -318,38 +317,6 @@ def generate_per_task_figures(
                     loss_worse_steps=combo_loss_steps,
                 )
                 plt.close(fig)
-
-        # ---------------------------------------------------------------------
-        # Graph 3: Speedup heatmap
-        # ---------------------------------------------------------------------
-        speedups = np.full((len(noise_levels), len(k_values)), np.nan)
-        maml_losses_grid = np.full((len(noise_levels), len(k_values)), np.nan)
-        baseline_losses_grid = np.full((len(noise_levels), len(k_values)), np.nan)
-
-        found_count = 0
-        for i, noise in enumerate(noise_levels):
-            for j, k in enumerate(k_values):
-                combo_key = f"k_{k}_noise_{noise:.2f}"
-                metrics = task_metrics.get(combo_key)
-                if metrics is not None:
-                    found_count += 1
-                    speedups[i, j] = metrics.speedup
-                    maml_losses_grid[i, j] = metrics.maml_plateau_loss
-                    baseline_losses_grid[i, j] = metrics.baseline_plateau_loss
-
-        print(speedups)
-
-        fig = plot_speedup_heatmap(
-            speedups=speedups,
-            k_values=k_values,
-            noise_levels=noise_levels,
-            title=f"{task_name}: Speedup Ratio",
-            save_path=task_dir / "speedup_heatmap.png",
-            dpi=dpi,
-            maml_losses=maml_losses_grid,
-            baseline_losses=baseline_losses_grid,
-        )
-        plt.close(fig)
 
         # ---------------------------------------------------------------------
         # Graph 4: Loss ratio heatmap (for first fixed step)
@@ -721,57 +688,6 @@ def generate_aggregated_figures(
         return
 
     print(f"  Aggregating across {n_tasks} tasks...")
-
-    # -------------------------------------------------------------------------
-    # Aggregate speedup heatmap
-    # -------------------------------------------------------------------------
-    speedup_stack = []
-    maml_loss_stack = []
-    baseline_loss_stack = []
-
-    for task_name in task_names:
-        task_metrics = all_metrics[task_name]
-        speedups = np.full((len(noise_levels), len(k_values)), np.nan)
-        maml_losses = np.full((len(noise_levels), len(k_values)), np.nan)
-        baseline_losses = np.full((len(noise_levels), len(k_values)), np.nan)
-
-        for i, noise in enumerate(noise_levels):
-            for j, k in enumerate(k_values):
-                combo_key = f"k_{k}_noise_{noise:.2f}"
-                metrics = task_metrics.get(combo_key)
-                if metrics is not None:
-                    speedups[i, j] = metrics.speedup
-                    maml_losses[i, j] = metrics.maml_plateau_loss
-                    baseline_losses[i, j] = metrics.baseline_plateau_loss
-
-        speedup_stack.append(speedups)
-        maml_loss_stack.append(maml_losses)
-        baseline_loss_stack.append(baseline_losses)
-
-    speedup_stack = np.array(speedup_stack)
-
-    # Count infs and compute stats on finite values only
-    inf_counts = np.sum(np.isinf(speedup_stack), axis=0)
-    speedup_stack_clean = np.where(np.isinf(speedup_stack), np.nan, speedup_stack)
-    speedup_mean = np.nanmean(speedup_stack_clean, axis=0)
-    speedup_std = np.nanstd(speedup_stack_clean, axis=0)
-
-    # For aggregated, show mean of losses
-    # maml_loss_mean = np.nanmean(np.array(maml_loss_stack), axis=0)
-    # baseline_loss_mean = np.nanmean(np.array(baseline_loss_stack), axis=0)
-
-    fig = plot_speedup_heatmap(
-        speedups=speedup_mean,
-        k_values=k_values,
-        noise_levels=noise_levels,
-        title=f"Aggregated Speedup Ratio (n={n_tasks} tasks)",
-        save_path=agg_dir / "speedup_heatmap.png",
-        dpi=dpi,
-        std_values=speedup_std,
-        inf_counts=inf_counts,
-        n_total=n_tasks,
-    )
-    plt.close(fig)
 
     # -------------------------------------------------------------------------
     # Aggregate loss ratio heatmaps
