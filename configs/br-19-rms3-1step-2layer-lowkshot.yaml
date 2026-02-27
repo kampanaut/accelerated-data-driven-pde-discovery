@@ -1,36 +1,34 @@
-# Heat Equation MAML: RMS² + 1 inner step, 2-layer MLP
-# Control experiment: u_t = D * nabla^2(u), pure diffusion, no reaction terms
-# Mirrors br-3 (same hyperparams except input_dim=5, output_dim=1)
-# If D recovery works here but not on BR → absorption via reaction terms confirmed
+# Brusselator MAML experiment: RMS³ + 1 inner step, 2-layer MLP, low k
+# Same as br-17 but with normalized MSE inner loop (rms3 = rel MSE inner + outer)
+# Compare against br-17 (rms2 = raw MSE inner + rel MSE outer)
 
 experiment:
-  name: "heat-1-rms2-1step-2layer"
-  pde_type: "heat"
+  name: "br-19-rms3-1step-2layer-lowkshot"
+  pde_type: br
   seed: 42
   device: "cuda"
 
 data:
-  meta_train_dir: "data/datasets/heat_train-1"
-  meta_val_dir: "data/datasets/heat_val-1"
-  meta_test_dir: "data/datasets/heat_test-1"
+  meta_train_dir: "data/datasets/br_train-2"
+  meta_val_dir: "data/datasets/br_val-2"
+  meta_test_dir: "data/datasets/br_test-2"
 
 training:
   inner_lr: 0.0001
   outer_lr: 0.001
   inner_steps: 1
   meta_batch_size: 4
-  k_shot: 800
-  query_size: 1600
+  k_shot: 10
+  query_size: 2000
   max_iterations: 5000
   patience: 300
   log_interval: 1
   hidden_dims: [100, 100]
   activation: "silu"
-  input_dim: 5
-  output_dim: 1
   T_0: 200
   T_mult: 2
   first_order: false
+  # LR scheduler
   warmup_iterations: 100
   use_scheduler: true
   scheduler_type: "warm_restarts"
@@ -42,7 +40,7 @@ evaluation:
   fine_tune_lr: 0.00001
   max_steps: 1000
   deriv_threshold: 0.0005
-  fixed_steps: [1, 10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
+  fixed_steps: [1, 5, 10, 14, 15, 20, 25, 50, 100, 200, 300, 500, 800, 1000]
   holdout_size: 5000
 
 visualization:

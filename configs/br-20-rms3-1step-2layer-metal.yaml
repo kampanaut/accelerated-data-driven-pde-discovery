@@ -1,9 +1,9 @@
-# Brusselator MAML experiment: RMS² + 1 inner step, 2-layer MLP, MeTAL
-# Clone of br-3 with learned inner loss (MeTAL, Baik et al. ICCV 2021)
-# Tests whether learned loss steers 1-step adaptation to avoid D_u absorption
+# Brusselator MAML experiment: RMS³ + 1 inner step, 2-layer MLP, MeTAL
+# Compare against br-18 (rms3, no MeTAL, k=800)
+# Tests whether learned inner loss steers adaptation to avoid D_u absorption
 
 experiment:
-  name: "br-18-rms2-1step-2layer-metal"
+  name: "br-20-rms3-1step-2layer-metal"
   pde_type: br
   seed: 42
   device: "cuda"
@@ -28,7 +28,9 @@ training:
   T_0: 200
   T_mult: 2
   first_order: false
-  use_metal: true
+  metal:
+    enabled: true
+    hidden_dim: 64
   # LR scheduler
   warmup_iterations: 100
   use_scheduler: true
@@ -41,7 +43,7 @@ evaluation:
   fine_tune_lr: 0.00001
   max_steps: 1000
   deriv_threshold: 0.0005
-  fixed_steps: [1, 10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
+  fixed_steps: [1, 5, 10, 14, 15, 20, 25, 50, 100, 200, 300, 500, 800, 1000]
   holdout_size: 5000
 
 visualization:

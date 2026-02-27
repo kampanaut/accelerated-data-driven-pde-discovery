@@ -1,0 +1,49 @@
+# Heat Equation MAML: RMS³ + 25 inner steps, 2-layer MLP
+# Baseline for MeTAL comparison (heat-11)
+
+experiment:
+  name: "heat-7-rms3-25step-2layer"
+  pde_type: "heat"
+  seed: 42
+  device: "cuda"
+
+data:
+  meta_train_dir: "data/datasets/heat_train-1"
+  meta_val_dir: "data/datasets/heat_val-1"
+  meta_test_dir: "data/datasets/heat_test-1"
+
+training:
+  inner_lr: 0.0001
+  outer_lr: 0.001
+  inner_steps: 25
+  meta_batch_size: 4
+  k_shot: 800
+  query_size: 1600
+  max_iterations: 5000
+  patience: 300
+  log_interval: 1
+  hidden_dims: [100, 100]
+  activation: "silu"
+  input_dim: 5
+  output_dim: 1
+  T_0: 200
+  T_mult: 2
+  first_order: false
+  warmup_iterations: 100
+  use_scheduler: true
+  scheduler_type: "warm_restarts"
+  min_lr: 0.000001
+
+evaluation:
+  k_values: [800, 1000, 1600, 3000, 5000]
+  noise_levels: [0.0, 0.01, 0.05, 0.10]
+  fine_tune_lr: 0.00001
+  max_steps: 1000
+  deriv_threshold: 0.0005
+  fixed_steps: [1, 5, 10, 14, 15, 20, 25, 50, 100, 200, 300, 500, 800, 1000]
+  holdout_size: 5000
+
+visualization:
+  dpi: 300
+  generate_per_task: true
+  generate_aggregated: true

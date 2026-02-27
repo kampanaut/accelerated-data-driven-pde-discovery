@@ -1,23 +1,21 @@
-# Heat Equation MAML: RMS² + 1 inner step, 2-layer MLP, low k
-# Control experiment: u_t = D * nabla^2(u), pure diffusion, no reaction terms
-# Mirrors br-17 (same hyperparams except input_dim=5, output_dim=1)
-# Tests whether low-k avoidance of absorption also shows actual recovery on Heat
+# Brusselator MAML: RMS³ + 14 inner steps, 2-layer MLP, low k
+# Baseline for MeTAL comparison (br-27)
 
 experiment:
-  name: "heat-2-rms2-1step-2layer-lowkshot"
-  pde_type: "heat"
+  name: "br-23-rms3-14step-2layer-lowkshot"
+  pde_type: br
   seed: 42
   device: "cuda"
 
 data:
-  meta_train_dir: "data/datasets/heat_train-1"
-  meta_val_dir: "data/datasets/heat_val-1"
-  meta_test_dir: "data/datasets/heat_test-1"
+  meta_train_dir: "data/datasets/br_train-2"
+  meta_val_dir: "data/datasets/br_val-2"
+  meta_test_dir: "data/datasets/br_test-2"
 
 training:
   inner_lr: 0.0001
   outer_lr: 0.001
-  inner_steps: 1
+  inner_steps: 14
   meta_batch_size: 4
   k_shot: 10
   query_size: 2000
@@ -26,8 +24,6 @@ training:
   log_interval: 1
   hidden_dims: [100, 100]
   activation: "silu"
-  input_dim: 5
-  output_dim: 1
   T_0: 200
   T_mult: 2
   first_order: false
@@ -42,7 +38,7 @@ evaluation:
   fine_tune_lr: 0.00001
   max_steps: 1000
   deriv_threshold: 0.0005
-  fixed_steps: [1, 10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
+  fixed_steps: [1, 5, 10, 14, 15, 20, 25, 50, 100, 200, 300, 500, 800, 1000]
   holdout_size: 5000
 
 visualization:
