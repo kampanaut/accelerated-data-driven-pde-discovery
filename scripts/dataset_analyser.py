@@ -221,6 +221,42 @@ def collect_features(
 # ---------------------------------------------------------------------------
 
 
+def run_descriptive_stats(features: torch.Tensor, feature_names: list[str]):
+    """Print per-feature descriptive statistics."""
+    X = features.double()
+
+    print("\n=== Descriptive Statistics (per feature) ===")
+    header = f"  {'Feature':>6s}  {'min':>12s}  {'max':>12s}  {'mean':>12s}  {'median':>12s}  {'std':>12s}  {'var':>12s}  {'mean(x²)':>12s}  {'skew':>12s}  {'kurtosis':>12s}"
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+
+    for i, name in enumerate(feature_names):
+        col = X[:, i]
+        mu = col.mean()
+        std = col.std()
+        var = col.var()
+        med = float(col.median())
+        mn = float(col.min())
+        mx = float(col.max())
+        mean_sq = (col ** 2).mean()
+        # Skewness: E[(x-μ)³] / σ³
+        skew = ((col - mu) ** 3).mean() / (std ** 3 + 1e-30)
+        # Excess kurtosis: E[(x-μ)⁴] / σ⁴ - 3
+        kurt = ((col - mu) ** 4).mean() / (std ** 4 + 1e-30) - 3
+        print(
+            f"  {name:>6s}  {mn:>12.4f}  {mx:>12.4f}  {mu:>12.4f}  {med:>12.4f}"
+            f"  {std:>12.4f}  {var:>12.4f}  {mean_sq:>12.4f}  {skew:>12.4f}  {kurt:>12.4f}"
+        )
+
+    # Overall
+    flat = X.flatten()
+    mu = flat.mean()
+    std = flat.std()
+    print(f"\n  Overall: {X.shape[0]:,} samples × {X.shape[1]} features")
+    print(f"  Global mean={mu:.6f}, std={std:.6f}, min={flat.min():.6f}, max={flat.max():.6f}")
+    print(f"  Global mean(x²)={(flat**2).mean():.6f}")
+
+
 def r_squared(y: torch.Tensor, X: torch.Tensor) -> float:
     """OLS R² of regressing y on X (with intercept)."""
     X_aug = torch.cat([X, torch.ones(X.shape[0], 1)], dim=1)
@@ -509,6 +545,7 @@ def main():
         f"\nFeature matrix shape: {features.shape}  (samples x {len(feature_names)} features)"
     )
 
+    run_descriptive_stats(features, feature_names)
     S, Vt = run_svd_analysis(features, feature_names)
     corr = run_correlation_analysis(features, feature_names)
     r2_values = run_r2_analysis(features, feature_names)

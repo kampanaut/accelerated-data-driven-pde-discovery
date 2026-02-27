@@ -18,7 +18,6 @@ from .metrics import (
 )
 from .graphs import (
     plot_train_holdout_convergence,
-    plot_speedup_heatmap,
     plot_loss_ratio_heatmap,
     plot_noise_robustness,
     plot_sample_efficiency,
@@ -37,7 +36,6 @@ __all__ = [
     "compress_step_ranges",
     # Graphs
     "plot_train_holdout_convergence",
-    "plot_speedup_heatmap",
     "plot_loss_ratio_heatmap",
     "plot_noise_robustness",
     "plot_sample_efficiency",

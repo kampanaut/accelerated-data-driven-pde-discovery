@@ -228,6 +228,7 @@ def main():
     print("Configuring MAML trainer...")
     print("-" * 60)
 
+    metal_cfg = train_cfg.get("metal", {})
     maml_config = MAMLConfig(
         inner_lr=train_cfg.get("inner_lr", 0.01),
         outer_lr=train_cfg.get("outer_lr", 0.001),
@@ -247,6 +248,9 @@ def main():
         T_mult=train_cfg.get("T_mult", 2),
         device=device,
         seed=seed,
+        loss_function=train_cfg.get("loss_function", "normalized_mse"),
+        metal_enabled=metal_cfg.get("enabled", False),
+        metal_hidden_dim=metal_cfg.get("hidden_dim", 64),
     )
 
     trainer = MAMLTrainer(

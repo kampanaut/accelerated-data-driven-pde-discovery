@@ -29,11 +29,13 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 from numpy.typing import NDArray
 import yaml
 import torch
-import torch.nn.functional as F
 import numpy as np
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
+from src.training.maml import (
+    MeTALModule, compute_loss,
+)
 from src.evaluation.jacobian import analyze_jacobian, JacobianResults
 from src.evaluation.metrics import compress_step_ranges
 
@@ -101,6 +103,8 @@ def fine_tune(
     holdout_targets: torch.Tensor,
     fixed_steps: Optional[List[int]] = None,
     on_step: Optional[Callable[[torch.nn.Module, int], None]] = None,
+    metal: Optional[MeTALModule] = None,
+    loss_type: str = "normalized_mse",
 ) -> Dict[str, List[float]]:
     """
     Fine-tune model and return train/holdout loss at each step.
@@ -115,6 +119,8 @@ def fine_tune(
         holdout_targets: Holdout targets tensor for generalization eval
         fixed_steps: Steps at which to call on_step (1-indexed, e.g. [1, 10, 50])
         on_step: Callback called at each fixed_step with (model, step_number)
+        metal: Frozen MeTALModule (None = standard loss)
+        loss_type: Loss function — 'mse', 'normalized_mse', or 'mae'
 
     Returns:
         Dict with 'train_losses' and 'holdout_losses'
@@ -122,49 +128,57 @@ def fine_tune(
     model.train()
     opt = torch.optim.SGD(model.parameters(), lr=lr)
 
+    if metal is not None:
+        metal.eval()
+
+    cost_fn = lambda p, t: compute_loss(p, t, loss_type)
+
     x = features
     y = targets
-
-    has_holdout = holdout_features is not None and holdout_targets is not None
-    if not has_holdout:
-        raise Exception("Holdout is missing! Handle this quick.")
-
     x_holdout = holdout_features
     y_holdout = holdout_targets
 
     fixed_steps_set = set(fixed_steps) if fixed_steps else set()
 
-    train_losses = []
-    holdout_losses = []
+    train_losses: List[float] = []
+    holdout_losses: List[float] = []
 
-    for i in range(max_steps):
-        # Training loss (with gradients) — normalized so all tasks get comparable gradients
-        pred = model(x)
-        loss = F.mse_loss(pred, y) / (y ** 2).mean()
-        train_losses.append(loss.item())
-
+    def _step(step_idx: int, grad_loss: torch.Tensor) -> None:
+        """Shared step logic: backward, optimize, holdout, callback."""
         opt.zero_grad()
-        loss.backward()
+        grad_loss.backward()
         opt.step()
 
-        # Holdout loss (no gradients)
-        if has_holdout:
-            with torch.no_grad():
-                pred_holdout = model(x_holdout)
-                holdout_loss = F.mse_loss(pred_holdout, y_holdout) / (y_holdout ** 2).mean()
-                holdout_losses.append(holdout_loss.item())
+        with torch.no_grad():
+            pred_holdout = model(x_holdout)
+            holdout_loss = compute_loss(pred_holdout, y_holdout, loss_type)
+            holdout_losses.append(holdout_loss.item())
 
-        # Callback at fixed steps (after gradient update + holdout eval)
-        step_num = i + 1
+        step_num = step_idx + 1
         if on_step is not None and step_num in fixed_steps_set:
             on_step(model, step_num)
-            model.train()  # Restore train mode after callback
+            model.train()
 
-    result = {"train_losses": train_losses}
-    if has_holdout:
-        result["holdout_losses"] = holdout_losses
+    # Phase 1: MeTAL-shaped inner steps (if MeTAL provided)
+    metal_steps = metal.n_steps if metal is not None else 0
+    for i in range(min(metal_steps, max_steps)):
+        pred = model(x)
+        recorded_loss = compute_loss(pred, y, loss_type)
+        train_losses.append(recorded_loss.item())
 
-    return result
+        meta_support = metal.support_step(i, model, pred, y, cost_fn)  # type: ignore[union-attr]
+        meta_query = metal.query_step(i, model, pred)  # type: ignore[union-attr]
+        _step(i, recorded_loss + meta_support + meta_query)
+
+    # Phase 2: Standard loss for remaining steps
+    for i in range(metal_steps, max_steps):
+        pred = model(x)
+        recorded_loss = compute_loss(pred, y, loss_type)
+        train_losses.append(recorded_loss.item())
+
+        _step(i, recorded_loss)
+
+    return {"train_losses": train_losses, "holdout_losses": holdout_losses}
 
 
 def _snapshots_to_dict(snapshots: List[JacobianResults]) -> Dict[str, Any]:
@@ -195,6 +209,8 @@ def evaluate_task(
     seed: int,
     fixed_steps: List[int],
     holdout_size: int = 1000,
+    metal: Optional[MeTALModule] = None,
+    loss_type: str = "normalized_mse",
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -289,7 +305,7 @@ def evaluate_task(
                         pred_list.append(pred_errors)
                     return on_step
 
-                # Fine-tune from θ* (MAML)
+                # Fine-tune from θ* (MAML) — uses MeTAL loss if networks provided
                 maml_model = copy.deepcopy(theta_star)
                 maml_result = fine_tune(
                     maml_model,
@@ -304,9 +320,11 @@ def evaluate_task(
                         maml_jac_snapshots, maml_pred_snapshots,
                         holdout_features, holdout_targets,
                     ),
+                    metal=metal,
+                    loss_type=loss_type,
                 )
 
-                # Fine-tune from θ₀ (baseline)
+                # Fine-tune from θ₀ (baseline) — same loss, no MeTAL
                 baseline_model = copy.deepcopy(theta_0)
                 baseline_result = fine_tune(
                     baseline_model,
@@ -321,6 +339,7 @@ def evaluate_task(
                         baseline_jac_snapshots, baseline_pred_snapshots,
                         holdout_features, holdout_targets,
                     ),
+                    loss_type=loss_type,
                 )
 
                 # Store curves for NPZ
@@ -531,6 +550,30 @@ def main():
 
     print(f"θ* loaded from: {theta_star_path}")
     print(f"θ₀ loaded from: {theta_0_path}")
+
+    # Load MeTAL module if it exists (frozen for evaluation)
+    metal_module: Optional[MeTALModule] = None
+
+    checkpoint_dir = theta_star_path.parent
+    metal_state_path = checkpoint_dir / "metal_state.pt"
+
+    if metal_state_path.exists():
+        n_base_params = sum(1 for _ in theta_star.parameters())
+        output_dim = model_config.get("output_dim", 2)
+        inner_steps = config.get("training", {}).get("inner_steps", 1)
+        metal_hidden_dim = config.get("training", {}).get("metal", {}).get("hidden_dim", 64)
+
+        metal_module = MeTALModule(
+            n_steps=inner_steps,
+            n_base_params=n_base_params,
+            output_dim=output_dim,
+            hidden_dim=metal_hidden_dim,
+        ).to(device)
+        metal_module.load_state_dict(torch.load(metal_state_path, map_location=device, weights_only=True))
+        metal_module.eval()
+
+        print(f"MeTAL module loaded from: {metal_state_path}")
+
     print()
 
     # =========================================================================
@@ -568,6 +611,7 @@ def main():
     fine_tune_lr = eval_cfg.get("fine_tune_lr", 0.01)
     max_steps = eval_cfg.get("max_steps", 1000)
     fixed_steps: List[int] = eval_cfg.get("fixed_steps", [50, 100, 200])
+    loss_type: str = train_cfg.get("loss_function", "normalized_mse")
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -578,6 +622,7 @@ def main():
     print(f"  Fine-tune LR: {fine_tune_lr}")
     print(f"  Max steps: {max_steps}")
     print(f"  Fixed steps: {fixed_steps} ({len(fixed_steps)} snapshots)")
+    print(f"  Loss function: {loss_type}")
     print(f"  Total evaluations: {total_combos}")
     print()
 
@@ -630,6 +675,8 @@ def main():
             seed=seed + task_idx * 10000,
             holdout_size=holdout_size,
             fixed_steps=fixed_steps,
+            metal=metal_module,
+            loss_type=loss_type,
         )
 
         # Save task metadata to results dict
