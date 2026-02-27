@@ -197,6 +197,13 @@ def main():
     initial_checkpoint_path = exp_dir / "checkpoints" / "initial_model.pt"
 
     if not args.resume:
+        # Guard against accidental overwrite of a trained experiment
+        best_model_path = exp_dir / "checkpoints" / "best_model.pt"
+        if best_model_path.exists():
+            print(f"ERROR: {best_model_path} already exists.")
+            print("  Use --resume to continue training, or delete the experiment directory first.")
+            sys.exit(1)
+
         print("-" * 60)
         print("Saving initial weights (θ₀)...")
         print("-" * 60)

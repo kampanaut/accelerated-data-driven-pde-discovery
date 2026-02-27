@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Dict
 import copy
+import signal
 
 import torch
 import torch.nn as nn
@@ -421,6 +422,10 @@ class MAMLTrainer:
         self.best_train_loss = float("inf")
         self.best_val_loss = float("inf")
         self.best_train_state = None  # Stash weights when train loss improves
+        self.patience_counter = 0
+        self.history: Dict[str, List] = {"train_loss": [], "val_loss": [], "iteration": []}
+        self._resumed = False
+        self._stop_requested = False
 
     # ------------------------------------------------------------------
     # Inner step implementations (bound in __init__, no conditionals)
@@ -607,7 +612,7 @@ class MAMLTrainer:
         return total_loss / len(tasks)
 
     def validate(
-        self, train_loss: float, checkpoint_dir: Path, history: Dict[str, List]
+        self, train_loss: float, checkpoint_dir: Path,
     ) -> bool:
         print(
             "  → Patience exhausted. Comparing current vs best-train on validation..."
@@ -641,7 +646,7 @@ class MAMLTrainer:
             winner_train_loss = self.best_train_loss
             print("  → Winner: best-train weights")
 
-        history["val_loss"].append(winner_val_loss)
+        self.history["val_loss"].append(winner_val_loss)
 
         # Did winner beat previous best val?
         if winner_val_loss < self.best_val_loss:
@@ -660,9 +665,11 @@ class MAMLTrainer:
             self.best_train_loss = winner_train_loss  # Reset train baseline
 
             self.save_checkpoint(checkpoint_dir / "best_model.pt")
+            self.save_checkpoint(checkpoint_dir / "latest_model.pt")
             return True
         else:
             print("  → Validation stalled. Early stopping.")
+            self.save_checkpoint(checkpoint_dir / "latest_model.pt")
             return False
 
     def train(
@@ -693,9 +700,12 @@ class MAMLTrainer:
         if log_interval is None:
             log_interval = self.config.log_interval
 
-        # Initialize tracking
-        patience_counter = 0
-        history: Dict[str, List] = {"train_loss": [], "val_loss": [], "iteration": []}
+        # On fresh start, reset loop state. On resume, already loaded from checkpoint.
+        if not self._resumed:
+            self.patience_counter = 0
+            self.history = {"train_loss": [], "val_loss": [], "iteration": []}
+
+        start_iteration = (self.iteration + 1) if self._resumed else 0
 
         print("Starting MAML training:")
         print(f"  Device: {self.device}")
@@ -713,12 +723,19 @@ class MAMLTrainer:
             if self.config.scheduler_type == "warm_restarts":
                 sched_desc += f" (warm restarts: T_0={self.config.T_0}, T_mult={self.config.T_mult})"
             print(f"  LR scheduler: {sched_desc}")
+        if self._resumed:
+            print(f"  Resuming from iteration {start_iteration}")
         print()
 
         early_stopped: bool = False
         train_loss: float = 0.0
-        iteration = 0
-        for iteration in range(self.config.max_outer_iterations):
+        iteration = start_iteration
+        self._stop_requested = False
+
+        # Catch Ctrl+C as a stop request — save happens at the iteration boundary
+        prev_handler = signal.signal(signal.SIGINT, lambda *_: setattr(self, '_stop_requested', True))
+
+        for iteration in range(start_iteration, self.config.max_outer_iterations):
             self.iteration = iteration
 
             # Sample task batch
@@ -729,21 +746,28 @@ class MAMLTrainer:
             # Meta-update
             train_loss = self.outer_step(tasks)
 
+            if torch.tensor(train_loss).isnan():
+                print(f"\n  NaN detected at iteration {iteration}. Saving checkpoint...")
+                self.save_checkpoint(checkpoint_dir / "latest_model.pt")
+                print(f"  Saved to {checkpoint_dir / 'latest_model.pt'}.")
+                signal.signal(signal.SIGINT, prev_handler)
+                return self.history
+
             # Step LR scheduler
             if self.scheduler is not None:
                 self.scheduler.step()
 
             # Record history
-            history["train_loss"].append(train_loss)
-            history["iteration"].append(iteration)
+            self.history["train_loss"].append(train_loss)
+            self.history["iteration"].append(iteration)
 
             # Level 1: Track train loss improvement and stash best weights
             if train_loss < self.best_train_loss:
                 self.best_train_loss = train_loss
                 self.best_train_state = copy.deepcopy(self.model.state_dict())
-                patience_counter = 0
+                self.patience_counter = 0
             else:
-                patience_counter += 1
+                self.patience_counter += 1
 
             # Logging
             if iteration % log_interval == 0:
@@ -754,33 +778,33 @@ class MAMLTrainer:
                 )
                 if self.val_loader:
                     print(
-                        f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={patience_counter}{lr_str}"
+                        f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}"
                     )
                 else:
                     print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}{lr_str}")
 
             # Level 2: Validation check when patience exhausted
-            if patience_counter >= self.config.patience and self.val_loader is not None:
-                if self.validate(train_loss, checkpoint_dir, history):
-                    patience_counter = 0
+            if self.patience_counter >= self.config.patience and self.val_loader is not None:
+                if self.validate(train_loss, checkpoint_dir):
+                    self.patience_counter = 0
                 else:
                     early_stopped = True
                     break
 
-            # Early stop if no val_loader and patience exhausted
-            # if patience_counter >= self.config.patience and self.val_loader is None:
-            #     print(f"Patience exhausted (no val_loader). Stopping at iteration {iteration}.")
-            #     # Load best-train weights so fallback save gets the right weights
-            #     if self.best_train_state is not None:
-            #         self.model.load_state_dict(self.best_train_state)
-            #         print(f"  → Loaded best-train weights for saving.")
-            #     break
-            # No, we can't early stop. When there's no validation set, then we
-            # just train until the end.
+            # Graceful shutdown — all iteration state is consistent here
+            if self._stop_requested:
+                print(f"\n  Stop requested after iteration {iteration}. Saving checkpoint...")
+                self.save_checkpoint(checkpoint_dir / "latest_model.pt")
+                print(f"  Saved to {checkpoint_dir / 'latest_model.pt'}. Resume with --resume.")
+                signal.signal(signal.SIGINT, prev_handler)
+                return self.history
+
+        # Restore original handler
+        signal.signal(signal.SIGINT, prev_handler)
 
         if self.val_loader is not None and not early_stopped:
             print("Doing end-of-loop validation run.")
-            self.validate(train_loss, checkpoint_dir, history)
+            self.validate(train_loss, checkpoint_dir)
         else:
             # Ensure model has best weights regardless of how we exited
             if self.best_train_state is not None:
@@ -799,7 +823,7 @@ class MAMLTrainer:
         if self.val_loader is not None:
             print(f"  Best val loss: {self.best_val_loss:.6f}")
 
-        return history
+        return self.history
 
     def save_checkpoint(self, path: Path) -> None:
         """
@@ -818,6 +842,11 @@ class MAMLTrainer:
                 "best_train_loss": self.best_train_loss,
                 "best_val_loss": self.best_val_loss,
                 "best_train_state": self.best_train_state,
+                "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler else None,
+                "rng_state_cpu": torch.random.get_rng_state(),
+                "rng_state_cuda": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+                "patience_counter": self.patience_counter,
+                "history": self.history,
             },
             path,
         )
@@ -842,6 +871,24 @@ class MAMLTrainer:
         self.best_train_loss = checkpoint.get("best_train_loss", float("inf"))
         self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
         self.best_train_state = checkpoint.get("best_train_state", None)
+
+        # Restore scheduler state
+        sched_state = checkpoint.get("scheduler_state_dict")
+        if self.scheduler is not None and sched_state is not None:
+            self.scheduler.load_state_dict(sched_state)
+
+        # Restore RNG states for exact replay
+        rng_cpu = checkpoint.get("rng_state_cpu")
+        if rng_cpu is not None:
+            torch.random.set_rng_state(rng_cpu)
+        rng_cuda = checkpoint.get("rng_state_cuda")
+        if rng_cuda is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state(rng_cuda)
+
+        # Restore training loop state
+        self.patience_counter = checkpoint.get("patience_counter", 0)
+        self.history = checkpoint.get("history", {"train_loss": [], "val_loss": [], "iteration": []})
+        self._resumed = True
 
         # MeTAL: load module state if it exists
         metal_state_path = path.parent / "metal_state.pt"
