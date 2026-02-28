@@ -34,10 +34,12 @@ import numpy as np
 from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
 from src.training.maml import (
-    MeTALModule, compute_loss,
+    MeTALModule,
+    compute_loss,
 )
 from src.evaluation.jacobian import analyze_jacobian, JacobianResults
 from src.evaluation.metrics import compress_step_ranges
+
 
 class _TeeStream:
     """Write to both stdout and a StringIO buffer."""
@@ -56,6 +58,7 @@ class _TeeStream:
 
     def getvalue(self) -> str:
         return self.buffer.getvalue()
+
 
 def load_config(config_path: Path) -> dict:
     """Load experiment configuration."""
@@ -303,6 +306,7 @@ def evaluate_task(
                             pred = model(h_feat)
                             pred_errors = (pred - h_tgt).abs().cpu().numpy()
                         pred_list.append(pred_errors)
+
                     return on_step
 
                 # Fine-tune from θ* (MAML) — uses MeTAL loss if networks provided
@@ -317,8 +321,10 @@ def evaluate_task(
                     holdout_targets=holdout_targets,
                     fixed_steps=fixed_steps,
                     on_step=_make_on_step(
-                        maml_jac_snapshots, maml_pred_snapshots,
-                        holdout_features, holdout_targets,
+                        maml_jac_snapshots,
+                        maml_pred_snapshots,
+                        holdout_features,
+                        holdout_targets,
                     ),
                     metal=metal,
                     loss_type=loss_type,
@@ -336,8 +342,10 @@ def evaluate_task(
                     holdout_targets=holdout_targets,
                     fixed_steps=fixed_steps,
                     on_step=_make_on_step(
-                        baseline_jac_snapshots, baseline_pred_snapshots,
-                        holdout_features, holdout_targets,
+                        baseline_jac_snapshots,
+                        baseline_pred_snapshots,
+                        holdout_features,
+                        holdout_targets,
                     ),
                     loss_type=loss_type,
                 )
@@ -368,7 +376,7 @@ def evaluate_task(
                         )
                         samples[f"{combo_key}/{label}/{coeff_name}"] = stacked
                         samples[f"{combo_key}/{label}/{coeff_name}_true"] = np.array(
-                            [jac_snaps[0].true_values[coeff_name]] # We just get 1 
+                            [jac_snaps[0].true_values[coeff_name]]  # We just get 1
                             # arbitrary snapshot, since all true_values are the same
                         )
                     # pred_errors: (n_fixed_steps, holdout_size, 2)
@@ -402,8 +410,9 @@ def evaluate_task(
 
                     # Coefficients: compare error at this step
                     for n in maml_jac_snapshots[si].true_values:
-                        if (maml_jac_snapshots[si].coeff_error_pct(n)
-                                > baseline_jac_snapshots[si].coeff_error_pct(n)):
+                        if maml_jac_snapshots[si].coeff_error_pct(
+                            n
+                        ) > baseline_jac_snapshots[si].coeff_error_pct(n):
                             coeff_worse_steps[n].append(step)
 
                 # Store per-combo flags (step-granular)
@@ -426,10 +435,14 @@ def evaluate_task(
                 # Print summary
                 flags = []
                 if loss_worse_steps:
-                    flags.append(f"loss@[{compress_step_ranges(loss_worse_steps, fixed_steps)}]")
+                    flags.append(
+                        f"loss@[{compress_step_ranges(loss_worse_steps, fixed_steps)}]"
+                    )
                 for n, steps in coeff_worse_steps.items():
                     if steps:
-                        flags.append(f"{n}@[{compress_step_ranges(steps, fixed_steps)}]")
+                        flags.append(
+                            f"{n}@[{compress_step_ranges(steps, fixed_steps)}]"
+                        )
 
                 flag_str = ""
                 if len(flags) > 0:
@@ -561,7 +574,9 @@ def main():
         n_base_params = sum(1 for _ in theta_star.parameters())
         output_dim = model_config.get("output_dim", 2)
         inner_steps = config.get("training", {}).get("inner_steps", 1)
-        metal_hidden_dim = config.get("training", {}).get("metal", {}).get("hidden_dim", 64)
+        metal_hidden_dim = (
+            config.get("training", {}).get("metal", {}).get("hidden_dim", 64)
+        )
 
         metal_module = MeTALModule(
             n_steps=inner_steps,
@@ -569,7 +584,9 @@ def main():
             output_dim=output_dim,
             hidden_dim=metal_hidden_dim,
         ).to(device)
-        metal_module.load_state_dict(torch.load(metal_state_path, map_location=device, weights_only=True))
+        metal_module.load_state_dict(
+            torch.load(metal_state_path, map_location=device, weights_only=True)
+        )
         metal_module.eval()
 
         print(f"MeTAL module loaded from: {metal_state_path}")

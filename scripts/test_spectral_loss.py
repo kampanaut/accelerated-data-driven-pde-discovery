@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 # ---------------------------------------------------------------------------
 # Test 1: Parseval sanity check
 # ---------------------------------------------------------------------------
@@ -24,7 +25,7 @@ def test_parseval():
     # Regular grid points
     x = torch.linspace(0, Lx, N + 1)[:-1]  # exclude endpoint for periodicity
     y = torch.linspace(0, Ly, N + 1)[:-1]
-    xx, yy = torch.meshgrid(x, y, indexing='ij')
+    xx, yy = torch.meshgrid(x, y, indexing="ij")
     x_pts = xx.flatten()
     y_pts = yy.flatten()
 
@@ -35,7 +36,7 @@ def test_parseval():
     target = torch.cos(2 * torch.pi * x_pts / Lx).unsqueeze(1)
 
     # Physical normalized MSE
-    phys_mse = F.mse_loss(pred, target) / (target ** 2).mean()
+    phys_mse = F.mse_loss(pred, target) / (target**2).mean()
 
     # Spectral normalized MSE (using all N modes = full representation)
     spec_mse = compute_spectral_loss(pred, target, x_pts, y_pts, Lx, Ly, n_modes=N)
@@ -78,7 +79,9 @@ def test_gradient_flow():
     loss = compute_spectral_loss(pred, target, x_pts, y_pts, Lx, Ly, n_modes=16)
     loss.backward()
 
-    has_grad = all(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
+    has_grad = all(
+        p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters()
+    )
     print(f"  Loss value: {loss.item():.6f}")
     print(f"  All params have nonzero gradients: {has_grad}")
     assert has_grad, "Gradients should reach all model parameters"
@@ -111,25 +114,34 @@ def test_gradient_flow_higher():
 
     inner_opt = torch.optim.SGD(model.parameters(), lr=0.01)
 
-    with higher.innerloop_ctx(
-        model, inner_opt, copy_initial_weights=False
-    ) as (fmodel, diffopt):
+    with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (
+        fmodel,
+        diffopt,
+    ):
         # Inner step with spectral loss
         pred = fmodel(support_x)
-        inner_loss = compute_spectral_loss(pred, support_y, x_pts, y_pts, Lx, Ly, n_modes=16)
+        inner_loss = compute_spectral_loss(
+            pred, support_y, x_pts, y_pts, Lx, Ly, n_modes=16
+        )
         diffopt.step(inner_loss)
 
         # Outer loss (also spectral, for testing)
         query_pred = fmodel(query_x)
-        outer_loss = compute_spectral_loss(query_pred, query_y, x_pts, y_pts, Lx, Ly, n_modes=16)
+        outer_loss = compute_spectral_loss(
+            query_pred, query_y, x_pts, y_pts, Lx, Ly, n_modes=16
+        )
 
     outer_loss.backward()
 
-    has_grad = all(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
+    has_grad = all(
+        p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters()
+    )
     print(f"  Inner loss: {inner_loss.item():.6f}")
     print(f"  Outer loss: {outer_loss.item():.6f}")
     print(f"  Meta-gradients reach all params: {has_grad}")
-    assert has_grad, "Meta-gradients should reach all model parameters through higher + NUFFT"
+    assert has_grad, (
+        "Meta-gradients should reach all model parameters through higher + NUFFT"
+    )
     print("  PASSED")
 
 
@@ -151,7 +163,9 @@ def test_batched_nufft():
     values_1ch = torch.complex(torch.randn(N), torch.zeros(N))
     out_1ch = finufft_type1(points, values_1ch, (n_modes, n_modes))
     print(f"  Single channel output shape: {out_1ch.shape}")
-    assert out_1ch.shape == (n_modes, n_modes), f"Expected ({n_modes}, {n_modes}), got {out_1ch.shape}"
+    assert out_1ch.shape == (n_modes, n_modes), (
+        f"Expected ({n_modes}, {n_modes}), got {out_1ch.shape}"
+    )
 
     # Multi channel (batch, N) — batch dim first, N last per docs
     real_2ch = torch.randn(2, N)

@@ -53,13 +53,13 @@ def compute_spectral_loss(
     pred_c = torch.complex(pred.T, torch.zeros_like(pred.T)).contiguous()
     target_c = torch.complex(target.T, torch.zeros_like(target.T)).contiguous()
 
-    pred_hat = finufft_type1(points, pred_c, output_shape)    # (C, M, M)
+    pred_hat = finufft_type1(points, pred_c, output_shape)  # (C, M, M)
     true_hat = finufft_type1(points, target_c, output_shape)  # (C, M, M)
 
     # view_as_real: (C, M, M) complex → (C, M, M, 2) real — F.mse_loss works on real
     pred_r = torch.view_as_real(pred_hat)
     true_r = torch.view_as_real(true_hat)
 
-    loss = F.mse_loss(pred_r, true_r) / (true_r ** 2).mean()
+    loss = F.mse_loss(pred_r, true_r) / (true_r**2).mean()
 
     return loss

@@ -19,7 +19,6 @@ import torch
 from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
 
 
-
 @dataclass
 class CoefficientSpec:
     """Specification for one coefficient to extract via JVP.
@@ -224,16 +223,24 @@ class PDETask(ABC):
         unique_snaps, inverse = torch.unique(snap_idx, return_inverse=True)
         sort_order = torch.argsort(inverse, stable=True)
         counts = torch.bincount(inverse)
-        
+
         chunks_x = torch.split(E_x[sort_order], counts.tolist())
         chunks_y = torch.split(E_y[sort_order], counts.tolist())
 
-        E_x_compact = torch.nn.utils.rnn.pad_sequence(list(chunks_x), batch_first=True) # (len(unique_snaps), max(counts), nx)
-        E_y_compact = torch.nn.utils.rnn.pad_sequence(list(chunks_y), batch_first=True) # (len(unique_snaps), max(counts), ny)
+        E_x_compact = torch.nn.utils.rnn.pad_sequence(
+            list(chunks_x), batch_first=True
+        )  # (len(unique_snaps), max(counts), nx)
+        E_y_compact = torch.nn.utils.rnn.pad_sequence(
+            list(chunks_y), batch_first=True
+        )  # (len(unique_snaps), max(counts), ny)
 
-        feats, tgts = self.evaluate_collocations(unique_snaps.to(device='cpu'), E_x_compact, E_y_compact)
+        feats, tgts = self.evaluate_collocations(
+            unique_snaps.to(device="cpu"), E_x_compact, E_y_compact
+        )
 
-        mask_idx = torch.arange(0, E_x_compact.shape[1], device=self.device).unsqueeze(0) < counts.unsqueeze(1)
+        mask_idx = torch.arange(0, E_x_compact.shape[1], device=self.device).unsqueeze(
+            0
+        ) < counts.unsqueeze(1)
         feats = feats[mask_idx]
         tgts = tgts[mask_idx]
 
@@ -325,7 +332,7 @@ class BrusselatorTask(PDETask):
                 neg_ky2 * v_hat,
             ],
             dim=0,
-        ) # (10, len(snap_idx_list), nx, ny)
+        )  # (10, len(snap_idx_list), nx, ny)
 
         u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
@@ -466,7 +473,7 @@ class FitzHughNagumoTask(PDETask):
                 neg_ky2 * v_hat,
             ],
             dim=0,
-        ) # (10, len(snap_idx_list), nx, ny)
+        )  # (10, len(snap_idx_list), nx, ny)
 
         u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
@@ -597,7 +604,7 @@ class LambdaOmegaTask(PDETask):
                 neg_ky2 * v_hat,
             ],
             dim=0,
-        ) # (10, len(snap_idx_list), nx, ny)
+        )  # (10, len(snap_idx_list), nx, ny)
 
         u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
@@ -709,10 +716,10 @@ class NavierStokesTask(PDETask):
                 neg_kx2 * v_hat,
                 neg_ky2 * v_hat,
                 ikx * p_hat,
-                iky * p_hat
+                iky * p_hat,
             ],
             dim=0,
-        ) # (12, len(snap_idx_list), nx, ny)
+        )  # (12, len(snap_idx_list), nx, ny)
 
         u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy, p_x, p_y = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
@@ -834,16 +841,14 @@ class HeatEquationTask(PDETask):
                 neg_ky2 * u_hat,
             ],
             dim=0,
-        ) # (5, len(snap_idx_list), nx, ny)
+        )  # (5, len(snap_idx_list), nx, ny)
 
-        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(
-            coeff_batch, E_x, E_y, self.device
-        )
+        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
 
         u_t = self.D * (u_xx + u_yy)
 
-        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2) # (n_unique, n_pts, 5)
-        targets = torch.stack([u_t], dim=2) # (n_unique, n_pts, 1)
+        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2)  # (n_unique, n_pts, 5)
+        targets = torch.stack([u_t], dim=2)  # (n_unique, n_pts, 1)
 
         return features.float(), targets.float()
 
@@ -933,16 +938,14 @@ class NLHeatEquationTask(PDETask):
                 neg_ky2 * u_hat,
             ],
             dim=0,
-        ) # (5, len(snap_idx_list), nx, ny)
+        )  # (5, len(snap_idx_list), nx, ny)
 
-        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(
-            coeff_batch, E_x, E_y, self.device
-        )
+        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
 
         u_t = self.K * (1 - u) * (u_xx + u_yy)
 
-        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2) # (n_unique, n_pts, 5)
-        targets = torch.stack([u_t], dim=2) # (n_unique, n_pts, 1)
+        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2)  # (n_unique, n_pts, 5)
+        targets = torch.stack([u_t], dim=2)  # (n_unique, n_pts, 1)
 
         return features.float(), targets.float()
 

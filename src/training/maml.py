@@ -28,7 +28,10 @@ from .spectral_loss import compute_spectral_loss
 # Configurable loss function
 # ---------------------------------------------------------------------------
 
-def compute_loss(pred: torch.Tensor, target: torch.Tensor, loss_type: str) -> torch.Tensor:
+
+def compute_loss(
+    pred: torch.Tensor, target: torch.Tensor, loss_type: str
+) -> torch.Tensor:
     """
     Compute loss between prediction and target.
 
@@ -43,11 +46,13 @@ def compute_loss(pred: torch.Tensor, target: torch.Tensor, loss_type: str) -> to
     if loss_type == "mse":
         return F.mse_loss(pred, target)
     elif loss_type == "normalized_mse":
-        return F.mse_loss(pred, target) / (target ** 2).mean()
+        return F.mse_loss(pred, target) / (target**2).mean()
     elif loss_type == "mae":
         return F.l1_loss(pred, target)
     else:
-        raise ValueError(f"Unknown loss_type: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'.")
+        raise ValueError(
+            f"Unknown loss_type: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +115,10 @@ class StepAffineAdapter(nn.Module):
         gen_mult, gen_offset = torch.chunk(out, 2, dim=-1)
 
         return [
-            ((1 + self.multiplier_bias[i] * gen_mult[i]) * p
-             + self.offset_bias[i] * gen_offset[i])
+            (
+                (1 + self.multiplier_bias[i] * gen_mult[i]) * p
+                + self.offset_bias[i] * gen_offset[i]
+            )
             for i, p in enumerate(loss_params)
         ]
 
@@ -181,9 +188,11 @@ class MeTALModule(nn.Module):
         → per-sample τ (unnormalized agg expanded + preds + targets) → normalize → loss net → mean
         """
         # Aggregate task state
-        loss = cost_function(support_pred, support_y) # you get the loss
+        loss = cost_function(support_pred, support_y)  # you get the loss
         param_means = torch.stack([p.mean() for p in fmodel.parameters()])
-        tau_agg = torch.cat([loss.unsqueeze(0), param_means], dim=0) # you build a loss with auxilliary task information
+        tau_agg = torch.cat(
+            [loss.unsqueeze(0), param_means], dim=0
+        )  # you build a loss with auxilliary task information
 
         # Adapter operates on normalized aggregate
         adapted_params = self._support_affine[step_idx](
@@ -192,14 +201,20 @@ class MeTALModule(nn.Module):
         )
 
         # Loss network operates on normalized per-sample state
-        tau_per_sample = torch.cat([
-            tau_agg.unsqueeze(0).expand(support_pred.size(0), -1),
-            support_pred, support_y,
-        ], dim=-1)
+        tau_per_sample = torch.cat(
+            [
+                tau_agg.unsqueeze(0).expand(support_pred.size(0), -1),
+                support_pred,
+                support_y,
+            ],
+            dim=-1,
+        )
 
-        return self._support_loss[step_idx].functional_forward(
-            _z_normalize(tau_per_sample), adapted_params
-        ).mean()
+        return (
+            self._support_loss[step_idx]
+            .functional_forward(_z_normalize(tau_per_sample), adapted_params)
+            .mean()
+        )
 
     def query_step(
         self,
@@ -215,11 +230,15 @@ class MeTALModule(nn.Module):
         """
         # Per-sample query state: [param_means expanded, predictions, pred_norm²]
         param_means = torch.stack([p.mean() for p in fmodel.parameters()])
-        pred_norm_sq = (query_pred ** 2).sum(dim=-1, keepdim=True)
-        query_state = torch.cat([
-            param_means.unsqueeze(0).expand(query_pred.size(0), -1),
-            query_pred, pred_norm_sq,
-        ], dim=-1)
+        pred_norm_sq = (query_pred**2).sum(dim=-1, keepdim=True)
+        query_state = torch.cat(
+            [
+                param_means.unsqueeze(0).expand(query_pred.size(0), -1),
+                query_pred,
+                pred_norm_sq,
+            ],
+            dim=-1,
+        )
         query_state_norm = _z_normalize(query_state)
 
         # Adapter on aggregate (mean across samples)
@@ -228,9 +247,11 @@ class MeTALModule(nn.Module):
             list(self._query_loss[step_idx].parameters()),
         )
 
-        return self._query_loss[step_idx].functional_forward(
-            query_state_norm, adapted_params
-        ).mean()
+        return (
+            self._query_loss[step_idx]
+            .functional_forward(query_state_norm, adapted_params)
+            .mean()
+        )
 
     def log_loss(
         self,
@@ -341,11 +362,15 @@ class MAMLTrainer:
         if loss_type == "mse":
             self._pointwise_loss = F.mse_loss
         elif loss_type == "normalized_mse":
-            self._pointwise_loss = lambda pred, target: F.mse_loss(pred, target) / (target ** 2).mean()
+            self._pointwise_loss = lambda pred, target: (
+                F.mse_loss(pred, target) / (target**2).mean()
+            )
         elif loss_type == "mae":
             self._pointwise_loss = F.l1_loss
         else:
-            raise ValueError(f"Unknown loss_function: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'.")
+            raise ValueError(
+                f"Unknown loss_function: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'."
+            )
 
         # Current task domain info — set per-task in compute_task()
         self._current_Lx: float = 0.0
@@ -366,12 +391,18 @@ class MAMLTrainer:
             ).to(config.device)
 
             n_metal_params = sum(p.numel() for p in self.metal.parameters())
-            print(f"  MeTAL enabled: {config.inner_steps} steps × (support + query) networks")
+            print(
+                f"  MeTAL enabled: {config.inner_steps} steps × (support + query) networks"
+            )
             print(f"  Base model params: {n_base_params}, output_dim: {output_dim}")
             print(f"  MeTAL total params: {n_metal_params:,}")
 
         # Bind inner step function — no conditionals in the hot loop
-        self._inner_step = self._metal_inner_step if self.metal is not None else self._standard_inner_step
+        self._inner_step = (
+            self._metal_inner_step
+            if self.metal is not None
+            else self._standard_inner_step
+        )
 
         # Outer loop optimizer (meta-update) — includes MeTAL params if enabled
         opt_params = list(self.model.parameters())
@@ -432,7 +463,11 @@ class MAMLTrainer:
         self.best_val_loss = float("inf")
         self.best_train_state = None  # Stash weights when train loss improves
         self.patience_counter = 0
-        self.history: Dict[str, List] = {"train_loss": [], "val_loss": [], "iteration": []}
+        self.history: Dict[str, List] = {
+            "train_loss": [],
+            "val_loss": [],
+            "iteration": [],
+        }
         self._resumed = False
         self._stop_requested = False
 
@@ -451,8 +486,12 @@ class MAMLTrainer:
         if self.config.spectral_loss_enabled and coords is not None:
             x_pts, y_pts = coords
             spec = compute_spectral_loss(
-                pred, target, x_pts, y_pts,
-                self._current_Lx, self._current_Ly,
+                pred,
+                target,
+                x_pts,
+                y_pts,
+                self._current_Lx,
+                self._current_Ly,
                 self.config.spectral_loss_mode_size,
             )
             return pw + spec
@@ -492,7 +531,9 @@ class MAMLTrainer:
 
         support_pred = fmodel(support_x)
         support_loss = self.cost_function(support_pred, support_y, support_coords)
-        meta_support = self.metal.support_step(step_idx, fmodel, support_pred, support_y, self._pointwise_loss)
+        meta_support = self.metal.support_step(
+            step_idx, fmodel, support_pred, support_y, self._pointwise_loss
+        )
 
         query_pred = fmodel(query_x)
         meta_query = self.metal.query_step(step_idx, fmodel, query_pred)
@@ -542,15 +583,12 @@ class MAMLTrainer:
         inner_opt = torch.optim.SGD(self.model.parameters(), lr=self.config.inner_lr)
 
         # Inner loop with higher library
-        with (
-            higher.innerloop_ctx(
-                self.model,
-                inner_opt,
-                copy_initial_weights=False,
-                track_higher_grads=not self.config.first_order,
-            ) as (fmodel, diffopt)
-        ):
-
+        with higher.innerloop_ctx(
+            self.model,
+            inner_opt,
+            copy_initial_weights=False,
+            track_higher_grads=not self.config.first_order,
+        ) as (fmodel, diffopt):
             # Pre-adaptation loss (logging only)
             with torch.no_grad():
                 pre_pred = fmodel(support_x)
@@ -558,13 +596,17 @@ class MAMLTrainer:
                 pre_metal = ""
                 if self.metal is not None:
                     pre_query = fmodel(query_x)
-                    ml = self.metal.log_loss(0, fmodel, pre_pred, support_y, pre_query, self._pointwise_loss)
+                    ml = self.metal.log_loss(
+                        0, fmodel, pre_pred, support_y, pre_query, self._pointwise_loss
+                    )
                     pre_metal = f", metal_loss={ml:.6f}"
                 print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
 
             # Inner loop: adapt on support set
             for j in range(self.config.inner_steps):
-                self._inner_step(fmodel, diffopt, support_x, support_y, support_coords, query_x, j)
+                self._inner_step(
+                    fmodel, diffopt, support_x, support_y, support_coords, query_x, j
+                )
 
             # Post-adaptation loss (logging only)
             with torch.no_grad():
@@ -574,11 +616,18 @@ class MAMLTrainer:
                 if self.metal is not None:
                     post_query = fmodel(query_x)
                     ml = self.metal.log_loss(
-                        self.config.inner_steps - 1, fmodel, post_pred, support_y, post_query, self._pointwise_loss
+                        self.config.inner_steps - 1,
+                        fmodel,
+                        post_pred,
+                        support_y,
+                        post_query,
+                        self._pointwise_loss,
                     )
                     post_metal = f", metal_loss={ml:.6f}"
-                print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
-                      f" ({self.config.inner_steps} steps)")
+                print(
+                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
+                    f" ({self.config.inner_steps} steps)"
+                )
 
             # Evaluate adapted model on query set (standard loss — no MeTAL here)
             query_pred = fmodel(query_x)
@@ -649,7 +698,9 @@ class MAMLTrainer:
         return total_loss / len(tasks)
 
     def validate(
-        self, train_loss: float, checkpoint_dir: Path,
+        self,
+        train_loss: float,
+        checkpoint_dir: Path,
     ) -> bool:
         print(
             "  → Patience exhausted. Comparing current vs best-train on validation..."
@@ -770,7 +821,9 @@ class MAMLTrainer:
         self._stop_requested = False
 
         # Catch Ctrl+C as a stop request — save happens at the iteration boundary
-        prev_handler = signal.signal(signal.SIGINT, lambda *_: setattr(self, '_stop_requested', True))
+        prev_handler = signal.signal(
+            signal.SIGINT, lambda *_: setattr(self, "_stop_requested", True)
+        )
 
         for iteration in range(start_iteration, self.config.max_outer_iterations):
             self.iteration = iteration
@@ -814,7 +867,10 @@ class MAMLTrainer:
                     print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}{lr_str}")
 
             # Level 2: Validation check when patience exhausted
-            if self.patience_counter >= self.config.patience and self.val_loader is not None:
+            if (
+                self.patience_counter >= self.config.patience
+                and self.val_loader is not None
+            ):
                 if self.validate(train_loss, checkpoint_dir):
                     self.patience_counter = 0
                 else:
@@ -823,9 +879,13 @@ class MAMLTrainer:
 
             # Graceful shutdown — all iteration state is consistent here
             if self._stop_requested:
-                print(f"\n  Stop requested after iteration {iteration}. Saving checkpoint...")
+                print(
+                    f"\n  Stop requested after iteration {iteration}. Saving checkpoint..."
+                )
                 self.save_checkpoint(checkpoint_dir / "latest_model.pt")
-                print(f"  Saved to {checkpoint_dir / 'latest_model.pt'}. Resume with --resume.")
+                print(
+                    f"  Saved to {checkpoint_dir / 'latest_model.pt'}. Resume with --resume."
+                )
                 signal.signal(signal.SIGINT, prev_handler)
                 return self.history
 
@@ -872,9 +932,13 @@ class MAMLTrainer:
                 "best_train_loss": self.best_train_loss,
                 "best_val_loss": self.best_val_loss,
                 "best_train_state": self.best_train_state,
-                "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler else None,
+                "scheduler_state_dict": self.scheduler.state_dict()
+                if self.scheduler
+                else None,
                 "rng_state_cpu": torch.random.get_rng_state(),
-                "rng_state_cuda": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+                "rng_state_cuda": torch.cuda.get_rng_state()
+                if torch.cuda.is_available()
+                else None,
                 "patience_counter": self.patience_counter,
                 "history": self.history,
             },
@@ -917,14 +981,18 @@ class MAMLTrainer:
 
         # Restore training loop state
         self.patience_counter = checkpoint.get("patience_counter", 0)
-        self.history = checkpoint.get("history", {"train_loss": [], "val_loss": [], "iteration": []})
+        self.history = checkpoint.get(
+            "history", {"train_loss": [], "val_loss": [], "iteration": []}
+        )
         self._resumed = True
 
         # MeTAL: load module state if it exists
         metal_state_path = path.parent / "metal_state.pt"
         if self.metal is not None and metal_state_path.exists():
             self.metal.load_state_dict(
-                torch.load(metal_state_path, map_location=self.device, weights_only=True)
+                torch.load(
+                    metal_state_path, map_location=self.device, weights_only=True
+                )
             )
             print(f"  Loaded MeTAL module from {metal_state_path}")
 

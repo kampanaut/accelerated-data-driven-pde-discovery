@@ -201,7 +201,9 @@ def main():
         best_model_path = exp_dir / "checkpoints" / "best_model.pt"
         if best_model_path.exists():
             print(f"ERROR: {best_model_path} already exists.")
-            print("  Use --resume to continue training, or delete the experiment directory first.")
+            print(
+                "  Use --resume to continue training, or delete the experiment directory first."
+            )
             sys.exit(1)
 
         print("-" * 60)
