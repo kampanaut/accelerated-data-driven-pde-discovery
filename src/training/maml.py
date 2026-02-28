@@ -11,7 +11,7 @@ References:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Dict
+from typing import Callable, List, Optional, Dict, Tuple
 import copy
 import signal
 
@@ -21,6 +21,7 @@ import torch.nn.functional as F
 import higher
 
 from .task_loader import PDETask, MetaLearningDataLoader
+from .spectral_loss import compute_spectral_loss
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +297,10 @@ class MAMLConfig:
     metal_enabled: bool = False
     metal_hidden_dim: int = 64
 
+    # Spectral structural loss via NUFFT
+    spectral_loss_enabled: bool = False
+    spectral_loss_mode_size: int = 64
+
 
 class MAMLTrainer:
     """
@@ -331,16 +336,20 @@ class MAMLTrainer:
         self.model = model.to(config.device)
         self.device = config.device
 
-        # Cost function — built once, used in inner loop + outer loop + logging
+        # Pointwise loss — used as base term in cost function
         loss_type = config.loss_function
         if loss_type == "mse":
-            self.cost_function = F.mse_loss
+            self._pointwise_loss = F.mse_loss
         elif loss_type == "normalized_mse":
-            self.cost_function = lambda pred, target: F.mse_loss(pred, target) / (target ** 2).mean()
+            self._pointwise_loss = lambda pred, target: F.mse_loss(pred, target) / (target ** 2).mean()
         elif loss_type == "mae":
-            self.cost_function = F.l1_loss
+            self._pointwise_loss = F.l1_loss
         else:
             raise ValueError(f"Unknown loss_function: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'.")
+
+        # Current task domain info — set per-task in compute_task()
+        self._current_Lx: float = 0.0
+        self._current_Ly: float = 0.0
 
         # MeTAL: per-step task-adaptive loss (Baik et al. 2021)
         self.metal: Optional[MeTALModule] = None
@@ -428,6 +437,28 @@ class MAMLTrainer:
         self._stop_requested = False
 
     # ------------------------------------------------------------------
+    # Cost function: pointwise MSE + optional spectral loss
+    # ------------------------------------------------------------------
+
+    def cost_function(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        coords: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        """Unified cost: pointwise loss + spectral loss (when enabled + coords provided)."""
+        pw = self._pointwise_loss(pred, target)
+        if self.config.spectral_loss_enabled and coords is not None:
+            x_pts, y_pts = coords
+            spec = compute_spectral_loss(
+                pred, target, x_pts, y_pts,
+                self._current_Lx, self._current_Ly,
+                self.config.spectral_loss_mode_size,
+            )
+            return pw + spec
+        return pw
+
+    # ------------------------------------------------------------------
     # Inner step implementations (bound in __init__, no conditionals)
     # ------------------------------------------------------------------
 
@@ -437,12 +468,13 @@ class MAMLTrainer:
         diffopt: object,
         support_x: torch.Tensor,
         support_y: torch.Tensor,
+        support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
         query_x: torch.Tensor,
         step_idx: int,
     ) -> None:
         """Standard MAML inner step: gradient on configured loss."""
         support_pred = fmodel(support_x)
-        support_loss = self.cost_function(support_pred, support_y)
+        support_loss = self.cost_function(support_pred, support_y, support_coords)
         diffopt.step(support_loss)  # type: ignore[attr-defined]
 
     def _metal_inner_step(
@@ -451,6 +483,7 @@ class MAMLTrainer:
         diffopt: object,
         support_x: torch.Tensor,
         support_y: torch.Tensor,
+        support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
         query_x: torch.Tensor,
         step_idx: int,
     ) -> None:
@@ -458,8 +491,8 @@ class MAMLTrainer:
         assert self.metal is not None
 
         support_pred = fmodel(support_x)
-        support_loss = self.cost_function(support_pred, support_y)
-        meta_support = self.metal.support_step(step_idx, fmodel, support_pred, support_y, self.cost_function)
+        support_loss = self.cost_function(support_pred, support_y, support_coords)
+        meta_support = self.metal.support_step(step_idx, fmodel, support_pred, support_y, self._pointwise_loss)
 
         query_pred = fmodel(query_x)
         meta_query = self.metal.query_step(step_idx, fmodel, query_pred)
@@ -488,18 +521,22 @@ class MAMLTrainer:
             Query loss tensor (differentiable w.r.t. meta-parameters)
         """
         # Get support/query split
-        support, query = task.get_support_query_split(
+        support, query, support_coords, query_coords = task.get_support_query_split(
             K_shot=self.config.k_shot,
             query_size=self.config.query_size,
             seed=seed,
         )
 
-        if self.config.inner_steps == 0: 
+        if self.config.inner_steps == 0:
             raise ValueError("You cannot run training with inner_steps == 0")
 
         # Unpack tensors (already on device from task loader)
         support_x, support_y = support
         query_x, query_y = query
+
+        # Set domain info for spectral loss
+        self._current_Lx = task.Lx
+        self._current_Ly = task.Ly
 
         # Inner loop optimizer (recreated each task)
         inner_opt = torch.optim.SGD(self.model.parameters(), lr=self.config.inner_lr)
@@ -517,27 +554,27 @@ class MAMLTrainer:
             # Pre-adaptation loss (logging only)
             with torch.no_grad():
                 pre_pred = fmodel(support_x)
-                pre_loss = self.cost_function(pre_pred, support_y)
+                pre_loss = self.cost_function(pre_pred, support_y, support_coords)
                 pre_metal = ""
                 if self.metal is not None:
                     pre_query = fmodel(query_x)
-                    ml = self.metal.log_loss(0, fmodel, pre_pred, support_y, pre_query, self.cost_function)
+                    ml = self.metal.log_loss(0, fmodel, pre_pred, support_y, pre_query, self._pointwise_loss)
                     pre_metal = f", metal_loss={ml:.6f}"
                 print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
 
             # Inner loop: adapt on support set
             for j in range(self.config.inner_steps):
-                self._inner_step(fmodel, diffopt, support_x, support_y, query_x, j)
+                self._inner_step(fmodel, diffopt, support_x, support_y, support_coords, query_x, j)
 
             # Post-adaptation loss (logging only)
             with torch.no_grad():
                 post_pred = fmodel(support_x)
-                post_loss = self.cost_function(post_pred, support_y)
+                post_loss = self.cost_function(post_pred, support_y, support_coords)
                 post_metal = ""
                 if self.metal is not None:
                     post_query = fmodel(query_x)
                     ml = self.metal.log_loss(
-                        self.config.inner_steps - 1, fmodel, post_pred, support_y, post_query, self.cost_function
+                        self.config.inner_steps - 1, fmodel, post_pred, support_y, post_query, self._pointwise_loss
                     )
                     post_metal = f", metal_loss={ml:.6f}"
                 print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
@@ -545,7 +582,7 @@ class MAMLTrainer:
 
             # Evaluate adapted model on query set (standard loss — no MeTAL here)
             query_pred = fmodel(query_x)
-            query_loss = self.cost_function(query_pred, query_y)
+            query_loss = self.cost_function(query_pred, query_y, query_coords)
 
         return query_loss
 

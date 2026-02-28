@@ -254,7 +254,7 @@ def evaluate_task(
         available_for_holdout = task.n_samples - k
         actual_holdout = min(holdout_size, available_for_holdout)
 
-        support_clean, holdout_clean = task.get_support_query_split(
+        support_clean, holdout_clean, _, _ = task.get_support_query_split(
             K_shot=k,
             query_size=actual_holdout,
             seed=k_seed,

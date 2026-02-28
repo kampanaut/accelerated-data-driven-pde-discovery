@@ -180,11 +180,22 @@ class PDETask(ABC):
         K_shot: int,
         query_size: int,
         seed: Optional[int] = None,
-    ) -> Tuple[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]:
+    ) -> Tuple[
+        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor],
+    ]:
         """
         Generate support/query data at random collocation points.
         Returns clean data — noise injection is the caller's responsibility.
         Everything stays on GPU — no numpy, no host transfers.
+
+        Returns:
+            (support_feats, support_tgts),
+            (query_feats, query_tgts),
+            (support_x_pts, support_y_pts),
+            (query_x_pts, query_y_pts)
         """
         n_total = K_shot + query_size
 
@@ -230,10 +241,16 @@ class PDETask(ABC):
         feats = feats[unsort]
         tgts = tgts[unsort]
 
+        # Unsort coordinates the same way as features/targets
+        x_pts = x_pts[unsort].float()
+        y_pts = y_pts[unsort].float()
+
         support = (feats[:K_shot], tgts[:K_shot])
         query = (feats[K_shot:], tgts[K_shot:])
+        support_coords = (x_pts[:K_shot], y_pts[:K_shot])
+        query_coords = (x_pts[K_shot:], y_pts[K_shot:])
 
-        return support, query
+        return support, query, support_coords, query_coords
 
     def __repr__(self) -> str:
         return (
