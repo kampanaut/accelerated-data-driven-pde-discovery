@@ -238,11 +238,11 @@ def run_descriptive_stats(features: torch.Tensor, feature_names: list[str]):
         med = float(col.median())
         mn = float(col.min())
         mx = float(col.max())
-        mean_sq = (col ** 2).mean()
+        mean_sq = (col**2).mean()
         # Skewness: E[(x-μ)³] / σ³
-        skew = ((col - mu) ** 3).mean() / (std ** 3 + 1e-30)
+        skew = ((col - mu) ** 3).mean() / (std**3 + 1e-30)
         # Excess kurtosis: E[(x-μ)⁴] / σ⁴ - 3
-        kurt = ((col - mu) ** 4).mean() / (std ** 4 + 1e-30) - 3
+        kurt = ((col - mu) ** 4).mean() / (std**4 + 1e-30) - 3
         print(
             f"  {name:>6s}  {mn:>12.4f}  {mx:>12.4f}  {mu:>12.4f}  {med:>12.4f}"
             f"  {std:>12.4f}  {var:>12.4f}  {mean_sq:>12.4f}  {skew:>12.4f}  {kurt:>12.4f}"
@@ -253,7 +253,9 @@ def run_descriptive_stats(features: torch.Tensor, feature_names: list[str]):
     mu = flat.mean()
     std = flat.std()
     print(f"\n  Overall: {X.shape[0]:,} samples × {X.shape[1]} features")
-    print(f"  Global mean={mu:.6f}, std={std:.6f}, min={flat.min():.6f}, max={flat.max():.6f}")
+    print(
+        f"  Global mean={mu:.6f}, std={std:.6f}, min={flat.min():.6f}, max={flat.max():.6f}"
+    )
     print(f"  Global mean(x²)={(flat**2).mean():.6f}")
 
 

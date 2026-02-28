@@ -21,6 +21,7 @@ dependencies = [
     { name = "higher" },
     { name = "matplotlib" },
     { name = "numpy" },
+    { name = "pytorch-finufft" },
     { name = "pyyaml" },
     { name = "scikit-learn" },
     { name = "scipy" },
@@ -35,6 +36,7 @@ requires-dist = [
     { name = "higher", specifier = ">=0.2.1" },
     { name = "matplotlib", specifier = ">=3.10.7" },
     { name = "numpy", specifier = ">=2.3.5" },
+    { name = "pytorch-finufft" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "scikit-learn", specifier = ">=1.8.0" },
     { name = "scipy", specifier = ">=1.16.3" },
@@ -243,6 +245,25 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/58/46/0028a82567109b5ef6e4d2a1f04a583fb513e6cf9527fcdd09afd817deeb/filelock-3.20.0.tar.gz", hash = "sha256:711e943b4ec6be42e1d4e6690b48dc175c822967466bb31c0c293f34334c13f4", size = 18922, upload-time = "2025-10-08T18:03:50.056Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/91/7216b27286936c16f5b4d0c530087e4a54eead683e6b0b73dd0c64844af6/filelock-3.20.0-py3-none-any.whl", hash = "sha256:339b4732ffda5cd79b13f4e2711a31b0365ce445d95d243bb996273d072546a2", size = 16054, upload-time = "2025-10-08T18:03:48.35Z" },
+]
+
+[[package]]
+name = "finufft"
+version = "2.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/55/e9/df71d92be6d1d52f21a7ba7e4580851e36551105f1ddeed6bf86d6c35e2c/finufft-2.4.1.tar.gz", hash = "sha256:a0658f07622b3bf82597bf1feade80d72f4a2b236e0e3b4af47759cd729edbb2", size = 120749, upload-time = "2025-07-08T21:47:18.268Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/44/43bb827b21131ce833fe45eeaf9c4197b5293115e8f7065af57a3096f644/finufft-2.4.1-py3-none-macosx_13_0_x86_64.whl", hash = "sha256:7ca51343c8bdc00058083e3a9e8912bb2534a0610226671a5d3237257c0d791f", size = 3159789, upload-time = "2025-07-08T21:38:36.695Z" },
+    { url = "https://files.pythonhosted.org/packages/39/34/117f6ce592d2b1258d7465f8458358053558bacdb421c1fa573e60ee95a0/finufft-2.4.1-py3-none-macosx_14_0_arm64.whl", hash = "sha256:b1b5e969129d5d56ad7143ad059c216631034e925dba5a32df3bc192972c48cb", size = 1435776, upload-time = "2025-07-08T21:38:41.81Z" },
+    { url = "https://files.pythonhosted.org/packages/67/cf/0c52a2681a59b1e7d2afb577afaea7ec296ea01c1cb6b9cf82beeebdb15d/finufft-2.4.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9a7d5305bdefd9e70a6c13f408835d32142d36ab1a0b3f8bcb2c66d2ee7e743c", size = 3489355, upload-time = "2025-07-08T21:38:52.162Z" },
+    { url = "https://files.pythonhosted.org/packages/82/11/53cd265a957cacea5c1bc6ef0512a67da5531c4837d3411fdf4a0200f53b/finufft-2.4.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:4152858e795e9709a301406c8aa01d428fe8dfc2476fae87a5a9ef35abb5a205", size = 3440712, upload-time = "2025-07-08T21:39:01.429Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/0b/9b2172e6e509ff32f32fa3ca762641d81c690c9889857b62c055091d2a73/finufft-2.4.1-py3-none-musllinux_1_1_x86_64.whl", hash = "sha256:8196db644592826ad1d925b212f5fb9fdcfdf073e218912af8db4528f307a916", size = 4029183, upload-time = "2025-07-08T21:39:15.355Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/59/0b8f6d52329222a1f4834b6b2b31aed8e7cf9f5b2394c0b756455dc1dc18/finufft-2.4.1-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:fd8f81a236c3ca1aab543a9d9e38dfda42a97a657fce4557838fe8a0b077af1e", size = 4463811, upload-time = "2025-07-08T21:39:28.415Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/52/562eb52ed5edc4ff9a5cb46871058a8a4a64438f54b88a00d776e179f6b5/finufft-2.4.1-py3-none-win_amd64.whl", hash = "sha256:859c95441cb431294826719ef1caae79a366fcc1b675d956b72c1bcbc8eb461d", size = 5356414, upload-time = "2025-07-08T21:39:47.851Z" },
 ]
 
 [[package]]
@@ -1016,6 +1037,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "pytorch-finufft"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "finufft" },
+    { name = "numpy" },
+    { name = "scipy" },
+    { name = "torch" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/97/4a1c78711d8c03f46badb14ae311557bdafe788ee045cb7344cd8c1583d6/pytorch_finufft-0.1.0.tar.gz", hash = "sha256:3c358a8bd0d906d87a02230e95ccc5fc38d0239ed02704e6f55c92e031f4626b", size = 16358, upload-time = "2024-09-23T14:46:01.345Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/49/42d0af3892e4a4a25ea0120df49465dfe8560cb8fe23a5b392683ee03f95/pytorch_finufft-0.1.0-py3-none-any.whl", hash = "sha256:5456d26a8fe2e266c665ee995af58819f77e3dd826abf5429f765bcbbac48e08", size = 24802, upload-time = "2024-09-23T14:45:59.777Z" },
 ]
 
 [[package]]

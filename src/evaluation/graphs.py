@@ -31,19 +31,76 @@ from scipy import stats
 from src.evaluation.metrics import steps_to_plateau
 
 # Cross-experiment scatter plot constants
-IC_COLORS: dict[str, str] = {
-    "gp": "#1f77b4",
-    "pu": "#ff7f0e",
-    "rs": "#2ca02c",
-    "lp": "#d62728",
-    "mp": "#9467bd",
-}
-MODEL_MARKERS: list[str] = ["o", "^", "*", "D", "v", "s", "P", "X"]
-MODEL_COLORS: list[str] = [
-    "#e74c3c", "#3498db", "#9ab042", "#e67e22",
-    "#8e44ad", "#1abc9c", "#f39c12", "#2c3e50",
+# IC colors: assigned dynamically from this palette, sorted alphabetically by IC type
+IC_PALETTE: list[str] = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#bcbd22",
+    "#17becf",
+    "#7f7f7f",
+    "#aec7e8",
+    "#ffbb78",
 ]
-
+MODEL_MARKERS: list[str] = [
+    "o",
+    "^",
+    "*",
+    "D",
+    "v",
+    "s",
+    "P",
+    "X",
+    "h",
+    "<",
+    ">",
+    "d",
+    "p",
+    "H",
+    "8",
+    "1",
+]
+# MAML = dark (saturated), baseline = light (desaturated) variant of same hue
+MODEL_COLORS_DARK: list[str] = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+    "#aec7e8",
+    "#ffbb78",
+    "#98df8a",
+    "#ff9896",
+    "#c5b0d5",
+    "#c49c94",
+]
+MODEL_COLORS_LIGHT: list[str] = [
+    "#72b7e6",
+    "#ffb87a",
+    "#7ada7a",
+    "#e98787",
+    "#c4abda",
+    "#c69d95",
+    "#efb4dd",
+    "#b8b8b8",
+    "#e6e679",
+    "#74e4ef",
+    "#d2e0f2",
+    "#ffd9b4",
+    "#c6edbe",
+    "#fec6c5",
+    "#dfd3e7",
+    "#dec8c4",
+]
 
 
 def plot_train_holdout_convergence(
@@ -183,14 +240,22 @@ def plot_train_holdout_convergence(
 
     # Mark plateau on respective subplots
     ax1.plot(
-        maml_plateau_step, maml_holdout[maml_plateau_step],
-        "bo", markersize=8, label=f"Plateau @ {maml_plateau_step}", zorder=5,
+        maml_plateau_step,
+        maml_holdout[maml_plateau_step],
+        "bo",
+        markersize=8,
+        label=f"Plateau @ {maml_plateau_step}",
+        zorder=5,
     )
     ax1.axvline(x=maml_plateau_step, color="blue", linestyle=":", alpha=0.5)
 
     ax2.plot(
-        baseline_plateau_step, baseline_holdout[baseline_plateau_step],
-        "rs", markersize=8, label=f"Plateau @ {baseline_plateau_step}", zorder=5,
+        baseline_plateau_step,
+        baseline_holdout[baseline_plateau_step],
+        "rs",
+        markersize=8,
+        label=f"Plateau @ {baseline_plateau_step}",
+        zorder=5,
     )
     ax2.axvline(x=baseline_plateau_step, color="red", linestyle=":", alpha=0.5)
 
@@ -200,12 +265,14 @@ def plot_train_holdout_convergence(
         ax1.axvspan(
             maml_plateau_step - maml_step_std,
             maml_plateau_step + maml_step_std,
-            color="blue", alpha=0.1,
+            color="blue",
+            alpha=0.1,
         )
         ax2.axvspan(
             baseline_plateau_step - baseline_step_std,
             baseline_plateau_step + baseline_step_std,
-            color="red", alpha=0.1,
+            color="red",
+            alpha=0.1,
         )
 
     # --- Labels and formatting ---
@@ -226,17 +293,24 @@ def plot_train_holdout_convergence(
     min_linewidth = 0.8
     ax1.axhline(
         y=min_holdout_loss,
-        color=min_line_color, linewidth=min_linewidth, alpha=min_line_alpha,
+        color=min_line_color,
+        linewidth=min_linewidth,
+        alpha=min_line_alpha,
     )
     ax2.axhline(
         y=min_holdout_loss,
-        color=min_line_color, linewidth=min_linewidth, alpha=min_line_alpha,
+        color=min_line_color,
+        linewidth=min_linewidth,
+        alpha=min_line_alpha,
     )
     ax2.annotate(
         f"min: {min_holdout_loss:.2e}",
         xy=(steps[-1], min_holdout_loss),
-        fontsize=7, color=min_line_color, alpha=min_line_alpha,
-        va="bottom", ha="right",
+        fontsize=7,
+        color=min_line_color,
+        alpha=min_line_alpha,
+        va="bottom",
+        ha="right",
     )
 
     fig.suptitle(title)
@@ -738,16 +812,24 @@ def _draw_histogram_panel(
     if coeff_true > xlim_hi:
         legend_loc = "upper left"
         ax.annotate(
-            f"True={coeff_true:.4f} →", xy=(0.98, 0.95),
-            xycoords="axes fraction", fontsize=8, color="red",
-            ha="right", weight="bold",
+            f"True={coeff_true:.4f} →",
+            xy=(0.98, 0.95),
+            xycoords="axes fraction",
+            fontsize=8,
+            color="red",
+            ha="right",
+            weight="bold",
         )
     elif coeff_true < xlim_lo:
         legend_loc = "upper right"
         ax.annotate(
-            f"← True={coeff_true:.4f}", xy=(0.02, 0.95),
-            xycoords="axes fraction", fontsize=8, color="red",
-            ha="left", weight="bold",
+            f"← True={coeff_true:.4f}",
+            xy=(0.02, 0.95),
+            xycoords="axes fraction",
+            fontsize=8,
+            color="red",
+            ha="left",
+            weight="bold",
         )
     else:
         legend_loc = "upper right"
@@ -1118,6 +1200,14 @@ def _scatter_panel(
     show_ic_legend: bool,
 ) -> None:
     """Render one scatter panel with overlaid models, regression lines, Pearson r."""
+    # Build IC color map dynamically from all task names in this panel
+    all_ic_types: set[str] = set()
+    for _, _, task_names, _ in model_data:
+        all_ic_types.update(_ic_type(n) for n in task_names)
+    ic_color_map = {
+        ic: IC_PALETTE[j % len(IC_PALETTE)] for j, ic in enumerate(sorted(all_ic_types))
+    }
+
     all_true: list[float] = []
     all_rec: list[float] = []
 
@@ -1128,30 +1218,45 @@ def _scatter_panel(
         all_true.extend(true_vals.tolist())
         all_rec.extend(recovered_vals.tolist())
 
-        marker = MODEL_MARKERS[i % len(MODEL_MARKERS)]
+        # Paired entries: even = MAML, odd = baseline (from same experiment)
+        exp_idx = i // 2
+        is_baseline = (i % 2) == 1
+        marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
         ic_types = [_ic_type(n) for n in task_names]
 
         # Scatter by IC type
-        for ic, color in IC_COLORS.items():
+        for ic, color in ic_color_map.items():
             mask = np.array([t == ic for t in ic_types])
             if not mask.any():
                 continue
             ic_label = ic if (show_ic_legend and i == 0) else None
             ax.scatter(
-                true_vals[mask], recovered_vals[mask],
-                c=color, marker=marker, label=ic_label,
-                s=45, alpha=0.75, edgecolors="k", linewidths=0.4,
+                true_vals[mask],
+                recovered_vals[mask],
+                c=color,
+                marker=marker,
+                label=ic_label,
+                s=45,
+                alpha=0.75,
+                edgecolors="k",
+                linewidths=0.4,
             )
 
-        # Regression line + Pearson r
+        # Regression line + Pearson r (dark for MAML, light for baseline)
         if len(true_vals) >= 2:
             r, _ = stats.pearsonr(true_vals, recovered_vals)
             slope, intercept = np.polyfit(true_vals, recovered_vals, 1)
             x_fit = np.linspace(true_vals.min(), true_vals.max(), 100)
-            line_color = MODEL_COLORS[i % len(MODEL_COLORS)]
+            color_list = MODEL_COLORS_LIGHT if is_baseline else MODEL_COLORS_DARK
+            line_color = color_list[exp_idx % len(color_list)]
+            linestyle = "--" if is_baseline else "-"
             ax.plot(
-                x_fit, (slope * x_fit) + intercept,
-                color=line_color, linewidth=2, alpha=0.7,
+                x_fit,
+                (slope * x_fit) + intercept,
+                color=line_color,
+                linewidth=2,
+                alpha=0.7,
+                linestyle=linestyle,
                 label=f"{label}: r={r:.2f}, slope={slope:.2f}",
             )
 
@@ -1190,7 +1295,8 @@ def plot_coefficient_scatter_grid(
     n_cols = len(k_values)
 
     fig, axes = plt.subplots(
-        n_rows, n_cols,
+        n_rows,
+        n_cols,
         figsize=(figsize_per_panel[0] * n_cols, figsize_per_panel[1] * n_rows),
         squeeze=False,
     )
@@ -1204,7 +1310,7 @@ def plot_coefficient_scatter_grid(
                 models = panel_data.get(key, [])
 
                 # Show IC legend only on first panel (for fig.legend harvesting)
-                show_ic_legend = (row_idx == 0 and col_idx == 0)
+                show_ic_legend = row_idx == 0 and col_idx == 0
                 _scatter_panel(ax, models, coeff_name, show_ic_legend)
 
                 # Column headers on top row
@@ -1215,14 +1321,20 @@ def plot_coefficient_scatter_grid(
                 if col_idx == 0:
                     ax.set_ylabel(
                         f"Recovered {coeff_name}",
-                        fontsize=10, fontweight="bold",
+                        fontsize=10,
+                        fontweight="bold",
                     )
                     ax.annotate(
                         f"noise={noise:.0%}",
-                        xy=(0, 0.5), xycoords="axes fraction",
-                        xytext=(-65, 0), textcoords="offset points",
-                        fontsize=9, fontstyle="italic",
-                        ha="right", va="center", rotation=90,
+                        xy=(0, 0.5),
+                        xycoords="axes fraction",
+                        xytext=(-65, 0),
+                        textcoords="offset points",
+                        fontsize=9,
+                        fontstyle="italic",
+                        ha="right",
+                        va="center",
+                        rotation=90,
                     )
 
             row_idx += 1
@@ -1230,7 +1342,8 @@ def plot_coefficient_scatter_grid(
     step_str = f" — Step {step}" if step is not None else ""
     fig.suptitle(
         f"Coefficient Recovery: True vs Recovered{step_str}",
-        fontsize=14, y=1.01,
+        fontsize=14,
+        y=1.01,
     )
     plt.tight_layout()
 
@@ -1238,9 +1351,13 @@ def plot_coefficient_scatter_grid(
     handles, labels = axes[0, 0].get_legend_handles_labels()
     if handles:
         fig.legend(
-            handles, labels, loc="upper center",
-            bbox_to_anchor=(0.5, 1.0), ncol=min(len(handles), 6),
-            fontsize=8, framealpha=0.9,
+            handles,
+            labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.0),
+            ncol=min(len(handles), 6),
+            fontsize=8,
+            framealpha=0.9,
         )
 
     # Draw horizontal separators between coefficient groups
@@ -1251,9 +1368,13 @@ def plot_coefficient_scatter_grid(
             bot_row = group_idx * n_noise
             y_sep = axes[bot_row, 0].get_position().y1 - 0.002
             line = Line2D(
-                [0.0, 1.0], [y_sep, y_sep],
+                [0.0, 1.0],
+                [y_sep, y_sep],
                 transform=fig.transFigure,
-                color="black", linewidth=2.5, linestyle="-", alpha=0.7,
+                color="black",
+                linewidth=2.5,
+                linestyle="-",
+                alpha=0.7,
             )
             fig.add_artist(line)
 

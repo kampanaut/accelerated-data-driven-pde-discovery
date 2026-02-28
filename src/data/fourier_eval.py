@@ -55,7 +55,7 @@ def fourier_eval_2d(
     # (n_pts, nx)
     if f_hat.ndim == 2:
         ny, nx = f_hat.shape
-        tmp = f_hat @ E_x.T # (ny, n_points)
+        tmp = f_hat @ E_x.T  # (ny, n_points)
         result = torch.sum(E_y.T * tmp, dim=0) / (nx * ny)
         return result.real
 

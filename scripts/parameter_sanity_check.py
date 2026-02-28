@@ -114,7 +114,7 @@ def compute_gradient_check(
 
     all_X, all_y = [], []
     for task_idx, task in enumerate(dataset_loader.tasks):
-        (X, y), _ = task.get_support_query_split(
+        (X, y), _, _, _ = task.get_support_query_split(
             K_shot=k_shot, query_size=0, seed=seed + task_idx
         )
         all_X.append(X)

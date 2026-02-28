@@ -201,7 +201,9 @@ def main():
         best_model_path = exp_dir / "checkpoints" / "best_model.pt"
         if best_model_path.exists():
             print(f"ERROR: {best_model_path} already exists.")
-            print("  Use --resume to continue training, or delete the experiment directory first.")
+            print(
+                "  Use --resume to continue training, or delete the experiment directory first."
+            )
             sys.exit(1)
 
         print("-" * 60)
@@ -236,6 +238,7 @@ def main():
     print("-" * 60)
 
     metal_cfg = train_cfg.get("metal", {})
+    spectral_cfg = train_cfg.get("spectral_loss", {})
     maml_config = MAMLConfig(
         inner_lr=train_cfg.get("inner_lr", 0.01),
         outer_lr=train_cfg.get("outer_lr", 0.001),
@@ -258,6 +261,8 @@ def main():
         loss_function=train_cfg.get("loss_function", "normalized_mse"),
         metal_enabled=metal_cfg.get("enabled", False),
         metal_hidden_dim=metal_cfg.get("hidden_dim", 64),
+        spectral_loss_enabled=spectral_cfg.get("enabled", False),
+        spectral_loss_mode_size=spectral_cfg.get("mode_size", 64),
     )
 
     trainer = MAMLTrainer(

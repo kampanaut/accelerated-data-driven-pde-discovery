@@ -135,15 +135,16 @@ class PDEOperatorNetwork(nn.Module):
             [u_t, v_t] (predicted time derivatives)
         """
         if self.conv_filters > 0:
-            x_2d = torch.stack([
-                x[:,[0, 2, 3, 4, 5]],
-                x[:,[1, 6, 7, 8, 9]]
-            ], dim=1) # (batch, 10) to (batch, 2, 5)
-            x_2d = x_2d[:, :, self.combo_indices] # turn (batch, 2, 5) to (batch, 2, n_combos, kernel_size)
+            x_2d = torch.stack(
+                [x[:, [0, 2, 3, 4, 5]], x[:, [1, 6, 7, 8, 9]]], dim=1
+            )  # (batch, 10) to (batch, 2, 5)
+            x_2d = x_2d[
+                :, :, self.combo_indices
+            ]  # turn (batch, 2, 5) to (batch, 2, n_combos, kernel_size)
 
-            x_2d = x_2d.flatten(2) # (batch, 2, n_combos * kernel_size)
-            filtered = self.conv(x_2d) # (batch, filters, n_combos)
-            x = filtered.flatten(1) # (batch, filters * n_combos)
+            x_2d = x_2d.flatten(2)  # (batch, 2, n_combos * kernel_size)
+            filtered = self.conv(x_2d)  # (batch, filters, n_combos)
+            x = filtered.flatten(1)  # (batch, filters * n_combos)
 
         return self.network(x)
 
@@ -159,10 +160,16 @@ class PDEOperatorNetwork(nn.Module):
         if self.conv_filters > 0:
             n_combos = len(self.combo_indices)
             effective = self.conv_filters * n_combos
-            lines.append(f"  conv=Conv1d({self.conv.in_channels}→{self.conv_filters}, C({self.input_dim // 2},{self.conv.kernel_size[0]})={n_combos} combos),")
-            lines.append(f"  architecture={self.input_dim} → [conv {effective}] → {' → '.join(map(str, self.hidden_dims))} → {self.output_dim},")
+            lines.append(
+                f"  conv=Conv1d({self.conv.in_channels}→{self.conv_filters}, C({self.input_dim // 2},{self.conv.kernel_size[0]})={n_combos} combos),"
+            )
+            lines.append(
+                f"  architecture={self.input_dim} → [conv {effective}] → {' → '.join(map(str, self.hidden_dims))} → {self.output_dim},"
+            )
         else:
-            lines.append(f"  architecture={self.input_dim} → {' → '.join(map(str, self.hidden_dims))} → {self.output_dim},")
+            lines.append(
+                f"  architecture={self.input_dim} → {' → '.join(map(str, self.hidden_dims))} → {self.output_dim},"
+            )
         lines.append(f"  total_params={sum(p.numel() for p in self.parameters()):,}")
         lines.append(f")")
         return "\n".join(lines)
