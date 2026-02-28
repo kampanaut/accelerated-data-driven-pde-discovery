@@ -1197,7 +1197,6 @@ def _scatter_panel(
     ax: pltax.Axes,
     model_data: ModelScatterData,
     coeff_name: str,
-    show_ic_legend: bool,
 ) -> None:
     """Render one scatter panel with overlaid models, regression lines, Pearson r."""
     # Build IC color map dynamically from all task names in this panel
@@ -1229,13 +1228,11 @@ def _scatter_panel(
             mask = np.array([t == ic for t in ic_types])
             if not mask.any():
                 continue
-            ic_label = ic if (show_ic_legend and i == 0) else None
             ax.scatter(
                 true_vals[mask],
                 recovered_vals[mask],
                 c=color,
                 marker=marker,
-                label=ic_label,
                 s=45,
                 alpha=0.75,
                 edgecolors="k",
@@ -1309,9 +1306,7 @@ def plot_coefficient_scatter_grid(
                 key = (coeff_name, noise, k_val)
                 models = panel_data.get(key, [])
 
-                # Show IC legend only on first panel (for fig.legend harvesting)
-                show_ic_legend = row_idx == 0 and col_idx == 0
-                _scatter_panel(ax, models, coeff_name, show_ic_legend)
+                _scatter_panel(ax, models, coeff_name)
 
                 # Column headers on top row
                 if row_idx == 0:
@@ -1347,26 +1342,86 @@ def plot_coefficient_scatter_grid(
     )
     plt.tight_layout()
 
-    # Figure-level legend harvested from first panel (IC colors + model lines)
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    if handles:
+    # --- Top legend: IC type colors (neutral circle marker) ---
+    # Collect all IC types from first panel's data
+    first_key = next(iter(panel_data), None)
+    all_ic_types: set[str] = set()
+    if first_key is not None:
+        for _, _, task_names, _ in panel_data[first_key]:
+            all_ic_types.update(_ic_type(n) for n in task_names)
+    ic_color_map = {
+        ic: IC_PALETTE[j % len(IC_PALETTE)]
+        for j, ic in enumerate(sorted(all_ic_types))
+    }
+    if ic_color_map:
+        ic_handles = [
+            Line2D(
+                [0], [0], marker="o", color="w", markerfacecolor=color,
+                markeredgecolor="k", markeredgewidth=0.4, markersize=8, label=ic,
+            )
+            for ic, color in ic_color_map.items()
+        ]
         fig.legend(
-            handles,
-            labels,
+            handles=ic_handles,
             loc="upper center",
             bbox_to_anchor=(0.5, 1.0),
-            ncol=min(len(handles), 6),
+            ncol=len(ic_handles),
             fontsize=8,
             framealpha=0.9,
+            title="IC type",
+            title_fontsize=9,
+        )
+
+    # --- Bottom legend: model markers + regression line info ---
+    # Harvest regression-line handles from first panel (those have the r/slope labels)
+    reg_handles = axes[0, 0].get_legend_handles_labels()[0]
+    if reg_handles and first_key is not None:
+        # Build marker-shape handles for each experiment
+        # Paired entries: even index = MAML, odd = baseline; one marker per experiment
+        first_models = panel_data.get(first_key, [])
+        marker_handles = []
+        seen_exp = set()
+        for i, (_, _, _, label) in enumerate(first_models):
+            exp_idx = i // 2
+            if exp_idx in seen_exp:
+                continue
+            seen_exp.add(exp_idx)
+            marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
+            dark_color = MODEL_COLORS_DARK[exp_idx % len(MODEL_COLORS_DARK)]
+            # Use short label (strip stats)
+            short = label.split(":")[0].strip() if ":" in label else label
+            marker_handles.append(
+                Line2D(
+                    [0], [0], marker=marker, color="w", markerfacecolor=dark_color,
+                    markeredgecolor="k", markeredgewidth=0.4, markersize=8,
+                    label=short,
+                )
+            )
+
+        all_bottom = marker_handles + reg_handles
+        all_bottom_labels = [h.get_label() for h in all_bottom]
+        fig.legend(
+            handles=all_bottom,
+            labels=all_bottom_labels,
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.02),
+            ncol=min(len(all_bottom), 4),
+            fontsize=7,
+            framealpha=0.9,
+            title="Models",
+            title_fontsize=9,
         )
 
     # Draw horizontal separators between coefficient groups
     n_noise = len(noise_levels)
     if len(coeff_names) > 1:
         for group_idx in range(1, len(coeff_names)):
-            # Place line just above the first row of the next coefficient group
-            bot_row = group_idx * n_noise
-            y_sep = axes[bot_row, 0].get_position().y1 - 0.002
+            # Place line midway between last row of prev group and first row of next
+            prev_last_row = (group_idx * n_noise) - 1
+            next_first_row = group_idx * n_noise
+            y_top = axes[prev_last_row, 0].get_position().y0
+            y_bot = axes[next_first_row, 0].get_position().y1
+            y_sep = (y_top + y_bot) / 2
             line = Line2D(
                 [0.0, 1.0],
                 [y_sep, y_sep],

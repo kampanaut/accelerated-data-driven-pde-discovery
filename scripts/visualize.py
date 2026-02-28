@@ -250,6 +250,7 @@ def generate_per_task_figures(
     deriv_threshold: float = 1e-7,
     holdout_size: int = 1000,
     with_jacobian: bool = False,
+    jacobian_only: bool = False,
 ) -> None:
     """Generate all per-task figures."""
 
@@ -269,6 +270,120 @@ def generate_per_task_figures(
             coeff_group.setdefault(s["coeff_name"], []).append(s)
 
         print(f"  Generating figures for {task_name}...")
+
+        # ---------------------------------------------------------------------
+        # Graph 7: Jacobian histogram (one per group per K × noise × step)
+        # Groups with multiple members overlay estimates (e.g. NS nu_u + nu_v)
+        # Placed first so --jacobian-only can early-continue.
+        # ---------------------------------------------------------------------
+        if with_jacobian:
+            for k in k_values:
+                for noise in noise_levels:
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
+                    combo_data = task_samples.get(combo_key, {})
+                    combo_worse = task_data.get(f"worse_{combo_key}", {})
+                    combo_coeff_worse = combo_worse.get("coeff_steps", {})
+
+                    combo_fixed_steps = (
+                        fixed_steps  # from function param (config-level)
+                    )
+                    maml_pe = combo_data.get("maml_pred_errors")
+                    baseline_pe = combo_data.get("baseline_pred_errors")
+
+                    for coeff_name, members in coeff_group.items():
+                        member_names = [m["name"] for m in members]
+                        output_indices = [m["output_index"] for m in members]
+
+                        maml_ests_full = [
+                            combo_data.get(f"maml_{n}") for n in member_names
+                        ]
+                        baseline_ests_full = [
+                            combo_data.get(f"baseline_{n}") for n in member_names
+                        ]
+                        true_arr = combo_data.get(f"maml_{member_names[0]}_true")
+
+                        if true_arr is None or any(
+                            x is None for x in maml_ests_full + baseline_ests_full
+                        ):
+                            continue
+
+                        # Determine step indices to iterate
+                        if (
+                            combo_fixed_steps is not None
+                            and maml_ests_full[0].ndim == 2
+                        ):
+                            step_indices = range(len(combo_fixed_steps))
+                        else:
+                            # Legacy: single-step data
+                            step_indices = range(1)
+                            combo_fixed_steps = None
+
+                        for si in step_indices:
+                            step_label = (
+                                int(combo_fixed_steps[si])
+                                if combo_fixed_steps is not None
+                                else ""
+                            )
+
+                            # Index into per-step arrays
+                            if combo_fixed_steps is not None:
+                                maml_ests = [x[si] for x in maml_ests_full]
+                                baseline_ests = [x[si] for x in baseline_ests_full]
+                                maml_pe_step = (
+                                    maml_pe[si] if maml_pe is not None else None
+                                )
+                                baseline_pe_step = (
+                                    baseline_pe[si] if baseline_pe is not None else None
+                                )
+                            else:
+                                maml_ests = maml_ests_full
+                                baseline_ests = baseline_ests_full
+                                maml_pe_step = maml_pe
+                                baseline_pe_step = baseline_pe
+
+                            if any(len(x) == 0 for x in maml_ests + baseline_ests):
+                                continue
+
+                            maml_pe_list = [
+                                maml_pe_step[:, idx]
+                                if maml_pe_step is not None
+                                else None
+                                for idx in output_indices
+                            ]
+                            baseline_pe_list = [
+                                baseline_pe_step[:, idx]
+                                if baseline_pe_step is not None
+                                else None
+                                for idx in output_indices
+                            ]
+
+                            step_suffix = (
+                                f"_step[{step_label}]" if step_label != "" else ""
+                            )
+                            coeff_worse = (
+                                _coeff_worse_suffix_at_step(
+                                    combo_coeff_worse, int(step_label)
+                                )
+                                if step_label != ""
+                                else ""
+                            )
+                            fig = plot_jacobian_histogram(
+                                maml_estimates=maml_ests,
+                                baseline_estimates=baseline_ests,
+                                estimate_labels=member_names,
+                                coeff_true=float(true_arr[0]),
+                                title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
+                                coeff_name=coeff_name,
+                                save_path=task_dir
+                                / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
+                                dpi=dpi,
+                                maml_pred_errors=maml_pe_list,
+                                baseline_pred_errors=baseline_pe_list,
+                            )
+                            plt.close(fig)
+
+        if jacobian_only:
+            continue
 
         # ---------------------------------------------------------------------
         # Generalization plot (one per K × noise)
@@ -403,116 +518,6 @@ def generate_per_task_figures(
                         dpi=dpi,
                     )
                     plt.close(fig)
-
-        # ---------------------------------------------------------------------
-        # Graph 7: Jacobian histogram (one per group per K × noise × step)
-        # Groups with multiple members overlay estimates (e.g. NS nu_u + nu_v)
-        # ---------------------------------------------------------------------
-        if with_jacobian:
-            for k in k_values:
-                for noise in noise_levels:
-                    combo_key = f"k_{k}_noise_{noise:.2f}"
-                    combo_data = task_samples.get(combo_key, {})
-                    combo_worse = task_data.get(f"worse_{combo_key}", {})
-                    combo_coeff_worse = combo_worse.get("coeff_steps", {})
-
-                    combo_fixed_steps = (
-                        fixed_steps  # from function param (config-level)
-                    )
-                    maml_pe = combo_data.get("maml_pred_errors")
-                    baseline_pe = combo_data.get("baseline_pred_errors")
-
-                    for coeff_name, members in coeff_group.items():
-                        member_names = [m["name"] for m in members]
-                        output_indices = [m["output_index"] for m in members]
-
-                        maml_ests_full = [
-                            combo_data.get(f"maml_{n}") for n in member_names
-                        ]
-                        baseline_ests_full = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
-                        ]
-                        true_arr = combo_data.get(f"maml_{member_names[0]}_true")
-
-                        if true_arr is None or any(
-                            x is None for x in maml_ests_full + baseline_ests_full
-                        ):
-                            continue
-
-                        # Determine step indices to iterate
-                        if (
-                            combo_fixed_steps is not None
-                            and maml_ests_full[0].ndim == 2
-                        ):
-                            step_indices = range(len(combo_fixed_steps))
-                        else:
-                            # Legacy: single-step data
-                            step_indices = range(1)
-                            combo_fixed_steps = None
-
-                        for si in step_indices:
-                            step_label = (
-                                int(combo_fixed_steps[si])
-                                if combo_fixed_steps is not None
-                                else ""
-                            )
-
-                            # Index into per-step arrays
-                            if combo_fixed_steps is not None:
-                                maml_ests = [x[si] for x in maml_ests_full]
-                                baseline_ests = [x[si] for x in baseline_ests_full]
-                                maml_pe_step = (
-                                    maml_pe[si] if maml_pe is not None else None
-                                )
-                                baseline_pe_step = (
-                                    baseline_pe[si] if baseline_pe is not None else None
-                                )
-                            else:
-                                maml_ests = maml_ests_full
-                                baseline_ests = baseline_ests_full
-                                maml_pe_step = maml_pe
-                                baseline_pe_step = baseline_pe
-
-                            if any(len(x) == 0 for x in maml_ests + baseline_ests):
-                                continue
-
-                            maml_pe_list = [
-                                maml_pe_step[:, idx]
-                                if maml_pe_step is not None
-                                else None
-                                for idx in output_indices
-                            ]
-                            baseline_pe_list = [
-                                baseline_pe_step[:, idx]
-                                if baseline_pe_step is not None
-                                else None
-                                for idx in output_indices
-                            ]
-
-                            step_suffix = (
-                                f"_step[{step_label}]" if step_label != "" else ""
-                            )
-                            coeff_worse = (
-                                _coeff_worse_suffix_at_step(
-                                    combo_coeff_worse, int(step_label)
-                                )
-                                if step_label != ""
-                                else ""
-                            )
-                            fig = plot_jacobian_histogram(
-                                maml_estimates=maml_ests,
-                                baseline_estimates=baseline_ests,
-                                estimate_labels=member_names,
-                                coeff_true=float(true_arr[0]),
-                                title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
-                                coeff_name=coeff_name,
-                                save_path=task_dir
-                                / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
-                                dpi=dpi,
-                                maml_pred_errors=maml_pe_list,
-                                baseline_pred_errors=baseline_pe_list,
-                            )
-                            plt.close(fig)
 
         # ---------------------------------------------------------------------
         # Graph 8: Coefficient error heatmap (one per group, final step)
@@ -700,6 +705,7 @@ def generate_aggregated_figures(
     deriv_threshold: float = 1e-7,
     holdout_size: int = 1000,
     with_jacobian: bool = False,
+    jacobian_only: bool = False,
 ) -> None:
     """Generate aggregated figures (mean ± std across tasks)."""
 
@@ -721,6 +727,87 @@ def generate_aggregated_figures(
         return
 
     print(f"  Aggregating across {n_tasks} tasks...")
+
+    # -------------------------------------------------------------------------
+    # Aggregate Jacobian histograms (Graph 7) - one per group per K × noise × step
+    # Ratio-normalized: each task's estimates divided by that task's true value
+    # Placed first so --jacobian-only can early-return.
+    # -------------------------------------------------------------------------
+    if with_jacobian:
+        # Determine step indices from first available combo
+        agg_fixed_steps = None
+        for task_name in task_names:
+            any_combo = next(
+                iter(results["tasks"][task_name].get("samples", {}).values()), {}
+            )
+            fs = any_combo.get("fixed_steps")
+            if fs is not None:
+                agg_fixed_steps = fs
+                break
+
+        for k in k_values:
+            for noise in noise_levels:
+                combo_key = f"k_{k}_noise_{noise:.2f}"
+
+                # Determine per-step iteration
+                n_steps = len(agg_fixed_steps) if agg_fixed_steps is not None else 1
+
+                for si in range(n_steps):
+                    step_label = (
+                        int(agg_fixed_steps[si]) if agg_fixed_steps is not None else ""
+                    )
+
+                    for coeff_name, members in grouped.items():
+                        member_names = [m["name"] for m in members]
+                        maml_all: list[list[float]] = [[] for _ in members]
+                        baseline_all: list[list[float]] = [[] for _ in members]
+                        has_data = False
+
+                        for task_name in task_names:
+                            task_data = results["tasks"][task_name]["samples"].get(
+                                combo_key, {}
+                            )
+                            true_arr = task_data.get(f"maml_{member_names[0]}_true")
+                            if true_arr is None:
+                                continue
+                            true_val = float(true_arr[0])
+                            if true_val == 0:
+                                continue
+
+                            for i, name in enumerate(member_names):
+                                m = task_data.get(f"maml_{name}")
+                                b = task_data.get(f"baseline_{name}")
+                                if m is not None:
+                                    has_data = True
+                                    # Index into step if multi-step
+                                    m_step = m[si] if m.ndim == 2 else m
+                                    maml_all[i].extend(m_step.flatten() / true_val)
+                                if b is not None:
+                                    b_step = b[si] if b.ndim == 2 else b
+                                    baseline_all[i].extend(b_step.flatten() / true_val)
+
+                        if has_data and all(
+                            len(x) > 0 for x in maml_all + baseline_all
+                        ):
+                            step_suffix = (
+                                f"_step[{step_label}]" if step_label != "" else ""
+                            )
+                            fig = plot_jacobian_histogram(
+                                maml_estimates=[np.array(x) for x in maml_all],
+                                baseline_estimates=[np.array(x) for x in baseline_all],
+                                estimate_labels=member_names,
+                                coeff_true=1.0,
+                                title=f"Aggregated {coeff_name} Recovery Ratio (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
+                                coeff_name=coeff_name,
+                                save_path=agg_dir
+                                / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
+                                dpi=dpi,
+                                ratio_mode=True,
+                            )
+                            plt.close(fig)
+
+    if jacobian_only:
+        return
 
     # -------------------------------------------------------------------------
     # Aggregate loss ratio heatmaps
@@ -926,83 +1013,6 @@ def generate_aggregated_figures(
                 baseline_std=np.nanstd(baseline_arr, axis=0),
             )
             plt.close(fig)
-
-    # -------------------------------------------------------------------------
-    # Aggregate Jacobian histograms (Graph 7) - one per group per K × noise × step
-    # Ratio-normalized: each task's estimates divided by that task's true value
-    # -------------------------------------------------------------------------
-    if with_jacobian:
-        # Determine step indices from first available combo
-        agg_fixed_steps = None
-        for task_name in task_names:
-            any_combo = next(
-                iter(results["tasks"][task_name].get("samples", {}).values()), {}
-            )
-            fs = any_combo.get("fixed_steps")
-            if fs is not None:
-                agg_fixed_steps = fs
-                break
-
-        for k in k_values:
-            for noise in noise_levels:
-                combo_key = f"k_{k}_noise_{noise:.2f}"
-
-                # Determine per-step iteration
-                n_steps = len(agg_fixed_steps) if agg_fixed_steps is not None else 1
-
-                for si in range(n_steps):
-                    step_label = (
-                        int(agg_fixed_steps[si]) if agg_fixed_steps is not None else ""
-                    )
-
-                    for coeff_name, members in grouped.items():
-                        member_names = [m["name"] for m in members]
-                        maml_all: list[list[float]] = [[] for _ in members]
-                        baseline_all: list[list[float]] = [[] for _ in members]
-                        has_data = False
-
-                        for task_name in task_names:
-                            task_data = results["tasks"][task_name]["samples"].get(
-                                combo_key, {}
-                            )
-                            true_arr = task_data.get(f"maml_{member_names[0]}_true")
-                            if true_arr is None:
-                                continue
-                            true_val = float(true_arr[0])
-                            if true_val == 0:
-                                continue
-
-                            for i, name in enumerate(member_names):
-                                m = task_data.get(f"maml_{name}")
-                                b = task_data.get(f"baseline_{name}")
-                                if m is not None:
-                                    has_data = True
-                                    # Index into step if multi-step
-                                    m_step = m[si] if m.ndim == 2 else m
-                                    maml_all[i].extend(m_step.flatten() / true_val)
-                                if b is not None:
-                                    b_step = b[si] if b.ndim == 2 else b
-                                    baseline_all[i].extend(b_step.flatten() / true_val)
-
-                        if has_data and all(
-                            len(x) > 0 for x in maml_all + baseline_all
-                        ):
-                            step_suffix = (
-                                f"_step[{step_label}]" if step_label != "" else ""
-                            )
-                            fig = plot_jacobian_histogram(
-                                maml_estimates=[np.array(x) for x in maml_all],
-                                baseline_estimates=[np.array(x) for x in baseline_all],
-                                estimate_labels=member_names,
-                                coeff_true=1.0,
-                                title=f"Aggregated {coeff_name} Recovery Ratio (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
-                                coeff_name=coeff_name,
-                                save_path=agg_dir
-                                / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
-                                dpi=dpi,
-                                ratio_mode=True,
-                            )
-                            plt.close(fig)
 
     # -------------------------------------------------------------------------
     # Aggregate coefficient error heatmap (Graph 8) - one per group, final step
@@ -1240,7 +1250,7 @@ def discover_comparison_experiments(
     Returns list of (dir_name, results_json_path) sorted by dir_name.
     """
     current_pde_type = config["experiment"]["pde_type"]
-    models_root = Path("data/models")
+    models_root = Path(config.get("output", {}).get("base_dir", "data/models"))
 
     viz_cfg = config.get("visualization", {})
     explicit = viz_cfg.get("compare_experiments", [])
@@ -1484,6 +1494,13 @@ def main():
         action="store_true",
         help="Enable Jacobian histogram plots (off by default)",
     )
+    parser.add_argument(
+        "--jacobian-only",
+        action="store_true",
+        help="Only generate Jacobian-related figures (per-task histograms, "
+        "aggregated Jacobian graphs, cross-experiment scatter). "
+        "Implies --with-jacobian.",
+    )
     args = parser.parse_args()
 
     # =========================================================================
@@ -1497,7 +1514,7 @@ def main():
     config = load_config(args.config)
     exp_name = config["experiment"]["name"]
     exp_dir = (
-        Path("data/models") / config.get("output", {}).get("base_dir", "") / exp_name
+        Path(config.get("output", {}).get("base_dir", "data/models")) / exp_name
     )
 
     print(f"Experiment: {exp_name}")
@@ -1508,7 +1525,8 @@ def main():
     # =========================================================================
     eval_cfg = config.get("evaluation", {})
     viz_cfg = config.get("visualization", {})
-    with_jacobian = args.with_jacobian or viz_cfg.get("with_jacobian", False)
+    jacobian_only = args.jacobian_only or viz_cfg.get("jacobian_only", False)
+    with_jacobian = args.with_jacobian or viz_cfg.get("with_jacobian", False) or jacobian_only
     no_per_task = args.no_per_task or viz_cfg.get("no_per_task", False)
     no_aggregated = args.no_aggregated or viz_cfg.get("no_aggregated", False)
     dpi = viz_cfg.get("dpi", 150)
@@ -1556,14 +1574,17 @@ def main():
     holdout_size = int(
         results["config"].get("holdout_size", eval_cfg.get("holdout_size", 1000))
     )
-    # Compute metrics
-    print("-" * 60)
-    print("Computing metrics...")
-    print("-" * 60)
+    # Compute metrics (skipped in jacobian-only mode — not needed for histograms)
+    if not jacobian_only:
+        print("-" * 60)
+        print("Computing metrics...")
+        print("-" * 60)
 
-    all_metrics = compute_all_metrics(results, fixed_steps, deriv_threshold)
-    print(f"Computed metrics for {len(all_metrics)} tasks")
-    print()
+        all_metrics = compute_all_metrics(results, fixed_steps, deriv_threshold)
+        print(f"Computed metrics for {len(all_metrics)} tasks")
+        print()
+    else:
+        all_metrics = {}
 
     # =========================================================================
     # Cross-experiment coefficient scatter
@@ -1586,7 +1607,7 @@ def main():
     print()
 
     # Generate figures
-    if not no_per_task:
+    if not no_per_task or jacobian_only:
         print("-" * 60)
         print("Generating per-task figures...")
         print("-" * 60)
@@ -1601,10 +1622,11 @@ def main():
             deriv_threshold=deriv_threshold,
             holdout_size=holdout_size,
             with_jacobian=with_jacobian,
+            jacobian_only=jacobian_only,
         )
         print()
 
-    if not no_aggregated:
+    if not no_aggregated or jacobian_only:
         print("-" * 60)
         print("Generating aggregated figures...")
         print("-" * 60)
@@ -1619,6 +1641,7 @@ def main():
             deriv_threshold=deriv_threshold,
             holdout_size=holdout_size,
             with_jacobian=with_jacobian,
+            jacobian_only=jacobian_only,
         )
         print()
 

@@ -531,7 +531,7 @@ def main():
 
     config = load_config(args.config)
     exp_name = config["experiment"]["name"]
-    base_dir = Path("data/models") / config.get("output", {}).get("base_dir", "")
+    base_dir = Path(config.get("output", {}).get("base_dir", "data/models"))
     exp_dir = base_dir / exp_name
 
     if not exp_dir.exists():
