@@ -439,6 +439,7 @@ class MAMLTrainer:
         self.best_val_loss = float("inf")
         self.best_train_state = None  # Stash weights when train loss improves
         self.patience_counter = 0
+        self._nan_at: Optional[int] = None
         self.history: Dict[str, List] = {
             "train_loss": [],
             "val_loss": [],
@@ -648,7 +649,9 @@ class MAMLTrainer:
             total_loss / len(tasks)
         )  # Every task subgraph that was extended inner_step times converges right here. This is where they connect.
 
-        # Meta-gradient update
+        # Meta-gradient update — skip step if loss is NaN to keep weights clean
+        if not torch.isfinite(avg_loss):
+            return float("nan")
         avg_loss.backward()
         self.outer_opt.step()
 
@@ -822,11 +825,31 @@ class MAMLTrainer:
             train_loss = self.outer_step(tasks)
 
             if torch.tensor(train_loss).isnan():
-                print(
-                    f"\n  NaN detected at iteration {iteration}. Saving checkpoint..."
-                )
-                self.save_checkpoint(checkpoint_dir / "latest_model.pt")
-                print(f"  Saved to {checkpoint_dir / 'latest_model.pt'}.")
+                self._nan_at = iteration
+                print(f"\n  NaN detected at iteration {iteration}. Weights are clean (step was skipped).")
+
+                # Compare current (clean) weights vs best-train on validation
+                if self.val_loader is not None and self.best_train_state is not None:
+                    current_state = copy.deepcopy(self.model.state_dict())
+                    current_val = self.evaluate(self.val_loader.tasks)
+                    print(f"  Current weights val_loss: {current_val:.6f}")
+
+                    self.model.load_state_dict(self.best_train_state)
+                    best_val = self.evaluate(self.val_loader.tasks)
+                    print(f"  Best-train weights val_loss: {best_val:.6f}")
+
+                    if current_val <= best_val:
+                        self.model.load_state_dict(current_state)
+                        print("  Winner: current weights")
+                    else:
+                        print("  Winner: best-train weights")
+                elif self.best_train_state is not None:
+                    # No val loader — just use best_train_state
+                    self.model.load_state_dict(self.best_train_state)
+                    print("  Restored best-train weights (no val loader).")
+
+                self.save_checkpoint(checkpoint_dir / "best_model.pt")
+                print(f"  Saved to {checkpoint_dir / 'best_model.pt'}.")
                 signal.signal(signal.SIGINT, prev_handler)
                 return self.history
 
@@ -908,6 +931,12 @@ class MAMLTrainer:
             print(f"  Best val loss: {self.best_val_loss:.6f}")
 
         return self.history
+
+    def pop_nan_iteration(self) -> Optional[int]:
+        """Return the iteration where NaN was detected, or None. Resets the flag."""
+        it = self._nan_at
+        self._nan_at = None
+        return it
 
     def save_checkpoint(self, path: Path) -> None:
         """

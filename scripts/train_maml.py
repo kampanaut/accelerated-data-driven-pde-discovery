@@ -15,6 +15,7 @@ Usage:
 """
 
 import io
+import re
 import sys
 import argparse
 import json
@@ -65,10 +66,26 @@ def load_config(config_path: Path) -> dict:
 
 
 def setup_output_dirs(config: dict) -> Path:
-    """Create experiment output directory structure."""
+    """Create experiment output directory structure.
+
+    Resolves suffixed directories: if the exact name doesn't exist,
+    looks for ENDNAN-suffixed dirs (usable) or ISNAN-suffixed dirs (skip).
+    """
     base_dir = Path(config.get("output", {}).get("base_dir", "data/models"))
     exp_name = config["experiment"]["name"]
     exp_dir = base_dir / exp_name
+
+    if not exp_dir.exists():
+        candidates = sorted(base_dir.glob(f"{exp_name}-*"))
+        endnan = [d for d in candidates if re.search(r"-ENDNAN@\d+$", d.name)]
+        isnan = [d for d in candidates if d.name.endswith("-ISNAN")]
+
+        if endnan:
+            exp_dir = endnan[0]
+            print(f"Using flagged directory: {exp_dir.name}")
+        elif isnan:
+            print(f"Skipping {exp_name}: flagged as {isnan[0].name}")
+            sys.exit(0)
 
     # Create subdirectories
     (exp_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
@@ -289,6 +306,28 @@ def main():
 
     checkpoint_dir = exp_dir / "checkpoints"
     history = trainer.train(checkpoint_dir=checkpoint_dir)
+
+    # =========================================================================
+    # Post-training directory rename
+    # =========================================================================
+    nan_iter = trainer.pop_nan_iteration()
+    if nan_iter is not None:
+        # NaN exit — suffix the directory if not already suffixed
+        if not re.search(r"-ENDNAN@\d+$", exp_dir.name):
+            new_dir = exp_dir.parent / f"{exp_dir.name}-ENDNAN@{nan_iter}"
+            exp_dir.rename(new_dir)
+            exp_dir = new_dir
+            print(f"Renamed → {exp_dir.name}")
+    else:
+        # Normal exit — strip ENDNAN suffix if present
+        if re.search(r"-ENDNAN@\d+$", exp_dir.name):
+            clean_name = re.sub(r"-ENDNAN@\d+$", "", exp_dir.name)
+            new_dir = exp_dir.parent / clean_name
+            exp_dir.rename(new_dir)
+            exp_dir = new_dir
+            print(f"Renamed → {exp_dir.name}")
+
+    checkpoint_dir = exp_dir / "checkpoints"
 
     # =========================================================================
     # Save training history

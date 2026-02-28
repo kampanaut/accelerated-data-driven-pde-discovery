@@ -582,14 +582,20 @@ def main():
     print("Loading checkpoints...")
     print("-" * 60)
 
-    # θ* (meta-learned)
+    # θ* (meta-learned) — fall back to latest_model.pt for ENDNAN experiments
     if args.checkpoint is not None:
         theta_star_path = args.checkpoint
     else:
-        theta_star_path = exp_dir / "checkpoints" / "best_model.pt"
-
-    if not theta_star_path.exists():
-        raise FileNotFoundError(f"θ* checkpoint not found: {theta_star_path}")
+        best_path = exp_dir / "checkpoints" / "best_model.pt"
+        latest_path = exp_dir / "checkpoints" / "latest_model.pt"
+        if best_path.exists():
+            theta_star_path = best_path
+        elif latest_path.exists():
+            theta_star_path = latest_path
+            print(f"best_model.pt not found — using latest_model.pt")
+        else:
+            print(f"No checkpoint found in {exp_dir / 'checkpoints'}")
+            sys.exit(1)
 
     # θ₀ (initial)
     theta_0_path = exp_dir / "checkpoints" / "initial_model.pt"
