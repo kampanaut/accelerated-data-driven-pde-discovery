@@ -29,14 +29,13 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 from numpy.typing import NDArray
 import yaml
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
-from src.training.maml import (
-    MeTALModule,
-    compute_loss,
-)
+from src.training.maml import MeTALModule
+from src.training.spectral_loss import compute_spectral_loss
 from src.evaluation.jacobian import analyze_jacobian, JacobianResults
 from src.evaluation.metrics import compress_step_ranges
 
@@ -108,6 +107,10 @@ def fine_tune(
     on_step: Optional[Callable[[torch.nn.Module, int], None]] = None,
     metal: Optional[MeTALModule] = None,
     loss_type: str = "normalized_mse",
+    coords: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    Lx: float = 0.0,
+    Ly: float = 0.0,
+    spectral_mode_size: int = 0,
 ) -> Dict[str, List[float]]:
     """
     Fine-tune model and return train/holdout loss at each step.
@@ -134,7 +137,34 @@ def fine_tune(
     if metal is not None:
         metal.eval()
 
-    cost_fn = lambda p, t: compute_loss(p, t, loss_type)
+    # Resolve pointwise loss once — no string dispatch per call
+    if loss_type == "mse":
+        _pw: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = (
+            lambda p, t: F.mse_loss(p, t)
+        )
+    elif loss_type == "normalized_mse":
+        _pw = lambda p, t: F.mse_loss(p, t) / (t**2).mean()
+    elif loss_type == "mae":
+        _pw = lambda p, t: F.l1_loss(p, t)
+    else:
+        raise ValueError(
+            f"Unknown loss_type: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'."
+        )
+
+    # Wrap with spectral loss if coords provided and mode_size > 0
+    use_spectral = coords is not None and spectral_mode_size > 0
+    if use_spectral:
+        assert coords is not None
+        _x_pts, _y_pts = coords
+
+        def cost_fn(p: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            pw = _pw(p, t)
+            spec = compute_spectral_loss(
+                p, t, _x_pts, _y_pts, Lx, Ly, spectral_mode_size
+            )
+            return pw + spec
+    else:
+        cost_fn = _pw
 
     x = features
     y = targets
@@ -154,7 +184,7 @@ def fine_tune(
 
         with torch.no_grad():
             pred_holdout = model(x_holdout)
-            holdout_loss = compute_loss(pred_holdout, y_holdout, loss_type)
+            holdout_loss = cost_fn(pred_holdout, y_holdout)
             holdout_losses.append(holdout_loss.item())
 
         step_num = step_idx + 1
@@ -166,7 +196,7 @@ def fine_tune(
     metal_steps = metal.n_steps if metal is not None else 0
     for i in range(min(metal_steps, max_steps)):
         pred = model(x)
-        recorded_loss = compute_loss(pred, y, loss_type)
+        recorded_loss = cost_fn(pred, y)
         train_losses.append(recorded_loss.item())
 
         meta_support = metal.support_step(i, model, pred, y, cost_fn)  # type: ignore[union-attr]
@@ -176,7 +206,7 @@ def fine_tune(
     # Phase 2: Standard loss for remaining steps
     for i in range(metal_steps, max_steps):
         pred = model(x)
-        recorded_loss = compute_loss(pred, y, loss_type)
+        recorded_loss = cost_fn(pred, y)
         train_losses.append(recorded_loss.item())
 
         _step(i, recorded_loss)
@@ -214,6 +244,7 @@ def evaluate_task(
     holdout_size: int = 1000,
     metal: Optional[MeTALModule] = None,
     loss_type: str = "normalized_mse",
+    spectral_mode_size: int = 0,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -257,7 +288,7 @@ def evaluate_task(
         available_for_holdout = task.n_samples - k
         actual_holdout = min(holdout_size, available_for_holdout)
 
-        support_clean, holdout_clean, _, _ = task.get_support_query_split(
+        support_clean, holdout_clean, support_coords, _ = task.get_support_query_split(
             K_shot=k,
             query_size=actual_holdout,
             seed=k_seed,
@@ -328,6 +359,10 @@ def evaluate_task(
                     ),
                     metal=metal,
                     loss_type=loss_type,
+                    coords=support_coords,
+                    Lx=task.Lx,
+                    Ly=task.Ly,
+                    spectral_mode_size=spectral_mode_size,
                 )
 
                 # Fine-tune from θ₀ (baseline) — same loss, no MeTAL
@@ -348,6 +383,10 @@ def evaluate_task(
                         holdout_targets,
                     ),
                     loss_type=loss_type,
+                    coords=support_coords,
+                    Lx=task.Lx,
+                    Ly=task.Ly,
+                    spectral_mode_size=spectral_mode_size,
                 )
 
                 # Store curves for NPZ
@@ -492,14 +531,24 @@ def main():
 
     config = load_config(args.config)
     exp_name = config["experiment"]["name"]
-    exp_dir = (
-        Path("data/models") / config.get("output", {}).get("base_dir", "") / exp_name
-    )
+    base_dir = Path("data/models") / config.get("output", {}).get("base_dir", "")
+    exp_dir = base_dir / exp_name
 
     if not exp_dir.exists():
-        raise FileNotFoundError(
-            f"Experiment directory not found: {exp_dir}\nRun train_maml.py first."
-        )
+        # Scan for suffixed directories (ENDNAN → usable, ISNAN → skip)
+        candidates = sorted(base_dir.glob(f"{exp_name}-*"))
+        endnan = [d for d in candidates if d.name.startswith(f"{exp_name}-ENDNAN")]
+        isnan = [d for d in candidates if d.name.startswith(f"{exp_name}-ISNAN")]
+
+        if endnan:
+            exp_dir = endnan[0]
+            print(f"Using flagged directory: {exp_dir.name}")
+        elif isnan:
+            print(f"Skipping {exp_name}: flagged as {isnan[0].name}")
+            sys.exit(0)
+        else:
+            print(f"Experiment directory not found: {exp_dir}")
+            sys.exit(1)
 
     # Tee stdout to capture all print output for log file
     _tee = _TeeStream(sys.stdout)
@@ -629,6 +678,8 @@ def main():
     max_steps = eval_cfg.get("max_steps", 1000)
     fixed_steps: List[int] = eval_cfg.get("fixed_steps", [50, 100, 200])
     loss_type: str = train_cfg.get("loss_function", "normalized_mse")
+    spectral_cfg = train_cfg.get("spectral_loss", {})
+    spectral_mode_size: int = spectral_cfg.get("mode_size", 0) if spectral_cfg.get("enabled", False) else 0
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -640,6 +691,8 @@ def main():
     print(f"  Max steps: {max_steps}")
     print(f"  Fixed steps: {fixed_steps} ({len(fixed_steps)} snapshots)")
     print(f"  Loss function: {loss_type}")
+    if spectral_mode_size > 0:
+        print(f"  Spectral loss: mode_size={spectral_mode_size}")
     print(f"  Total evaluations: {total_combos}")
     print()
 
@@ -694,6 +747,7 @@ def main():
             fixed_steps=fixed_steps,
             metal=metal_module,
             loss_type=loss_type,
+            spectral_mode_size=spectral_mode_size,
         )
 
         # Save task metadata to results dict

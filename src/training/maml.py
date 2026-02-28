@@ -25,37 +25,6 @@ from .spectral_loss import compute_spectral_loss
 
 
 # ---------------------------------------------------------------------------
-# Configurable loss function
-# ---------------------------------------------------------------------------
-
-
-def compute_loss(
-    pred: torch.Tensor, target: torch.Tensor, loss_type: str
-) -> torch.Tensor:
-    """
-    Compute loss between prediction and target.
-
-    Args:
-        pred: Model predictions (N, output_dim)
-        target: Ground truth (N, output_dim)
-        loss_type: One of 'mse', 'normalized_mse', 'mae'
-
-    Returns:
-        Scalar loss tensor
-    """
-    if loss_type == "mse":
-        return F.mse_loss(pred, target)
-    elif loss_type == "normalized_mse":
-        return F.mse_loss(pred, target) / (target**2).mean()
-    elif loss_type == "mae":
-        return F.l1_loss(pred, target)
-    else:
-        raise ValueError(
-            f"Unknown loss_type: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'."
-        )
-
-
-# ---------------------------------------------------------------------------
 # MeTAL: Task-Adaptive Loss (Baik et al., ICCV 2021)
 #
 # Per-step loss networks + adapters for support and query.
@@ -397,6 +366,13 @@ class MAMLTrainer:
             print(f"  Base model params: {n_base_params}, output_dim: {output_dim}")
             print(f"  MeTAL total params: {n_metal_params:,}")
 
+        # Bind cost function — no conditionals in the hot loop
+        self.cost_function = (
+            self._spectral_cost
+            if config.spectral_loss_enabled
+            else self._pointwise_cost
+        )
+
         # Bind inner step function — no conditionals in the hot loop
         self._inner_step = (
             self._metal_inner_step
@@ -475,27 +451,36 @@ class MAMLTrainer:
     # Cost function: pointwise MSE + optional spectral loss
     # ------------------------------------------------------------------
 
-    def cost_function(
+    def _pointwise_cost(
         self,
         pred: torch.Tensor,
         target: torch.Tensor,
         coords: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
-        """Unified cost: pointwise loss + spectral loss (when enabled + coords provided)."""
+        """Pointwise-only cost (no spectral)."""
+        return self._pointwise_loss(pred, target)
+
+    def _spectral_cost(
+        self,
+        pred: torch.Tensor,
+        target: torch.Tensor,
+        coords: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
+        """Pointwise + spectral cost."""
         pw = self._pointwise_loss(pred, target)
-        if self.config.spectral_loss_enabled and coords is not None:
-            x_pts, y_pts = coords
-            spec = compute_spectral_loss(
-                pred,
-                target,
-                x_pts,
-                y_pts,
-                self._current_Lx,
-                self._current_Ly,
-                self.config.spectral_loss_mode_size,
-            )
-            return pw + spec
-        return pw
+        if coords is None:
+            return pw
+        x_pts, y_pts = coords
+        spec = compute_spectral_loss(
+            pred,
+            target,
+            x_pts,
+            y_pts,
+            self._current_Lx,
+            self._current_Ly,
+            self.config.spectral_loss_mode_size,
+        )
+        return pw + spec
 
     # ------------------------------------------------------------------
     # Inner step implementations (bound in __init__, no conditionals)
