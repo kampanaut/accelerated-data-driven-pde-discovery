@@ -2,7 +2,7 @@
 SVD and R² analysis of PDE input features.
 
 Usage:
-    uv run scripts/dataset_analyser.py <directory> [--n_points 500] [--k_snapshots 5] [--seed 42]
+    uv run scripts/dataset_analyser.py <directory> <pde_type> [--n_points 500] [--k_snapshots 5] [--seed 42]
 
 Loads all *_fourier.npz files from the given directory, evaluates input
 features at random spatial points across multiple timesteps, then runs
@@ -28,7 +28,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 
-from src.data.fourier_eval import build_wavenumbers, fourier_eval_2d
+from src.training.task_loader import TASK_REGISTRY
 
 
 class TeeStream:
@@ -63,157 +63,101 @@ FEATURE_NAMES_2F = [
     "v_yy",
 ]
 FEATURE_NAMES_1F = ["u", "u_x", "u_y", "u_xx", "u_yy"]
-
-
-def load_fourier_fields(npz_path: Path) -> dict:
-    """Load a fourier .npz and return coefficient fields + metadata.
-
-    Returns dict with 'field1_hat', optional 'field2_hat', 'n_fields',
-    'sim_params', 'times'.
-    """
-    data = np.load(npz_path, allow_pickle=True)
-    keys = list(data.keys())
-
-    result: dict = {
-        "sim_params": data["simulation_params"].item(),
-        "times": data["times"],
-    }
-
-    if "A_hat" in keys and "B_hat" in keys:
-        result["field1_hat"] = data["A_hat"]
-        result["field2_hat"] = data["B_hat"]
-        result["n_fields"] = 2
-    elif "u_hat" in keys and "v_hat" in keys:
-        result["field1_hat"] = data["u_hat"]
-        result["field2_hat"] = data["v_hat"]
-        result["n_fields"] = 2
-    elif "u_hat" in keys:
-        result["field1_hat"] = data["u_hat"]
-        result["n_fields"] = 1
-    else:
-        raise ValueError(f"Unknown .npz format in {npz_path}: keys = {keys}")
-
-    return result
-
-
-def evaluate_features_1f(field1_hat, kx, ky, E_x, E_y, device):
-    """Evaluate 5 features for a single-field PDE: [u, u_x, u_y, u_xx, u_yy]."""
-    u = fourier_eval_2d(field1_hat, E_x, E_y, device)
-    u_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field1_hat, E_x, E_y, device)
-    u_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field1_hat, E_x, E_y, device)
-    u_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field1_hat, E_x, E_y, device)
-    u_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field1_hat, E_x, E_y, device)
-    return torch.stack([u, u_x, u_y, u_xx, u_yy], dim=1)
-
-
-def evaluate_features_2f(field1_hat, field2_hat, kx, ky, E_x, E_y, device):
-    """Evaluate 10 features for a two-field PDE."""
-    u = fourier_eval_2d(field1_hat, E_x, E_y, device)
-    v = fourier_eval_2d(field2_hat, E_x, E_y, device)
-
-    u_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field1_hat, E_x, E_y, device)
-    u_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field1_hat, E_x, E_y, device)
-    u_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field1_hat, E_x, E_y, device)
-    u_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field1_hat, E_x, E_y, device)
-
-    v_x = fourier_eval_2d(1j * kx.unsqueeze(0) * field2_hat, E_x, E_y, device)
-    v_y = fourier_eval_2d(1j * ky.unsqueeze(1) * field2_hat, E_x, E_y, device)
-    v_xx = fourier_eval_2d(((1j * kx.unsqueeze(0)) ** 2) * field2_hat, E_x, E_y, device)
-    v_yy = fourier_eval_2d(((1j * ky.unsqueeze(1)) ** 2) * field2_hat, E_x, E_y, device)
-
-    return torch.stack([u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=1)
-
-
-def build_phase_matrices(n_points, nx, ny, Lx, Ly, seed, device="cuda"):
-    """Build phase matrices E_x, E_y for random spatial evaluation points."""
-    gen = torch.Generator(device=device)
-    gen.manual_seed(seed)
-
-    x_pts = torch.rand(n_points, generator=gen, device=device, dtype=torch.float64) * Lx
-    y_pts = torch.rand(n_points, generator=gen, device=device, dtype=torch.float64) * Ly
-
-    kx, ky = build_wavenumbers(nx, ny, Lx, Ly, device=device)
-
-    E_x = torch.exp(1j * x_pts.unsqueeze(1) * kx.unsqueeze(0))
-    E_y = torch.exp(1j * y_pts.unsqueeze(1) * ky.unsqueeze(0))
-
-    return kx, ky, E_x, E_y
+TARGET_NAMES_2F = ["u_t", "v_t"]
+TARGET_NAMES_1F = ["u_t"]
 
 
 def collect_features(
-    directory: Path, n_points: int, seed: int, k_snapshots: int = 1
-) -> tuple[torch.Tensor, int]:
-    """Load all fourier .npz files and collect features into one big matrix.
+    directory: Path,
+    n_points: int,
+    seed: int,
+    k_snapshots: int = 1,
+    pde_type: str = "br",
+) -> tuple[torch.Tensor, torch.Tensor, list[str], list[str]]:
+    """Load all fourier .npz files and collect features + targets.
+
+    Uses PDE task classes for evaluation, giving both input features and
+    PDE RHS targets at random collocation points.
 
     Args:
         directory: Path containing *_fourier.npz files
         n_points: Random spatial points per snapshot
         seed: Random seed for spatial point sampling
         k_snapshots: Number of evenly-spaced timesteps to sample per task
+        pde_type: PDE type key for TASK_REGISTRY
 
     Returns:
-        (features, n_fields) — features tensor and number of solution fields (1 or 2).
+        (features, targets, feature_names, target_names)
     """
     files = sorted(directory.glob("*_fourier.npz"))
     if not files:
         print(f"No *_fourier.npz files found in {directory}")
         sys.exit(1)
 
+    if pde_type not in TASK_REGISTRY:
+        print(
+            f"Unknown PDE type '{pde_type}'. Available: {list(TASK_REGISTRY.keys())}"
+        )
+        sys.exit(1)
+
+    task_class = TASK_REGISTRY[pde_type]
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     print(f"Found {len(files)} fourier files in {directory}")
+    print(f"PDE type: {pde_type} ({task_class.__name__})")
     print(
         f"Sampling {k_snapshots} timestep(s) per task, {n_points} spatial points each"
     )
 
+    # Build phase matrices once using first task's grid
+    first_task = task_class(files[0], device=device)
+    gen = torch.Generator(device=device)
+    gen.manual_seed(seed)
+    x_pts = (
+        torch.rand(n_points, generator=gen, device=device, dtype=torch.float64)
+        * first_task.Lx
+    )
+    y_pts = (
+        torch.rand(n_points, generator=gen, device=device, dtype=torch.float64)
+        * first_task.Ly
+    )
+    E_x = torch.exp(
+        1j * x_pts.unsqueeze(1) * first_task.kx.unsqueeze(0)
+    )  # (n_points, nx)
+    E_y = torch.exp(
+        1j * y_pts.unsqueeze(1) * first_task.ky.unsqueeze(0)
+    )  # (n_points, ny)
+    E_x_batch = E_x.unsqueeze(0)  # (1, n_points, nx)
+    E_y_batch = E_y.unsqueeze(0)  # (1, n_points, ny)
+
+    n_feat = first_task.n_features
+    n_tgt = first_task.n_targets
+    feature_names = FEATURE_NAMES_2F if n_feat == 10 else FEATURE_NAMES_1F
+    target_names = TARGET_NAMES_2F if n_tgt == 2 else TARGET_NAMES_1F
+
     all_features = []
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    n_fields: int | None = None
+    all_targets = []
 
     for f in files:
-        loaded = load_fourier_fields(f)
-        sim = loaded["sim_params"]
-
-        # Detect field count from first file, enforce consistency
-        if n_fields is None:
-            n_fields = loaded["n_fields"]
-            label = (
-                "two-field (10 features)"
-                if n_fields == 2
-                else "single-field (5 features)"
-            )
-            print(f"Detected {label} PDE")
-        elif loaded["n_fields"] != n_fields:
-            raise ValueError(
-                f"Mixed field counts in {directory}: expected {n_fields}, got {loaded['n_fields']} in {f.name}"
-            )
-
-        domain_size = sim.get("domain_size", sim.get("Lx", 2 * np.pi))
-        if isinstance(domain_size, (list, tuple)):
-            Lx, Ly = domain_size
-        else:
-            Lx = Ly = float(domain_size)
-
-        resolution = sim.get("resolution", sim.get("nx", 128))
-        if isinstance(resolution, (list, tuple)):
-            nx, ny = resolution
-        else:
-            nx = ny = int(resolution)
-
-        n_total = loaded["field1_hat"].shape[0]
-        indices = np.linspace(0, n_total - 1, k_snapshots, dtype=int)
-
-        kx, ky, E_x, E_y = build_phase_matrices(n_points, nx, ny, Lx, Ly, seed, device)
+        task = task_class(f, device=device)
+        indices = np.linspace(0, task.n_snapshots - 1, k_snapshots, dtype=int)
 
         for idx in indices:
-            f1 = torch.tensor(loaded["field1_hat"][idx], device=device)
-            if n_fields == 2:
-                f2 = torch.tensor(loaded["field2_hat"][idx], device=device)
-                feats = evaluate_features_2f(f1, f2, kx, ky, E_x, E_y, device)
-            else:
-                feats = evaluate_features_1f(f1, kx, ky, E_x, E_y, device)
-            all_features.append(feats.cpu())
+            snap_idx = torch.tensor([int(idx)])
+            feats, tgts = task.evaluate_collocations(
+                snap_idx, E_x_batch, E_y_batch
+            )
+            # feats: (1, n_points, n_features), tgts: (1, n_points, n_targets)
+            all_features.append(feats[0].cpu())
+            all_targets.append(tgts[0].cpu())
 
-    assert n_fields is not None
-    return torch.cat(all_features, dim=0), n_fields
+    features = torch.cat(all_features, dim=0)
+    targets = torch.cat(all_targets, dim=0)
+
+    print(f"\nFeature matrix: {features.shape}  ({len(feature_names)} features)")
+    print(f"Target matrix:  {targets.shape}  ({len(target_names)} targets)")
+
+    return features, targets, feature_names, target_names
 
 
 # ---------------------------------------------------------------------------
@@ -389,10 +333,17 @@ def run_lap_analysis(features: torch.Tensor, feature_names: list[str]):
 
 
 def plot_feature_analysis(
-    S, Vt, corr, r2_values: list[float], feature_names: list[str], output_dir: Path
+    S,
+    Vt,
+    corr,
+    r2_values: list[float],
+    feature_names: list[str],
+    corr_names: list[str],
+    output_dir: Path,
 ):
     """2x2 figure: SVD spectrum, weakest direction, correlation heatmap, R² bars."""
     n_feats = len(feature_names)
+    n_corr = len(corr_names)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
@@ -414,12 +365,12 @@ def plot_feature_analysis(
     axes[0, 1].set_title(f"Weakest Direction (v_{n_feats})")
     axes[0, 1].axvline(x=0, color="black", linewidth=0.5)
 
-    # Bottom-left: Correlation heatmap
+    # Bottom-left: Correlation heatmap (features + targets)
     im = axes[1, 0].imshow(corr.numpy(), cmap="RdBu_r", vmin=-1, vmax=1)
-    axes[1, 0].set_xticks(range(n_feats))
-    axes[1, 0].set_xticklabels(feature_names, rotation=45, ha="right")
-    axes[1, 0].set_yticks(range(n_feats))
-    axes[1, 0].set_yticklabels(feature_names)
+    axes[1, 0].set_xticks(range(n_corr))
+    axes[1, 0].set_xticklabels(corr_names, rotation=45, ha="right")
+    axes[1, 0].set_yticks(range(n_corr))
+    axes[1, 0].set_yticklabels(corr_names)
     axes[1, 0].set_title("Pearson Correlation (r)")
     fig.colorbar(im, ax=axes[1, 0], shrink=0.8)
 
@@ -518,6 +469,12 @@ def main():
         "directory", type=Path, help="Directory containing *_fourier.npz files"
     )
     parser.add_argument(
+        "pde_type",
+        type=str,
+        choices=list(TASK_REGISTRY.keys()),
+        help="PDE type key (br, fhn, lo, ns, heat, nl_heat)",
+    )
+    parser.add_argument(
         "--n_points", type=int, default=500, help="Random spatial points per snapshot"
     )
     parser.add_argument(
@@ -539,21 +496,25 @@ def main():
     tee = TeeStream(sys.stdout)  # type: ignore[arg-type]
     sys.stdout = tee  # type: ignore[assignment]
 
-    features, n_fields = collect_features(
-        args.directory, args.n_points, args.seed, args.k_snapshots
-    )
-    feature_names = FEATURE_NAMES_2F if n_fields == 2 else FEATURE_NAMES_1F
-    print(
-        f"\nFeature matrix shape: {features.shape}  (samples x {len(feature_names)} features)"
+    features, targets, feature_names, target_names = collect_features(
+        args.directory, args.n_points, args.seed, args.k_snapshots, args.pde_type
     )
 
-    run_descriptive_stats(features, feature_names)
+    # Descriptive stats for features + targets combined
+    all_names = feature_names + target_names
+    all_data = torch.cat([features, targets], dim=1)
+    run_descriptive_stats(all_data, all_names)
+
+    # SVD / R² on features only (input collinearity analysis)
     S, Vt = run_svd_analysis(features, feature_names)
-    corr = run_correlation_analysis(features, feature_names)
+    # Correlation on features + targets (shows input-output relationships)
+    corr = run_correlation_analysis(all_data, all_names)
     r2_values = run_r2_analysis(features, feature_names)
-    plot_feature_analysis(S, Vt, corr, r2_values, feature_names, args.output_dir)
+    plot_feature_analysis(
+        S, Vt, corr, r2_values, feature_names, all_names, args.output_dir
+    )
 
-    if n_fields == 2:
+    if len(feature_names) == 10:
         lap_results = run_lap_analysis(features, feature_names)
         plot_lap_analysis(lap_results, feature_names, args.output_dir)
 
