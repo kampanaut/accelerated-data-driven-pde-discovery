@@ -15,6 +15,7 @@ name = "ai-chaos-theory"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cufinufft" },
     { name = "debugpy" },
     { name = "dedalus" },
     { name = "h5py" },
@@ -30,6 +31,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cufinufft", specifier = ">=2.4.1" },
     { name = "debugpy", specifier = ">=1.8.20" },
     { name = "dedalus" },
     { name = "h5py", specifier = ">=3.15.1" },
@@ -174,6 +176,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/96/38086d58a181aac86d503dfa9c47eb20715a79c3e3acbdf786e92e5c09a8/coverage-7.13.4-cp314-cp314t-win_amd64.whl", hash = "sha256:4c7d3cc01e7350f2f0f6f7036caaf5673fb56b6998889ccfe9e1c1fe75a9c932", size = 224148, upload-time = "2026-02-09T12:58:58.645Z" },
     { url = "https://files.pythonhosted.org/packages/ce/72/8d10abd3740a0beb98c305e0c3faf454366221c0f37a8bcf8f60020bb65a/coverage-7.13.4-cp314-cp314t-win_arm64.whl", hash = "sha256:23e3f687cf945070d1c90f85db66d11e3025665d8dafa831301a0e0038f3db9b", size = 222172, upload-time = "2026-02-09T12:59:00.396Z" },
     { url = "https://files.pythonhosted.org/packages/0d/4a/331fe2caf6799d591109bb9c08083080f6de90a823695d412a935622abb2/coverage-7.13.4-py3-none-any.whl", hash = "sha256:1af1641e57cf7ba1bd67d677c9abdbcd6cc2ab7da3bca7fa1e2b7e50e65f2ad0", size = 211242, upload-time = "2026-02-09T12:59:02.032Z" },
+]
+
+[[package]]
+name = "cufinufft"
+version = "2.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a1/56/3bb7302cdb415a14fd369e287b314e8c11306e05c61e019d0c9360b26e72/cufinufft-2.4.1.tar.gz", hash = "sha256:336564a5d893defd74026a7d1a08139ea3015ae1a9109f22280241e54cd22651", size = 119627, upload-time = "2025-07-08T21:47:16.206Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/a1/9c399331cb9744a1496ca2d99f0ba2d6ecd591e1ef30fc70d9f67bcaffc3/cufinufft-2.4.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c7b155a18ea1f9fa599ef6f4332737e4068c31f1db8e0dd839c0e9d59b022f5f", size = 53360268, upload-time = "2025-07-08T21:36:06.894Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/f0/35524c9dcd43d219c7857df1651a22e2b89b696065f7fd10e24ebf004e81/cufinufft-2.4.1-py3-none-win_amd64.whl", hash = "sha256:839b48901043b1421b3748bd0de1f3037ffa2a6360163dd7920e356524763437", size = 53989362, upload-time = "2025-07-08T21:38:25.16Z" },
 ]
 
 [[package]]
