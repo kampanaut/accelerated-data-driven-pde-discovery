@@ -120,26 +120,54 @@ SCRIPT_DIR = Path(__file__).parent
 BASH_SCRIPT = SCRIPT_DIR / "run_formal_experiments.sh"
 
 
-def main():
-    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+ExperimentSpec = namedtuple(
+    "ExperimentSpec", ["pde", "inner_steps", "k_shot", "loss_mode", "exp_number", "name"]
+)
 
-    config_paths: list[str] = []
+
+def enumerate_experiments() -> list[ExperimentSpec]:
+    """First pass: compute all experiment names and metadata."""
+    specs = []
     exp_number = 0
     for pde in PDES:
         for inner_steps in INNER_STEPS:
             for loss_mode in LOSS_MODES:
                 for k_shot in K_SHOTS:
                     exp_number += 1
-                    config = generate_config(pde, exp_number, inner_steps, k_shot, loss_mode)
-                    name = config["experiment"]["name"]
-                    rel_path = f"configs/formal/{name}.yaml"
-                    path = CONFIGS_DIR / f"{name}.yaml"
-                    with open(path, "w") as f:
-                        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-                    config_paths.append(rel_path)
-                    print(f"  [{exp_number:2d}/48] {path.name}")
+                    name = f"{pde.name}-{exp_number}-{inner_steps}step-k{k_shot}-{loss_mode}"
+                    specs.append(ExperimentSpec(pde, inner_steps, k_shot, loss_mode, exp_number, name))
+    return specs
 
-    print(f"\nGenerated {exp_number} configs in {CONFIGS_DIR}")
+
+def build_scatter_groups(specs: list[ExperimentSpec]) -> dict[tuple[str, str], list[str]]:
+    """Group experiment names by (pde_name, loss_mode) for scatter comparison."""
+    groups: dict[tuple[str, str], list[str]] = {}
+    for spec in specs:
+        groups.setdefault((spec.pde.name, spec.loss_mode), []).append(spec.name)
+    return groups
+
+
+def main():
+    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Two-pass: enumerate all names first, then generate configs with scatter groups
+    specs = enumerate_experiments()
+    scatter_groups = build_scatter_groups(specs)
+
+    config_paths: list[str] = []
+    for spec in specs:
+        config = generate_config(spec.pde, spec.exp_number, spec.inner_steps, spec.k_shot, spec.loss_mode)
+        group = scatter_groups[(spec.pde.name, spec.loss_mode)]
+        config["visualization"]["compare_experiments"] = group
+        name = config["experiment"]["name"]
+        rel_path = f"configs/formal/{name}.yaml"
+        path = CONFIGS_DIR / f"{name}.yaml"
+        with open(path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        config_paths.append(rel_path)
+        print(f"  [{spec.exp_number:2d}/48] {path.name}")
+
+    print(f"\nGenerated {len(specs)} configs in {CONFIGS_DIR}")
 
     # Generate bash runner scripts — one per PDE + one combined
     pde_configs: dict[str, list[tuple[int, str]]] = {}

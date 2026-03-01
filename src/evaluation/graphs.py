@@ -767,20 +767,19 @@ def _draw_histogram_panel(
     # Shared bins across all estimates
     all_vals = np.concatenate(estimates)
     bins = np.linspace(np.min(all_vals), np.max(all_vals), 51)
-    bins_list: list[float] = bins.tolist()
 
-    # Overlaid histograms + per-estimate mean lines
+    # KDE curves + per-estimate mean lines
+    x_grid = np.linspace(np.min(all_vals), np.max(all_vals), 300)
     for i, (est, label) in enumerate(zip(estimates, estimate_labels)):
         fill, edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
         mean, std = float(np.mean(est)), float(np.std(est))
-        ax.hist(
-            est,
-            bins=bins_list,
-            alpha=0.6,
-            color=fill,
-            edgecolor=edge,
+        kde = stats.gaussian_kde(est)
+        density = kde(x_grid)
+        ax.fill_between(
+            x_grid, density, alpha=0.4, color=fill,
             label=f"{label}: μ={mean:.4f}, σ={std:.4f}",
         )
+        ax.plot(x_grid, density, color=edge, linewidth=1.2)
         ax.axvline(mean, color=fill, linestyle="-", linewidth=1.5, alpha=0.8)
 
     # Truth line
@@ -801,7 +800,7 @@ def _draw_histogram_panel(
     )
 
     ax.set_xlabel("Recovered / True" if ratio_mode else f"{symbol} Jacobian entries")
-    ax.set_ylabel("Count")
+    ax.set_ylabel("Density")
     ax.set_title(panel_title)
 
     # Clip x-axis to data range so distant truth lines don't squash the histogram
