@@ -203,17 +203,27 @@ class PDETask(ABC):
         if seed is not None:
             gen.manual_seed(seed)
 
-        # Sample random snapshot indices and spatial coordinates (all on GPU)
+        # Sample random snapshot indices (uniform random — discrete dimension)
         snap_idx = torch.randint(
             0, self.n_snapshots, (n_total,), generator=gen, device=self.device
         )
-        x_pts = (
-            torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64)
-            * self.Lx
+
+        # Sobol quasi-random spatial coordinates for uniform coverage
+        # (Wu et al. 2023: Sobol beats uniform random and LHS for PDE collocation)
+        sobol_seed = (
+            seed
+            if seed is not None
+            else int(torch.randint(0, 2**31, (1,), generator=gen).item())
         )
-        y_pts = (
-            torch.rand(n_total, generator=gen, device=self.device, dtype=torch.float64)
-            * self.Ly
+        sobol = torch.quasirandom.SobolEngine(
+            dimension=2, scramble=True, seed=sobol_seed
+        )
+        sobol_pts = sobol.draw(n_total)  # (n_total, 2), CPU float32
+        x_pts = (sobol_pts[:, 0] * self.Lx).to(
+            device=self.device, dtype=torch.float64
+        )
+        y_pts = (sobol_pts[:, 1] * self.Ly).to(
+            device=self.device, dtype=torch.float64
         )
 
         # Build phase matrices on GPU

@@ -291,6 +291,9 @@ class MAMLConfig:
     spectral_loss_enabled: bool = False
     spectral_loss_mode_size: int = 64
 
+    # Gradient clipping (0 = disabled)
+    max_grad_norm: float = 0.0
+
 
 class MAMLTrainer:
     """
@@ -653,6 +656,11 @@ class MAMLTrainer:
         if not torch.isfinite(avg_loss):
             return float("nan")
         avg_loss.backward()
+        # Gradient clipping (Qin & Beatson 2022: max_norm=100.0)
+        if self.config.max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), self.config.max_grad_norm
+            )
         self.outer_opt.step()
 
         return avg_loss.item()

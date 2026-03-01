@@ -111,6 +111,7 @@ def fine_tune(
     Lx: float = 0.0,
     Ly: float = 0.0,
     spectral_mode_size: int = 0,
+    max_grad_norm: float = 0.0,
 ) -> Dict[str, List[float]]:
     """
     Fine-tune model and return train/holdout loss at each step.
@@ -180,6 +181,9 @@ def fine_tune(
         """Shared step logic: backward, optimize, holdout, callback."""
         opt.zero_grad()
         grad_loss.backward()
+        # Gradient clipping (Qin & Beatson 2022: max_norm=100.0)
+        if max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         opt.step()
 
         with torch.no_grad():
@@ -245,6 +249,7 @@ def evaluate_task(
     metal: Optional[MeTALModule] = None,
     loss_type: str = "normalized_mse",
     spectral_mode_size: int = 0,
+    max_grad_norm: float = 0.0,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -363,6 +368,7 @@ def evaluate_task(
                     Lx=task.Lx,
                     Ly=task.Ly,
                     spectral_mode_size=spectral_mode_size,
+                    max_grad_norm=max_grad_norm,
                 )
 
                 # Fine-tune from θ₀ (baseline) — same loss, no MeTAL
@@ -387,6 +393,7 @@ def evaluate_task(
                     Lx=task.Lx,
                     Ly=task.Ly,
                     spectral_mode_size=spectral_mode_size,
+                    max_grad_norm=max_grad_norm,
                 )
 
                 # Store curves for NPZ
@@ -686,6 +693,7 @@ def main():
     loss_type: str = train_cfg.get("loss_function", "normalized_mse")
     spectral_cfg = train_cfg.get("spectral_loss", {})
     spectral_mode_size: int = spectral_cfg.get("mode_size", 0) if spectral_cfg.get("enabled", False) else 0
+    max_grad_norm: float = train_cfg.get("max_grad_norm", 0.0)
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -699,6 +707,8 @@ def main():
     print(f"  Loss function: {loss_type}")
     if spectral_mode_size > 0:
         print(f"  Spectral loss: mode_size={spectral_mode_size}")
+    if max_grad_norm > 0:
+        print(f"  Gradient clipping: max_norm={max_grad_norm}")
     print(f"  Total evaluations: {total_combos}")
     print()
 
@@ -754,6 +764,7 @@ def main():
             metal=metal_module,
             loss_type=loss_type,
             spectral_mode_size=spectral_mode_size,
+            max_grad_norm=max_grad_norm,
         )
 
         # Save task metadata to results dict

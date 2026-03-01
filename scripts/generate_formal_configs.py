@@ -57,7 +57,7 @@ def generate_config(
         "inner_lr": 0.0001,
         "outer_lr": 0.001,
         "inner_steps": inner_steps,
-        "meta_batch_size": 4,
+        "meta_batch_size": 8,
         "k_shot": k_shot,
         "query_size": query_size,
         "max_iterations": 500,
@@ -74,6 +74,7 @@ def generate_config(
         "T_0": 200,
         "T_mult": 2,
         "min_lr": 0.000001,
+        "max_grad_norm": 100.0,
     }
 
     if flags["spectral"]:

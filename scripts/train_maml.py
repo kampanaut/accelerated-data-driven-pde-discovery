@@ -280,6 +280,7 @@ def main():
         metal_hidden_dim=metal_cfg.get("hidden_dim", 64),
         spectral_loss_enabled=spectral_cfg.get("enabled", False),
         spectral_loss_mode_size=spectral_cfg.get("mode_size", 64),
+        max_grad_norm=train_cfg.get("max_grad_norm", 0.0),
     )
 
     trainer = MAMLTrainer(
@@ -311,17 +312,22 @@ def main():
     # Post-training directory rename
     # =========================================================================
     nan_iter = trainer.pop_nan_iteration()
+    isnan_threshold = 20
     if nan_iter is not None:
-        # NaN exit — suffix the directory if not already suffixed
-        if not re.search(r"-ENDNAN@\d+$", exp_dir.name):
-            new_dir = exp_dir.parent / f"{exp_dir.name}-ENDNAN@{nan_iter}"
+        # NaN exit — ISNAN if too early (useless), ENDNAN if partial (salvageable)
+        if nan_iter < isnan_threshold:
+            suffix = "-ISNAN"
+        else:
+            suffix = f"-ENDNAN@{nan_iter}"
+        if not re.search(r"-(ENDNAN@\d+|ISNAN)$", exp_dir.name):
+            new_dir = exp_dir.parent / f"{exp_dir.name}{suffix}"
             exp_dir.rename(new_dir)
             exp_dir = new_dir
             print(f"Renamed → {exp_dir.name}")
     else:
-        # Normal exit — strip ENDNAN suffix if present
-        if re.search(r"-ENDNAN@\d+$", exp_dir.name):
-            clean_name = re.sub(r"-ENDNAN@\d+$", "", exp_dir.name)
+        # Normal exit — strip ENDNAN/ISNAN suffix if present
+        if re.search(r"-(ENDNAN@\d+|ISNAN)$", exp_dir.name):
+            clean_name = re.sub(r"-(ENDNAN@\d+|ISNAN)$", "", exp_dir.name)
             new_dir = exp_dir.parent / clean_name
             exp_dir.rename(new_dir)
             exp_dir = new_dir
