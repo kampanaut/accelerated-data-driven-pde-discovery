@@ -319,9 +319,9 @@ def compute_comparison_metrics(
     ratios = {}
 
     for step in fixed_steps:
-        if step - 1 <= max_step:
-            m_loss = maml_losses[step - 1]
-            b_loss = baseline_losses[step - 1]
+        if step <= max_step:
+            m_loss = maml_losses[step]
+            b_loss = baseline_losses[step]
             maml_at_steps[step] = m_loss
             baseline_at_steps[step] = b_loss
             ratios[step] = m_loss / b_loss if b_loss > 0 else float("inf")

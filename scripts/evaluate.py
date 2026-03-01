@@ -125,7 +125,7 @@ def fine_tune(
         max_steps: Number of gradient steps
         holdout_features: Holdout input features tensor for generalization eval
         holdout_targets: Holdout targets tensor for generalization eval
-        fixed_steps: Steps at which to call on_step (1-indexed, e.g. [1, 10, 50])
+        fixed_steps: Steps at which to call on_step (0 = pre-training, e.g. [0, 1, 10, 50])
         on_step: Callback called at each fixed_step with (model, step_number)
         metal: Frozen MeTALModule (None = standard loss)
         loss_type: Loss function — 'mse', 'normalized_mse', or 'mae'
@@ -178,7 +178,13 @@ def fine_tune(
     train_losses: List[float] = []
     holdout_losses: List[float] = []
 
-    # Step 0: snapshot θ* before any gradient update
+    # Step 0: record losses + snapshot before any gradient update
+    with torch.no_grad():
+        pred_0 = model(x)
+        train_losses.append(cost_fn(pred_0, y).item())
+        pred_h0 = model(x_holdout)
+        holdout_losses.append(cost_fn(pred_h0, y_holdout).item())
+
     if on_step is not None and 0 in fixed_steps_set:
         on_step(model, 0)
         model.train()
@@ -458,8 +464,8 @@ def evaluate_task(
 
                 for si, step in enumerate(fixed_steps):
                     # Loss: compare holdout at this step
-                    maml_h = maml_result["holdout_losses"][step - 1]
-                    baseline_h = baseline_result["holdout_losses"][step - 1]
+                    maml_h = maml_result["holdout_losses"][step]
+                    baseline_h = baseline_result["holdout_losses"][step]
                     if maml_h > baseline_h:
                         loss_worse_steps.append(step)
 

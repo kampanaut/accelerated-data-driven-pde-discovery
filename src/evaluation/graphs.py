@@ -178,7 +178,7 @@ def plot_train_holdout_convergence(
             color = "#e74c3c" if s in worse_set else "#2ecc71"
             alpha = 0.35 if s in worse_set else 0.2
             for ax in (ax1, ax2):
-                ax.axvline(x=s - 1, color=color, linewidth=1.0, alpha=alpha)
+                ax.axvline(x=s, color=color, linewidth=1.0, alpha=alpha)
 
     # MAML subplot
     ax1.semilogy(steps, maml_train, "b-", label=train_label, linewidth=2)
