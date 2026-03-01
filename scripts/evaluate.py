@@ -177,6 +177,11 @@ def fine_tune(
     train_losses: List[float] = []
     holdout_losses: List[float] = []
 
+    # Step 0: snapshot θ* before any gradient update
+    if on_step is not None and 0 in fixed_steps_set:
+        on_step(model, 0)
+        model.train()
+
     def _step(step_idx: int, grad_loss: torch.Tensor) -> None:
         """Shared step logic: backward, optimize, holdout, callback."""
         opt.zero_grad()

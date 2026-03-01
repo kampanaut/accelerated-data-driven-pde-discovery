@@ -51,6 +51,7 @@ evaluation:
   max_steps: 1000
   deriv_threshold: 0.0005
   fixed_steps:
+  - 0
   - 1
   - 5
   - 10
@@ -70,8 +71,7 @@ evaluation:
   holdout_size: 5000
 visualization:
   dpi: 300
-  generate_per_task: true
-  generate_aggregated: true
+  only: scatter,jacobian[0,1,25,500,1000],best-combo
   compare_experiments:
   - heat-21-1step-k800-spectral
   - heat-22-1step-k10-spectral
