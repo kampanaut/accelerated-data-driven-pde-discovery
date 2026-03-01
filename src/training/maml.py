@@ -291,7 +291,8 @@ class MAMLConfig:
     spectral_loss_enabled: bool = False
     spectral_loss_mode_size: int = 64
 
-    # Gradient clipping (0 = disabled)
+    # Gradient clipping — both inner and outer loops (0 = disabled)
+    # (Qin & Beatson 2022, Meta-PDE: max_norm=100.0 for both loops)
     max_grad_norm: float = 0.0
 
 
@@ -382,6 +383,29 @@ class MAMLTrainer:
             if self.metal is not None
             else self._standard_inner_step
         )
+
+        # Inner-loop gradient clipping callback (Qin & Beatson 2022)
+        # Norm-based: differentiable, safe for second-order MAML
+        if config.max_grad_norm > 0:
+            max_norm = config.max_grad_norm
+
+            def _clip_inner_grads(
+                grads: List[torch.Tensor],
+            ) -> List[torch.Tensor]:
+                total_norm_sq = torch.stack(
+                    [g.pow(2).sum() for g in grads if g is not None]
+                ).sum()
+                total_norm = torch.sqrt(total_norm_sq)
+                clip_coef = torch.clamp(
+                    max_norm / (total_norm + 1e-6), max=1.0
+                )
+                return [
+                    (g * clip_coef if g is not None else g) for g in grads
+                ]
+
+            self._inner_grad_callback = _clip_inner_grads
+        else:
+            self._inner_grad_callback = None
 
         # Outer loop optimizer (meta-update) — includes MeTAL params if enabled
         opt_params = list(self.model.parameters())
@@ -503,7 +527,7 @@ class MAMLTrainer:
         """Standard MAML inner step: gradient on configured loss."""
         support_pred = fmodel(support_x)
         support_loss = self.cost_function(support_pred, support_y, support_coords)
-        diffopt.step(support_loss)  # type: ignore[attr-defined]
+        diffopt.step(support_loss, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
 
     def _metal_inner_step(
         self,
@@ -527,7 +551,7 @@ class MAMLTrainer:
         query_pred = fmodel(query_x)
         meta_query = self.metal.query_step(step_idx, fmodel, query_pred)
 
-        diffopt.step(support_loss + meta_support + meta_query)  # type: ignore[attr-defined]
+        diffopt.step(support_loss + meta_support + meta_query, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Core MAML
@@ -808,6 +832,8 @@ class MAMLTrainer:
             if self.config.scheduler_type == "warm_restarts":
                 sched_desc += f" (warm restarts: T_0={self.config.T_0}, T_mult={self.config.T_mult})"
             print(f"  LR scheduler: {sched_desc}")
+        if self.config.max_grad_norm > 0:
+            print(f"  Grad clip (inner+outer): max_norm={self.config.max_grad_norm}")
         if self._resumed:
             print(f"  Resuming from iteration {start_iteration}")
         print()
