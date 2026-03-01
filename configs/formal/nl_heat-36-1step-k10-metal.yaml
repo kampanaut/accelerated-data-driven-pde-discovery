@@ -13,7 +13,7 @@ training:
   inner_lr: 0.0001
   outer_lr: 0.001
   inner_steps: 1
-  meta_batch_size: 4
+  meta_batch_size: 8
   k_shot: 10
   query_size: 2000
   max_iterations: 500
@@ -32,6 +32,7 @@ training:
   T_0: 200
   T_mult: 2
   min_lr: 1.0e-06
+  max_grad_norm: 100.0
   metal:
     enabled: true
     hidden_dim: 64
