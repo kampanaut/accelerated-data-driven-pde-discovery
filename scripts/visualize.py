@@ -51,6 +51,8 @@ from src.evaluation.graphs import (
     # Graph 11: Cross-experiment scatter
     plot_coefficient_scatter_grid,
     PanelDataDict,
+    # Graph 12: Best-combo prediction scatter
+    plot_best_combo_scatter,
 )
 
 
@@ -151,10 +153,12 @@ def load_results_with_samples(results_path: Path) -> dict:
 
         task_data["samples"] = {}
 
-        # Discover combo_keys from NPZ key prefixes
+        # Discover combo_keys from NPZ key prefixes (skip best_combo prefix)
         combo_keys = set()
         for key in raw.keys():
-            combo_keys.add(key.rsplit("/")[0])
+            prefix = key.rsplit("/")[0]
+            if prefix != "best_combo":
+                combo_keys.add(prefix)
 
         # Extract coefficient names from task-level specs
         coeff_names = [s["name"] for s in task_data.get("coefficient_specs", [])]
@@ -186,6 +190,14 @@ def load_results_with_samples(results_path: Path) -> dict:
             for k, v in combo_data.items():
                 if "_losses" in k and v is not None:
                     combo_data[k] = v.tolist()
+
+        # Extract best_combo data (stored with best_combo/ prefix in NPZ)
+        bc_preds = raw.get("best_combo/predictions")
+        if bc_preds is not None:
+            for bc_key in raw:
+                if bc_key.startswith("best_combo/"):
+                    flat_key = bc_key.replace("/", "_")
+                    task_data["samples"][flat_key] = raw[bc_key]
 
     return results
 
@@ -689,6 +701,54 @@ def generate_per_task_figures(
                         title=f"{task_name}: {coeff_name} Error vs Noise (K={k})",
                         save_path=task_dir
                         / f"coeff[{coeff_name}]_k[{k}]_error_vs_noise.png",
+                        dpi=dpi,
+                    )
+                    plt.close(fig)
+
+        # ---------------------------------------------------------------------
+        # Graph 12: Best-combo prediction scatter
+        # ---------------------------------------------------------------------
+        bc_predictions = task_samples.get("best_combo_predictions")
+        if bc_predictions is not None:
+            bc_true = task_samples.get("best_combo_true_targets")
+            bc_x = task_samples.get("best_combo_x_pts")
+            bc_y = task_samples.get("best_combo_y_pts")
+            bc_steps = task_samples.get("best_combo_steps")
+            bc_errors = task_samples.get("best_combo_coeff_error")
+            bc_key_arr = task_samples.get("best_combo_key")
+
+            if all(v is not None for v in [bc_true, bc_x, bc_y, bc_steps, bc_errors, bc_key_arr]):
+                assert bc_true is not None and bc_x is not None and bc_y is not None
+                assert bc_steps is not None and bc_errors is not None and bc_key_arr is not None
+
+                # Parse combo key for filename tags
+                bc_key_str = str(bc_key_arr)
+                # bc_key_str is like "k_800_noise_0.00"
+                k_match = re.search(r"k_(\d+)", bc_key_str)
+                n_match = re.search(r"noise_([\d.]+)", bc_key_str)
+                k_tag = k_match.group(1) if k_match else "?"
+                n_tag = n_match.group(1) if n_match else "?"
+
+                n_outputs = bc_predictions.shape[2]
+                output_labels = ["u_t"] if n_outputs == 1 else ["u_t", "v_t"]
+
+                for oi, olabel in enumerate(output_labels):
+                    suffix = f"_{olabel}" if n_outputs > 1 else ""
+                    save_name = (
+                        f"k[{k_tag}]_noise[{n_tag}]_best_combo_prediction_scatter{suffix}.png"
+                    )
+
+                    fig = plot_best_combo_scatter(
+                        predictions=bc_predictions,
+                        true_targets=bc_true,
+                        x_pts=bc_x,
+                        y_pts=bc_y,
+                        steps=bc_steps,
+                        coeff_errors=bc_errors,
+                        output_index=oi,
+                        output_label=olabel,
+                        title=f"{task_name}: Prediction Evolution ({bc_key_str}, {olabel})",
+                        save_path=task_dir / save_name,
                         dpi=dpi,
                     )
                     plt.close(fig)

@@ -287,13 +287,16 @@ def evaluate_task(
     # Per-combo arrays stored separately in NPZ
     samples: Dict[str, Any] = {}
 
+    # Track combo metadata for best-combo selection after the loop
+    combo_tracker: List[Dict[str, Any]] = []
+
     for k_idx, k in enumerate(k_values):
         # Evaluate Fourier ONCE per (task, K) — same collocation points for all noise levels
         k_seed = seed + k_idx * 100
         available_for_holdout = task.n_samples - k
         actual_holdout = min(holdout_size, available_for_holdout)
 
-        support_clean, holdout_clean, support_coords, _ = task.get_support_query_split(
+        support_clean, holdout_clean, support_coords, holdout_coords = task.get_support_query_split(
             K_shot=k,
             query_size=actual_holdout,
             seed=k_seed,
@@ -499,6 +502,17 @@ def evaluate_task(
                     f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag_str}"
                 )
 
+                # Track for best-combo selection
+                coeff_recovery = task_result[f"coefficient_recovery_{combo_key}"]
+                combo_tracker.append({
+                    "combo_key": combo_key,
+                    "k": k,
+                    "k_idx": k_idx,
+                    "noise": noise,
+                    "noise_idx": noise_idx,
+                    "error_pct_array": coeff_recovery["maml"]["error_pct"],
+                })
+
             except FileNotFoundError as e:
                 # Noisy file doesn't exist for this task
                 print(f"SKIPPED ({e})")
@@ -508,6 +522,91 @@ def evaluate_task(
             except Exception as e:
                 print(f"ERROR ({e})")
                 task_result[f"error_{combo_key}"] = str(e)
+
+    # ─── Best-combo prediction capture ─────────────────────────────────────
+    # Re-fine-tune the best combo and record model predictions at each step
+    # for spatial visualization of how the model adapts.
+    if combo_tracker:
+        # Pick combo whose best snapshot has lowest mean coefficient error
+        best = min(combo_tracker, key=lambda c: min(c["error_pct_array"]))
+        best_k = best["k"]
+        best_k_idx = best["k_idx"]
+        best_noise = best["noise"]
+        best_noise_idx = best["noise_idx"]
+        best_combo_key = best["combo_key"]
+        best_k_seed = seed + best_k_idx * 100
+
+        print(f"    Best combo: {best_combo_key} (min error={min(best['error_pct_array']):.1f}%)")
+
+        # Re-create the same split (deterministic seed)
+        available_for_holdout = task.n_samples - best_k
+        actual_holdout = min(holdout_size, available_for_holdout)
+        s_clean, h_clean, s_coords, h_coords = task.get_support_query_split(
+            K_shot=best_k,
+            query_size=actual_holdout,
+            seed=best_k_seed,
+        )
+
+        # Apply noise if needed
+        if best_noise == 0.0:
+            bc_features, bc_targets = s_clean
+            bc_h_features, bc_h_targets = h_clean
+        else:
+            noise_gen = torch.Generator(device=device)
+            noise_gen.manual_seed(best_k_seed + best_noise_idx)
+            bc_features, bc_targets = task.inject_noise(
+                s_clean[0].clone(), s_clean[1].clone(), best_noise, generator=noise_gen
+            )
+            bc_h_features, bc_h_targets = task.inject_noise(
+                h_clean[0].clone(), h_clean[1].clone(), best_noise, generator=noise_gen
+            )
+
+        # Step-0 prediction (θ* before any fine-tuning)
+        bc_model = copy.deepcopy(theta_star)
+        pred_snapshots: List[NDArray[np.floating[Any]]] = []
+        with torch.no_grad():
+            pred_snapshots.append(bc_model(bc_h_features).cpu().numpy())
+
+        # Prediction callback for fixed_steps
+        def _pred_on_step(model: torch.nn.Module, _: int) -> None:
+            with torch.no_grad():
+                pred_snapshots.append(model(bc_h_features).cpu().numpy())
+
+        # Re-fine-tune (MAML model only — baseline not needed for this plot)
+        fine_tune(
+            bc_model,
+            bc_features,
+            bc_targets,
+            fine_tune_lr,
+            max_steps,
+            holdout_features=bc_h_features,
+            holdout_targets=bc_h_targets,
+            fixed_steps=fixed_steps,
+            on_step=_pred_on_step,
+            metal=metal,
+            loss_type=loss_type,
+            coords=s_coords,
+            Lx=task.Lx,
+            Ly=task.Ly,
+            spectral_mode_size=spectral_mode_size,
+            max_grad_norm=max_grad_norm,
+        )
+
+        # Retrieve per-step coeff errors from already-computed results
+        coeff_recovery = task_result[f"coefficient_recovery_{best_combo_key}"]
+        step_errors = coeff_recovery["maml"]["error_pct"]
+
+        # Save to NPZ
+        all_steps = [0] + fixed_steps
+        samples["best_combo/key"] = np.array(best_combo_key)
+        samples["best_combo/predictions"] = np.stack(pred_snapshots)
+        samples["best_combo/true_targets"] = bc_h_targets.cpu().numpy()
+        samples["best_combo/x_pts"] = h_coords[0].cpu().numpy()
+        samples["best_combo/y_pts"] = h_coords[1].cpu().numpy()
+        samples["best_combo/steps"] = np.array(all_steps)
+        samples["best_combo/coeff_error"] = np.array(
+            [float("nan")] + step_errors  # step 0 has no coeff estimate
+        )
 
     return task_result, samples
 
