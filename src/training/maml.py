@@ -658,9 +658,10 @@ class MAMLTrainer:
         avg_loss.backward()
         # Gradient clipping (Qin & Beatson 2022: max_norm=100.0)
         if self.config.max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.config.max_grad_norm
-            )
+            clip_params = list(self.model.parameters())
+            if self.metal is not None:
+                clip_params += list(self.metal.parameters())
+            torch.nn.utils.clip_grad_norm_(clip_params, self.config.max_grad_norm)
         self.outer_opt.step()
 
         return avg_loss.item()

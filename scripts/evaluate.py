@@ -19,6 +19,7 @@ import io
 import sys
 import copy
 import json
+import shutil
 import argparse
 from dataclasses import asdict
 from pathlib import Path
@@ -732,6 +733,23 @@ def main():
     metal_state_path = checkpoint_dir / "metal_state.pt"
 
     if metal_state_path.exists():
+        metal_state = torch.load(metal_state_path, map_location=device, weights_only=True)
+
+        # NaN guard: poisoned MeTAL state contaminates all MAML evaluations
+        has_nan = any(
+            torch.isnan(v).any().item()
+            for v in metal_state.values()
+            if isinstance(v, torch.Tensor)
+        )
+        if has_nan:
+            print(f"FATAL: MeTAL state contains NaN: {metal_state_path}")
+            print(f"Cleaning up evaluation directory...")
+            eval_dir = exp_dir / "evaluation"
+            if eval_dir.exists():
+                shutil.rmtree(eval_dir)
+                print(f"Deleted: {eval_dir}")
+            sys.exit(1)
+
         n_base_params = sum(1 for _ in theta_star.parameters())
         output_dim = model_config.get("output_dim", 2)
         inner_steps = config.get("training", {}).get("inner_steps", 1)
@@ -745,9 +763,7 @@ def main():
             output_dim=output_dim,
             hidden_dim=metal_hidden_dim,
         ).to(device)
-        metal_module.load_state_dict(
-            torch.load(metal_state_path, map_location=device, weights_only=True)
-        )
+        metal_module.load_state_dict(metal_state)
         metal_module.eval()
 
         print(f"MeTAL module loaded from: {metal_state_path}")
@@ -865,6 +881,23 @@ def main():
             spectral_mode_size=spectral_mode_size,
             max_grad_norm=max_grad_norm,
         )
+
+        # NaN guard: check all arrays from this task before saving
+        nan_keys = [
+            k for k, v in task_samples.items()
+            if isinstance(v, np.ndarray) and np.isnan(v).any()
+        ]
+        if nan_keys:
+            print(f"\nFATAL: NaN detected in {len(nan_keys)} arrays for {task.task_name}:")
+            for k in nan_keys[:5]:
+                print(f"  - {k}")
+            if len(nan_keys) > 5:
+                print(f"  ... and {len(nan_keys) - 5} more")
+            print(f"Cleaning up evaluation directory...")
+            if eval_dir.exists():
+                shutil.rmtree(eval_dir)
+                print(f"Deleted: {eval_dir}")
+            sys.exit(1)
 
         # Save task metadata to results dict
         results["tasks"][task.task_name] = task_result
