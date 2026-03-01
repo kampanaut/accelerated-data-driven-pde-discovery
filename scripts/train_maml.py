@@ -213,6 +213,12 @@ def main():
     # =========================================================================
     initial_checkpoint_path = exp_dir / "checkpoints" / "initial_model.pt"
 
+    # Guard: DONE sentinel means training completed — never overwrite
+    done_path = exp_dir / "training" / "DONE"
+    if done_path.exists():
+        print(f"SKIP: {exp_dir.name} already trained (DONE sentinel exists).")
+        sys.exit(0)
+
     if not args.resume:
         # Guard against accidental overwrite of a trained experiment
         best_model_path = exp_dir / "checkpoints" / "best_model.pt"
@@ -361,6 +367,10 @@ def main():
     print(f"Best model (θ*): {checkpoint_dir / 'best_model.pt'}")
     print(f"Training history: {history_path}")
     print()
+    # Write DONE sentinel — this experiment is complete, never resume
+    done_path = exp_dir / "training" / "DONE"
+    done_path.touch()
+
     print("Next steps:")
     print(f"  python scripts/evaluate.py --config {args.config}")
     print()
