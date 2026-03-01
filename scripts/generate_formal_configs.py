@@ -29,7 +29,7 @@ K_SHOTS = [800, 10]
 LOSS_MODES = ["baseline", "metal", "spectral", "metal-spectral"]
 
 # ── Shared constants ─────────────────────────────────────────────────────
-FIXED_STEPS = [1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
+FIXED_STEPS = [0, 1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
 
 CONFIGS_DIR = Path(__file__).parent.parent / "configs" / "formal"
 
@@ -110,8 +110,7 @@ def generate_config(
         },
         "visualization": {
             "dpi": 300,
-            "generate_per_task": True,
-            "generate_aggregated": True,
+            "only": "scatter,jacobian[0,1,25,500,1000],best-combo",
         },
     }
 
