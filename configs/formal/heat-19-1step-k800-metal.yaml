@@ -73,3 +73,8 @@ visualization:
   dpi: 300
   generate_per_task: true
   generate_aggregated: true
+  compare_experiments:
+  - heat-19-1step-k800-metal
+  - heat-20-1step-k10-metal
+  - heat-27-5step-k800-metal
+  - heat-28-5step-k10-metal

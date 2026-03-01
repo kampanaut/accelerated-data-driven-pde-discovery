@@ -70,3 +70,8 @@ visualization:
   dpi: 300
   generate_per_task: true
   generate_aggregated: true
+  compare_experiments:
+  - br-1-1step-k800-baseline
+  - br-2-1step-k10-baseline
+  - br-9-5step-k800-baseline
+  - br-10-5step-k10-baseline
