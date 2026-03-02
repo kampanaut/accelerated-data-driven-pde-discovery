@@ -13,7 +13,7 @@ import dataclasses
 import json
 import re
 import argparse
-import warnings
+import shutil
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
 
@@ -70,11 +70,7 @@ class GraphSelection:
         available = set(all_steps)
         missing = [s for s in requested if s not in available]
         if missing:
-            warnings.warn(
-                f"--only {name}: requested steps {missing} not in available "
-                f"steps {all_steps}",
-                stacklevel=2,
-            )
+            print(f"  Skipping {name} steps {missing}: not in available steps {all_steps}")
         return [s for s in requested if s in available]
 
     def experiments_for(self, name: str) -> list[str] | None:
@@ -1652,7 +1648,7 @@ def validate_experiment_compatibility(
 
 def generate_cross_experiment_scatter(
     experiment_results: list[Tuple[str, dict]],
-    output_dir: Path,
+    output_dirs: list[Path],
     dpi: int,
     sel: GraphSelection = GraphSelection(
         graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
@@ -1663,6 +1659,8 @@ def generate_cross_experiment_scatter(
 
     Generates one scatter image per fixed_step. Each panel shows true vs
     recovered coefficients across all experiments, for both MAML and baseline.
+
+    Saves to each directory in output_dirs (supports multi-experiment placement).
     """
     k_values, noise_levels = validate_experiment_compatibility(experiment_results)
 
@@ -1760,24 +1758,31 @@ def generate_cross_experiment_scatter(
 
                     panel_data[key] = models
 
-        if step_val is not None:
-            save_path = (
-                output_dir / f"step[{step_val}]_coeff_scatter_true_vs_recovered.png"
-            )
-        else:
-            save_path = output_dir / "coeff_scatter_true_vs_recovered.png"
+        filename = (
+            f"step[{step_val}]_coeff_scatter_true_vs_recovered.png"
+            if step_val is not None
+            else "coeff_scatter_true_vs_recovered.png"
+        )
 
+        # Save to first dir via plot function, then copy to remaining dirs
+        primary_path = output_dirs[0] / filename
         fig = plot_coefficient_scatter_grid(
             panel_data=panel_data,
             coeff_names=coeff_names,
             k_values=k_values,
             noise_levels=noise_levels,
-            save_path=save_path,
+            save_path=primary_path,
             dpi=dpi,
             step=step_val,
         )
         plt.close(fig)
-        print(f"  Saved scatter (step {step_val}): {save_path}")
+
+        for out_dir in output_dirs[1:]:
+            copy_path = out_dir / filename
+            copy_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(primary_path, copy_path)
+
+        print(f"  Saved scatter (step {step_val}) to {len(output_dirs)} dir(s)")
 
 
 def main():
@@ -1786,7 +1791,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--config", type=Path, required=True, help="Path to experiment YAML config"
+        "--config",
+        type=Path,
+        default=None,
+        help="Path to experiment YAML config (optional when --only scatter(exp,...) is used)",
     )
     parser.add_argument(
         "--results",
@@ -1809,13 +1817,60 @@ def main():
     args = parser.parse_args()
 
     # =========================================================================
-    # Load configuration
+    # Parse --only early (needed to decide if config is required)
     # =========================================================================
+    sel = parse_only(args.only)
+
     print("=" * 60)
     print("MAML Visualization")
     print("=" * 60)
     print()
 
+    # =========================================================================
+    # Config-less scatter: --only scatter(...) without --config
+    # =========================================================================
+    exp_filter = sel.experiments_for("scatter")
+    if args.config is None:
+        if exp_filter is None:
+            parser.error("--config is required unless --only scatter(exp,...) is used")
+        non_scatter = sel.graphs - {"scatter"}
+        if non_scatter:
+            parser.error(
+                f"--config is required for: {', '.join(sorted(non_scatter))}. "
+                f"Only scatter works config-less with (exp,...) syntax."
+            )
+
+        print("-" * 60)
+        print("Generating cross-experiment coefficient scatter (config-less)...")
+        print("-" * 60)
+
+        default_config: dict = {"output": {"base_dir": "data/models"}}
+        discovered = resolve_experiment_names(default_config, exp_filter)
+        if len(discovered) >= 1:
+            experiment_results: list[Tuple[str, dict]] = []
+            for dir_name, rpath in discovered:
+                with open(rpath, "r") as f:
+                    experiment_results.append((dir_name, json.load(f)))
+
+            models_root = Path("data/models")
+            output_dirs = [
+                models_root / name / "figures" / "only" for name, _ in discovered
+            ]
+            generate_cross_experiment_scatter(
+                experiment_results, output_dirs, 150, sel
+            )
+        else:
+            print("  No experiments with evaluation results found.")
+        print()
+
+        print("=" * 60)
+        print("Visualization complete!")
+        print("=" * 60)
+        return
+
+    # =========================================================================
+    # Full pipeline with --config
+    # =========================================================================
     config = load_config(args.config)
     exp_name = config["experiment"]["name"]
     exp_dir = (
@@ -1825,16 +1880,15 @@ def main():
     print(f"Experiment: {exp_name}")
     print()
 
-    # =========================================================================
-    # Start processing
-    # =========================================================================
     eval_cfg = config.get("evaluation", {})
     viz_cfg = config.get("visualization", {})
     dpi = viz_cfg.get("dpi", 150)
 
-    # --only CLI overrides visualization.only in config
-    only_str = args.only if args.only is not None else viz_cfg.get("only")
-    sel = parse_only(only_str)
+    # Config-level --only (CLI already parsed above, config is fallback)
+    if args.only is None:
+        config_only = viz_cfg.get("only")
+        if config_only is not None:
+            sel = parse_only(config_only)
 
     eval_base_dir = exp_dir / "evaluation"
     results_path = eval_base_dir / "results.json"
@@ -1899,19 +1953,29 @@ def main():
         print("Generating cross-experiment coefficient scatter...")
         print("-" * 60)
 
+        # Re-check exp_filter (sel may have been replaced by config-level --only)
         exp_filter = sel.experiments_for("scatter")
         if exp_filter is not None:
             discovered = resolve_experiment_names(config, exp_filter)
+            scatter_output_dirs = [
+                Path(config.get("output", {}).get("base_dir", "data/models"))
+                / name
+                / "figures"
+                / "only"
+                for name, _ in discovered
+            ]
         else:
             discovered = discover_comparison_experiments(config, exp_dir)
+            scatter_output_dirs = [output_dir]
+
         if len(discovered) >= 1:
-            experiment_results: list[Tuple[str, dict]] = []
+            config_experiment_results: list[Tuple[str, dict]] = []
             for dir_name, rpath in discovered:
                 with open(rpath, "r") as f:
-                    experiment_results.append((dir_name, json.load(f)))
+                    config_experiment_results.append((dir_name, json.load(f)))
 
             generate_cross_experiment_scatter(
-                experiment_results, output_dir, dpi, sel
+                config_experiment_results, scatter_output_dirs, dpi, sel
             )
         else:
             print("  No experiments with evaluation results found.")
