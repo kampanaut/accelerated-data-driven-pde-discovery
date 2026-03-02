@@ -153,7 +153,10 @@ def fine_tune(
             f"Unknown loss_type: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'."
         )
 
-    # Wrap with spectral loss if coords provided and mode_size > 0
+    # Metric: always clean pointwise loss (for recording — comparable across experiments)
+    metric_fn = _pw
+
+    # Training cost: pointwise + optional spectral (drives gradient updates only)
     use_spectral = coords is not None and spectral_mode_size > 0
     if use_spectral:
         assert coords is not None
@@ -181,9 +184,9 @@ def fine_tune(
     # Step 0: record losses + snapshot before any gradient update
     with torch.no_grad():
         pred_0 = model(x)
-        train_losses.append(cost_fn(pred_0, y).item())
+        train_losses.append(metric_fn(pred_0, y).item())
         pred_h0 = model(x_holdout)
-        holdout_losses.append(cost_fn(pred_h0, y_holdout).item())
+        holdout_losses.append(metric_fn(pred_h0, y_holdout).item())
 
     if on_step is not None and 0 in fixed_steps_set:
         on_step(model, 0)
@@ -200,7 +203,7 @@ def fine_tune(
 
         with torch.no_grad():
             pred_holdout = model(x_holdout)
-            holdout_loss = cost_fn(pred_holdout, y_holdout)
+            holdout_loss = metric_fn(pred_holdout, y_holdout)
             holdout_losses.append(holdout_loss.item())
 
         step_num = step_idx + 1
@@ -212,20 +215,20 @@ def fine_tune(
     metal_steps = metal.n_steps if metal is not None else 0
     for i in range(min(metal_steps, max_steps)):
         pred = model(x)
-        recorded_loss = cost_fn(pred, y)
-        train_losses.append(recorded_loss.item())
+        train_losses.append(metric_fn(pred, y).item())
 
+        grad_loss = cost_fn(pred, y)
         meta_support = metal.support_step(i, model, pred, y, cost_fn)  # type: ignore[union-attr]
         meta_query = metal.query_step(i, model, pred)  # type: ignore[union-attr]
-        _step(i, recorded_loss + meta_support + meta_query)
+        _step(i, grad_loss + meta_support + meta_query)
 
     # Phase 2: Standard loss for remaining steps
     for i in range(metal_steps, max_steps):
         pred = model(x)
-        recorded_loss = cost_fn(pred, y)
-        train_losses.append(recorded_loss.item())
+        train_losses.append(metric_fn(pred, y).item())
 
-        _step(i, recorded_loss)
+        grad_loss = cost_fn(pred, y)
+        _step(i, grad_loss)
 
     return {"train_losses": train_losses, "holdout_losses": holdout_losses}
 
