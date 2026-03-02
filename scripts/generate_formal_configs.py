@@ -1,6 +1,7 @@
-"""Generate all 48 formal experiment configs.
+"""Generate formal experiment configs (with and without zeroed non-RHS features).
 
-Grid: 2 inner_steps × 2 k_shot × 4 loss_modes × 3 PDEs = 48
+Grid per variant: 2 inner_steps × 2 k_shot × 4 loss_modes × 3 PDEs = 48
+Total: 48 formal + 48 zeroed = 96 configs
 """
 
 import yaml
@@ -31,7 +32,13 @@ LOSS_MODES = ["baseline", "metal", "spectral", "metal-spectral"]
 # ── Shared constants ─────────────────────────────────────────────────────
 FIXED_STEPS = [0, 1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
 
-CONFIGS_DIR = Path(__file__).parent.parent / "configs" / "formal"
+# ── Variant definitions ─────────────────────────────────────────────────
+Variant = namedtuple("Variant", ["label", "configs_dir", "models_dir", "zero_non_rhs"])
+
+VARIANTS = [
+    Variant("formal",  "configs/formal",  "data/models/formal",  False),
+    Variant("zeroed",  "configs/zeroed",  "data/models/zeroed",  True),
+]
 
 
 def loss_mode_flags(mode: str) -> dict:
@@ -47,13 +54,15 @@ def generate_config(
     inner_steps: int,
     k_shot: int,
     loss_mode: str,
+    models_dir: str,
+    zero_non_rhs_features: bool,
 ) -> dict:
     """Build the full config dict for one experiment."""
     flags = loss_mode_flags(loss_mode)
     name = f"{pde.name}-{exp_number}-{inner_steps}step-k{k_shot}-{loss_mode}"
     query_size = 1600 if k_shot == 800 else 2000
 
-    training = {
+    training: dict = {
         "inner_lr": 0.0001,
         "outer_lr": 0.001,
         "inner_steps": inner_steps,
@@ -75,6 +84,7 @@ def generate_config(
         "T_mult": 2,
         "min_lr": 0.000001,
         "max_grad_norm": 100.0,
+        "zero_non_rhs_features": zero_non_rhs_features,
     }
 
     if flags["spectral"]:
@@ -91,7 +101,7 @@ def generate_config(
             "device": "cuda",
         },
         "output": {
-            "base_dir": f"data/models/formal/{pde.name}",
+            "base_dir": f"{models_dir}/{pde.name}",
         },
         "data": {
             "meta_train_dir": pde.train_dir,
@@ -116,7 +126,7 @@ def generate_config(
 
 
 SCRIPT_DIR = Path(__file__).parent
-BASH_SCRIPT = SCRIPT_DIR / "run_formal_experiments.sh"
+ROOT_DIR = Path(__file__).parent.parent
 
 
 ExperimentSpec = namedtuple(
@@ -146,62 +156,76 @@ def build_scatter_groups(specs: list[ExperimentSpec]) -> dict[tuple[str, str], l
     return groups
 
 
-def main():
-    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+def _write_phased_script(path: Path, entries: list[tuple[int, str]], total: int) -> None:
+    """Write a script that trains all, then evaluates all, then visualizes all."""
+    lines = ["#!/usr/bin/env bash", "set -e", ""]
+    lines.append("# === TRAIN ===")
+    for i, cfg in entries:
+        lines.append(f'echo "=== TRAIN [{i}/{total}] {Path(cfg).stem} ==="')
+        lines.append(f"uv run python scripts/train_maml.py --config {cfg}")
+        lines.append("")
+    lines.append("# === EVALUATE ===")
+    for i, cfg in entries:
+        lines.append(f'echo "=== EVAL [{i}/{total}] {Path(cfg).stem} ==="')
+        lines.append(f"uv run python scripts/evaluate.py --config {cfg}")
+        lines.append("")
+    lines.append("# === VISUALIZE ===")
+    for i, cfg in entries:
+        lines.append(f'echo "=== VIS [{i}/{total}] {Path(cfg).stem} ==="')
+        lines.append(f"uv run python scripts/visualize.py --config {cfg}")
+        lines.append("")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    path.chmod(0o755)
+    print(f"  Generated {path}")
 
-    # Two-pass: enumerate all names first, then generate configs with scatter groups
+
+def main():
     specs = enumerate_experiments()
     scatter_groups = build_scatter_groups(specs)
+    total = len(specs)
 
-    config_paths: list[str] = []
-    for spec in specs:
-        config = generate_config(spec.pde, spec.exp_number, spec.inner_steps, spec.k_shot, spec.loss_mode)
-        group = scatter_groups[(spec.pde.name, spec.loss_mode)]
-        config["visualization"]["compare_experiments"] = group
-        name = config["experiment"]["name"]
-        rel_path = f"configs/formal/{name}.yaml"
-        path = CONFIGS_DIR / f"{name}.yaml"
-        with open(path, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        config_paths.append(rel_path)
-        print(f"  [{spec.exp_number:2d}/48] {path.name}")
+    for variant in VARIANTS:
+        configs_dir = ROOT_DIR / variant.configs_dir
+        configs_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nGenerated {len(specs)} configs in {CONFIGS_DIR}")
+        print(f"\n{'=' * 60}")
+        print(f"Generating {variant.label} configs (zero_non_rhs={variant.zero_non_rhs})")
+        print(f"{'=' * 60}")
 
-    # Generate bash runner scripts — one per PDE + one combined
-    pde_configs: dict[str, list[tuple[int, str]]] = {}
-    for i, cfg in enumerate(config_paths, 1):
-        pde_name = Path(cfg).stem.split("-")[0]
-        pde_configs.setdefault(pde_name, []).append((i, cfg))
+        config_paths: list[str] = []
+        for spec in specs:
+            config = generate_config(
+                spec.pde, spec.exp_number, spec.inner_steps, spec.k_shot,
+                spec.loss_mode, variant.models_dir, variant.zero_non_rhs,
+            )
+            group = scatter_groups[(spec.pde.name, spec.loss_mode)]
+            config["visualization"]["compare_experiments"] = group
+            name = config["experiment"]["name"]
+            rel_path = f"{variant.configs_dir}/{name}.yaml"
+            path = configs_dir / f"{name}.yaml"
+            with open(path, "w") as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            config_paths.append(rel_path)
+            print(f"  [{spec.exp_number:2d}/{total}] {path.name}")
 
-    def _write_phased_script(path: Path, entries: list[tuple[int, str]], total: int) -> None:
-        """Write a script that trains all, then evaluates all, then visualizes all."""
-        lines = ["#!/usr/bin/env bash", "set -e", ""]
-        lines.append("# === TRAIN ===")
-        for i, cfg in entries:
-            lines.append(f'echo "=== TRAIN [{i}/{total}] {Path(cfg).stem} ==="')
-            lines.append(f"uv run python scripts/train_maml.py --config {cfg}")
-            lines.append("")
-        lines.append("# === EVALUATE ===")
-        for i, cfg in entries:
-            lines.append(f'echo "=== EVAL [{i}/{total}] {Path(cfg).stem} ==="')
-            lines.append(f"uv run python scripts/evaluate.py --config {cfg}")
-            lines.append("")
-        lines.append("# === VISUALIZE ===")
-        for i, cfg in entries:
-            lines.append(f'echo "=== VIS [{i}/{total}] {Path(cfg).stem} ==="')
-            lines.append(f"uv run python scripts/visualize.py --config {cfg}")
-            lines.append("")
-        with open(path, "w") as f:
-            f.write("\n".join(lines))
-        path.chmod(0o755)
-        print(f"Generated {path}")
+        print(f"\n  Generated {len(specs)} configs in {configs_dir}")
 
-    for pde_name, entries in pde_configs.items():
-        _write_phased_script(SCRIPT_DIR / f"run_formal_{pde_name}.sh", entries, 48)
+        # Generate bash runner scripts — one per PDE + one combined
+        pde_configs: dict[str, list[tuple[int, str]]] = {}
+        for i, cfg in enumerate(config_paths, 1):
+            pde_name = Path(cfg).stem.split("-")[0]
+            pde_configs.setdefault(pde_name, []).append((i, cfg))
 
-    all_entries = [(i, cfg) for i, cfg in enumerate(config_paths, 1)]
-    _write_phased_script(BASH_SCRIPT, all_entries, 48)
+        for pde_name, entries in pde_configs.items():
+            _write_phased_script(
+                SCRIPT_DIR / f"run_{variant.label}_{pde_name}.sh", entries, total,
+            )
+
+        all_entries = [(i, cfg) for i, cfg in enumerate(config_paths, 1)]
+        _write_phased_script(
+            SCRIPT_DIR / f"run_{variant.label}_experiments.sh", all_entries, total,
+        )
 
 
 if __name__ == "__main__":

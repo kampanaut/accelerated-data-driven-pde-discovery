@@ -262,6 +262,7 @@ def evaluate_task(
     loss_type: str = "normalized_mse",
     spectral_mode_size: int = 0,
     max_grad_norm: float = 0.0,
+    zero_non_rhs_features: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -338,6 +339,11 @@ def evaluate_task(
                     )
                     features, targets = feat_s, tgt_s
                     holdout_features, holdout_targets = feat_h, tgt_h
+
+                # Zero non-RHS features (after noise injection)
+                if zero_non_rhs_features:
+                    features = task.zero_non_rhs_features(features)
+                    holdout_features = task.zero_non_rhs_features(holdout_features)
 
                 # --- Build callback for intermediate Jacobian extraction ---
                 maml_jac_snapshots: List[JacobianResults] = []
@@ -574,6 +580,11 @@ def evaluate_task(
             bc_h_features, bc_h_targets = task.inject_noise(
                 h_clean[0].clone(), h_clean[1].clone(), best_noise, generator=noise_gen
             )
+
+        # Zero non-RHS features (after noise injection)
+        if zero_non_rhs_features:
+            bc_features = task.zero_non_rhs_features(bc_features)
+            bc_h_features = task.zero_non_rhs_features(bc_h_features)
 
         # Step-0 prediction (θ* before any fine-tuning)
         bc_model = copy.deepcopy(theta_star)
@@ -828,6 +839,7 @@ def main():
     spectral_cfg = train_cfg.get("spectral_loss", {})
     spectral_mode_size: int = spectral_cfg.get("mode_size", 0) if spectral_cfg.get("enabled", False) else 0
     max_grad_norm: float = train_cfg.get("max_grad_norm", 0.0)
+    zero_non_rhs: bool = train_cfg.get("zero_non_rhs_features", False)
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -843,6 +855,8 @@ def main():
         print(f"  Spectral loss: mode_size={spectral_mode_size}")
     if max_grad_norm > 0:
         print(f"  Gradient clipping: max_norm={max_grad_norm}")
+    if zero_non_rhs:
+        print(f"  Zero non-RHS features: True")
     print(f"  Total evaluations: {total_combos}")
     print()
 
@@ -894,6 +908,7 @@ def main():
             loss_type=loss_type,
             spectral_mode_size=spectral_mode_size,
             max_grad_norm=max_grad_norm,
+            zero_non_rhs_features=zero_non_rhs,
         )
 
         # NaN guard: check all arrays from this task before saving

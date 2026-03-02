@@ -295,6 +295,9 @@ class MAMLConfig:
     # (Qin & Beatson 2022, Meta-PDE: max_norm=100.0 for both loops)
     max_grad_norm: float = 0.0
 
+    # Zero non-RHS input features to block absorption routes
+    zero_non_rhs_features: bool = False
+
 
 class MAMLTrainer:
     """
@@ -587,6 +590,11 @@ class MAMLTrainer:
         # Unpack tensors (already on device from task loader)
         support_x, support_y = support
         query_x, query_y = query
+
+        # Zero non-RHS features to block absorption routes
+        if self.config.zero_non_rhs_features:
+            support_x = task.zero_non_rhs_features(support_x)
+            query_x = task.zero_non_rhs_features(query_x)
 
         # Set domain info for spectral loss
         self._current_Lx = task.Lx

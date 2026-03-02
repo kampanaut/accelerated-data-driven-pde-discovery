@@ -33,6 +33,7 @@ training:
   T_mult: 2
   min_lr: 1.0e-06
   max_grad_norm: 100.0
+  zero_non_rhs_features: false
 evaluation:
   k_values:
   - 800

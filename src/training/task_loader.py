@@ -174,6 +174,33 @@ class PDETask(ABC):
         """Return CoefficientSpec list for JVP-based coefficient extraction."""
         pass
 
+    @property
+    @abstractmethod
+    def rhs_feature_mask(self) -> list[bool]:
+        """Boolean mask over input features: True = feature appears in PDE RHS.
+
+        Length must equal n_features. Features where mask is False are
+        structurally irrelevant to the PDE and can be zeroed to prevent
+        the MLP from using them as absorption routes.
+        """
+        pass
+
+    def zero_non_rhs_features(self, features: torch.Tensor) -> torch.Tensor:
+        """Return a clone with non-RHS feature columns zeroed out.
+
+        Args:
+            features: (N, n_features) tensor
+
+        Returns:
+            Clone with columns where rhs_feature_mask is False set to 0.
+        """
+        mask = self.rhs_feature_mask
+        out = features.clone()
+        for i, in_rhs in enumerate(mask):
+            if not in_rhs:
+                out[:, i] = 0.0
+        return out
+
     def get_support_query_split(
         self,
         K_shot: int,
@@ -399,6 +426,12 @@ class BrusselatorTask(PDETask):
         return {"D_u": self.D_u, "D_v": self.D_v}
 
     @property
+    def rhs_feature_mask(self) -> list[bool]:
+        # BR RHS: D_u*∇²u + k1 - (k2+1)*u + u²v, D_v*∇²v + k2*u - u²v
+        # Uses: u, v, u_xx, u_yy, v_xx, v_yy. NOT: u_x, u_y, v_x, v_y
+        return [True, True, False, False, True, True, False, False, True, True]
+
+    @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
             CoefficientSpec(
@@ -538,6 +571,12 @@ class FitzHughNagumoTask(PDETask):
         return {"D_u": self.D_u, "D_v": self.D_v}
 
     @property
+    def rhs_feature_mask(self) -> list[bool]:
+        # FHN RHS: D_u*∇²u + u - u³ - v, D_v*∇²v + eps*(u - a*v - b)
+        # Uses: u, v, u_xx, u_yy, v_xx, v_yy. NOT: u_x, u_y, v_x, v_y
+        return [True, True, False, False, True, True, False, False, True, True]
+
+    @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
             CoefficientSpec(
@@ -671,6 +710,12 @@ class LambdaOmegaTask(PDETask):
         return {"D_u": self.D_u, "D_v": self.D_v}
 
     @property
+    def rhs_feature_mask(self) -> list[bool]:
+        # λ-ω RHS: D_u*∇²u + a*u - (u+c*v)*r², D_v*∇²v + a*v + (c*u-v)*r²
+        # Uses: u, v, u_xx, u_yy, v_xx, v_yy. NOT: u_x, u_y, v_x, v_y
+        return [True, True, False, False, True, True, False, False, True, True]
+
+    @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
             CoefficientSpec(
@@ -790,6 +835,12 @@ class NavierStokesTask(PDETask):
         return {"nu": self.nu}
 
     @property
+    def rhs_feature_mask(self) -> list[bool]:
+        # NS RHS: -(u*u_x + v*u_y) - p_x + nu*∇²u, -(u*v_x + v*v_y) - p_y + nu*∇²v
+        # ALL 10 features appear in the RHS (advection uses first derivatives)
+        return [True, True, True, True, True, True, True, True, True, True]
+
+    @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
             CoefficientSpec(
@@ -898,6 +949,12 @@ class HeatEquationTask(PDETask):
         return {"D": self.D}
 
     @property
+    def rhs_feature_mask(self) -> list[bool]:
+        # Heat RHS: D * (u_xx + u_yy)
+        # Uses: u_xx, u_yy. NOT: u, u_x, u_y
+        return [False, False, False, True, True]
+
+    @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
             CoefficientSpec(
@@ -994,6 +1051,12 @@ class NLHeatEquationTask(PDETask):
     @property
     def diffusion_coeffs(self) -> dict:
         return {"K": self.K}
+
+    @property
+    def rhs_feature_mask(self) -> list[bool]:
+        # NLHeat RHS: K * (1 - u) * (u_xx + u_yy)
+        # Uses: u, u_xx, u_yy. NOT: u_x, u_y
+        return [True, False, False, True, True]
 
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:

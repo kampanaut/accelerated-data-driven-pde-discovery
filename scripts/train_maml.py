@@ -287,6 +287,7 @@ def main():
         spectral_loss_enabled=spectral_cfg.get("enabled", False),
         spectral_loss_mode_size=spectral_cfg.get("mode_size", 64),
         max_grad_norm=train_cfg.get("max_grad_norm", 0.0),
+        zero_non_rhs_features=train_cfg.get("zero_non_rhs_features", False),
     )
 
     trainer = MAMLTrainer(
