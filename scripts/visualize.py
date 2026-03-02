@@ -6,6 +6,7 @@ Usage:
     python scripts/visualize.py --config configs/experiment.yaml
     python scripts/visualize.py --config configs/experiment.yaml --only scatter,best-combo
     python scripts/visualize.py --config configs/experiment.yaml --only jacobian[1,1000]
+    python scripts/visualize.py --config configs/experiment.yaml --only scatter[500](br-18,heat-1)
 """
 
 import dataclasses
@@ -47,13 +48,16 @@ METRICS_GRAPHS = {"generalization", "loss-ratio", "noise-robustness", "sample-ef
 
 STEP_FILTERABLE = {"jacobian", "scatter", "loss-ratio"}
 
+EXPERIMENT_FILTERABLE = {"scatter"}
+
 
 @dataclasses.dataclass
 class GraphSelection:
-    """Controls which graphs to generate and optional per-step filtering."""
+    """Controls which graphs to generate and optional per-step/experiment filtering."""
 
     graphs: set[str]
     step_filters: dict[str, list[int]]
+    experiment_filters: dict[str, list[str]]
     all_graphs: bool  # True when --only not provided
 
     def enabled(self, name: str) -> bool:
@@ -73,6 +77,10 @@ class GraphSelection:
             )
         return [s for s in requested if s in available]
 
+    def experiments_for(self, name: str) -> list[str] | None:
+        """Return explicit experiment list, or None for default discovery."""
+        return self.experiment_filters.get(name)
+
     def needs_metrics(self) -> bool:
         if self.all_graphs:
             return True
@@ -83,20 +91,28 @@ def parse_only(arg: str | None) -> GraphSelection:
     """
     Parse --only argument into a GraphSelection.
 
-    Syntax: comma-separated graph names with optional [step,...] suffix.
-    Example: "jacobian[1,1000],scatter[500],best-combo"
+    Syntax: comma-separated graph names with optional [step,...] and/or
+    (experiment,...) suffixes.
+
+    Examples:
+        "jacobian[1,1000],scatter[500],best-combo"
+        "scatter[1,25,1000](br-18,heat-1,br-19)"
+        "scatter(br-18,heat-1)"
 
     Returns GraphSelection with all_graphs=True when arg is None.
     """
     if arg is None:
-        return GraphSelection(graphs=set(), step_filters={}, all_graphs=True)
+        return GraphSelection(
+            graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
+        )
 
     graphs: set[str] = set()
     step_filters: dict[str, list[int]] = {}
-    pattern = re.compile(r"^([a-z-]+)(?:\[([0-9,]+)\])?$")
+    experiment_filters: dict[str, list[str]] = {}
+    pattern = re.compile(r"^([a-z-]+)(?:\[([0-9,]+)\])?(?:\(([^)]+)\))?$")
 
-    # Split on commas NOT inside brackets
-    tokens = re.split(r",(?![^[]*\])", arg)
+    # Split on commas NOT inside brackets or parentheses
+    tokens = re.split(r",(?![^[]*\])(?![^(]*\))", arg)
 
     for token in tokens:
         token = token.strip()
@@ -107,7 +123,7 @@ def parse_only(arg: str | None) -> GraphSelection:
         if m is None:
             raise ValueError(
                 f"Invalid --only token: {token!r}. "
-                f"Expected format: name or name[step1,step2,...]\n"
+                f"Expected format: name, name[step,...], or name(exp,...)\n"
                 f"Valid names: {', '.join(sorted(VALID_GRAPH_NAMES))}"
             )
 
@@ -127,11 +143,25 @@ def parse_only(arg: str | None) -> GraphSelection:
                     f"Only {', '.join(sorted(STEP_FILTERABLE))} accept [steps]."
                 )
             steps = [int(s) for s in m.group(2).split(",")]
-            # Merge with any existing steps for this name
             existing = step_filters.get(name, [])
             step_filters[name] = sorted(set(existing + steps))
 
-    return GraphSelection(graphs=graphs, step_filters=step_filters, all_graphs=False)
+        if m.group(3) is not None:
+            if name not in EXPERIMENT_FILTERABLE:
+                raise ValueError(
+                    f"Experiment filtering not supported for {name!r}. "
+                    f"Only {', '.join(sorted(EXPERIMENT_FILTERABLE))} accept (experiments)."
+                )
+            exps = [e.strip() for e in m.group(3).split(",")]
+            existing_exps = experiment_filters.get(name, [])
+            experiment_filters[name] = list(dict.fromkeys(existing_exps + exps))
+
+    return GraphSelection(
+        graphs=graphs,
+        step_filters=step_filters,
+        experiment_filters=experiment_filters,
+        all_graphs=False,
+    )
 
 
 from src.evaluation.graphs import (
@@ -357,7 +387,9 @@ def generate_per_task_figures(
     dpi: int,
     deriv_threshold: float = 1e-7,
     holdout_size: int = 1000,
-    sel: GraphSelection = GraphSelection(set(), {}, True),
+    sel: GraphSelection = GraphSelection(
+        graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
+    ),
 ) -> None:
     """Generate all per-task figures."""
 
@@ -894,7 +926,9 @@ def generate_aggregated_figures(
     dpi: int,
     deriv_threshold: float = 1e-7,
     holdout_size: int = 1000,
-    sel: GraphSelection = GraphSelection(set(), {}, True),
+    sel: GraphSelection = GraphSelection(
+        graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
+    ),
 ) -> None:
     """Generate aggregated figures (mean ± std across tasks)."""
 
@@ -1469,6 +1503,44 @@ def generate_aggregated_figures(
 # ─── Cross-experiment coefficient scatter ─────────────────────────────────────
 
 
+def resolve_experiment_names(
+    config: dict, experiment_names: list[str]
+) -> list[Tuple[str, Path]]:
+    """
+    Resolve CLI-provided experiment names to (name, results_path) pairs.
+
+    Args:
+        config: Experiment config (for base_dir)
+        experiment_names: List of experiment directory names from --only scatter(...)
+
+    Returns:
+        List of (dir_name, results_json_path) sorted by dir_name
+    """
+    models_root = Path(config.get("output", {}).get("base_dir", "data/models"))
+
+    experiments: list[Tuple[str, Path]] = []
+    missing: list[str] = []
+
+    for name in experiment_names:
+        results_path = models_root / name / "evaluation" / "results.json"
+        if results_path.exists():
+            experiments.append((name, results_path))
+        else:
+            missing.append(name)
+
+    if missing:
+        raise ValueError(
+            f"Experiments not found (no evaluation/results.json): {', '.join(missing)}"
+        )
+
+    result = sorted(experiments, key=lambda x: x[0])
+    print(f"  CLI-selected {len(result)} experiments for scatter:")
+    for name, _ in result:
+        print(f"    - {name}")
+
+    return result
+
+
 def discover_comparison_experiments(
     config: dict, current_exp_dir: Path
 ) -> list[Tuple[str, Path]]:
@@ -1582,7 +1654,9 @@ def generate_cross_experiment_scatter(
     experiment_results: list[Tuple[str, dict]],
     output_dir: Path,
     dpi: int,
-    sel: GraphSelection = GraphSelection(set(), {}, True),
+    sel: GraphSelection = GraphSelection(
+        graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
+    ),
 ) -> None:
     """
     Generate cross-experiment coefficient recovery scatter plots.
@@ -1727,8 +1801,9 @@ def main():
         help=(
             "Comma-separated graph names to generate (default: all). "
             "Step-filtered graphs accept [step,...] suffix. "
+            "scatter accepts (exp,...) to select specific experiments. "
             "Names: " + ", ".join(sorted(VALID_GRAPH_NAMES)) + ". "
-            "Example: --only jacobian[1,1000],scatter[500],best-combo"
+            "Example: --only scatter[1,1000](br-18,heat-1),best-combo"
         ),
     )
     args = parser.parse_args()
@@ -1824,7 +1899,11 @@ def main():
         print("Generating cross-experiment coefficient scatter...")
         print("-" * 60)
 
-        discovered = discover_comparison_experiments(config, exp_dir)
+        exp_filter = sel.experiments_for("scatter")
+        if exp_filter is not None:
+            discovered = resolve_experiment_names(config, exp_filter)
+        else:
+            discovered = discover_comparison_experiments(config, exp_dir)
         if len(discovered) >= 1:
             experiment_results: list[Tuple[str, dict]] = []
             for dir_name, rpath in discovered:
