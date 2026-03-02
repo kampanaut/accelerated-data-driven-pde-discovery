@@ -394,11 +394,63 @@ Keywords should be taken from the taxonomy (http://www.computer.org/mc/keywords/
 % 
 % Here we have the typical use of a "T" for an initial drop letter
 % and "HIS" in caps to complete the first word.
-\IEEEPARstart{T}{his} section briefly introduces the general project background, the research question you are addressing, and the project objectives. It should be around 2 pages in length. Do not change the font sizes or line spacing in order to put in more text.
+\IEEEPARstart{P}{artial} differential equations are the primary mathematical
+language for modelling spatiotemporal dynamics in physical systems, from fluid
+turbulence and chemical pattern formation to heat conduction and
+biological signalling. While the governing equations for many systems are well
+established, there exist phenomena whose underlying PDEs are unknown or only
+partially understood. Data-driven PDE discovery addresses this gap: given
+observations of a system's evolution, can we recover the governing equation
+directly from data?
 
-NOTE: that the whole report, \emph{excluding} the references, should not be longer than 16 pages in length. It should be noted that not all the details of the work carried out in the project can be represented in 16 pages. You may attach an appendix to the end of your report which will not be marked but provides the markers with additional reference material and context. References to Web based pages should be less than 10\% of the total reference count.
+Raissi \cite{raissi2018} introduced the Deep Hidden Physics framework, in which
+a neural network --- the PDE operator network --- learns the nonlinear mapping
+from spatial derivatives to the time derivative:
+%
+\begin{equation}
+u_t = \mathcal{N}(u, u_x, u_y, u_{xx}, u_{yy}, \ldots)
+\label{eq:pde_discovery}
+\end{equation}
+%
+Given solution data and its derivatives, the network is trained to approximate
+the right-hand side of the PDE. Once trained, the learned operator encodes the
+discovered physics: its weights implicitly represent the PDE coefficients,
+which can be extracted via Jacobian analysis.
 
-NOTE: use the general “IEEE-Trans-Template” as the source for information regarding the formatting of any content not covered in this document.
+However, this approach requires training a new network from scratch for each
+system encountered. Every new set of physical parameters --- a different
+viscosity, a different diffusion coefficient --- demands a full training run.
+This is expensive and fails to exploit the structural similarities that exist
+across related systems. For instance, a network trained on one viscosity of
+Navier-Stokes learns representations relevant to nearby viscosities, yet none
+of this knowledge transfers to the next training run.
+
+Model-Agnostic Meta-Learning (MAML) \cite{finn2017} offers a solution to this
+transfer problem. Rather than learning a single set of weights for one system,
+MAML learns a meta-parameter \emph{initialisation} $\theta^*$ --- a starting point in the loss
+landscape from which the network can rapidly adapt to any system within a task
+family of one PDE. This solves the expensive training of a large model or scarce
+dataset.
+
+% NOTE: Also mention how Raissi did the experiment first, the coupled Solution Network and
+% PDE Operator Network. What the loss function looks like, so that we can communicate more
+% what the paper is trying to amortise.
+
+In this paper MAML will be used to find the meta-parameter
+\emph{initialisation} $\theta^{*}$ for PDE operator network
+$\mathcal{N}_{\rho}$ for the PDE $\rho$. $\mathcal{N}_\rho$ is initialised with
+with random $\theta_0$ parameters. $\tau(\rho)$ is the task distribution for
+the $\rho$ family, and contains tasks of $\{\vec{x}_{(i)}, \vec{y}_{(i)}\}$
+pairs. $\vec{x}_{(i)}$ is the input spatial derivatives features, where
+$\vec{y_{(i)}}$ is the target time derivatives.
+
+% TODO(me): Write 1-2 paragraphs here covering:
+% - What this project specifically does: applies MAML to PDE operator networks
+%   across multiple PDE families (NS, Brusselator, lambda-omega, heat, NL heat, FHN)
+% - The research questions: Does MAML accelerate PDE discovery? Does it
+%   generalise to OOD initial conditions? What determines successful
+%   coefficient recovery?
+% - Brief paper roadmap (Section II: related work, III: methodology, etc.)
 
 \section{Related Work}
 This section presents a survey of existing work on the problems that this project addresses. It should be between 2 to 3 pages in length. The rest of this section shows the formats of subsections as well as some general formatting information for tables, figures, references and equations.
@@ -570,17 +622,16 @@ VI. Conclusion & 1\\
 \newpage
 \begin{thebibliography}{1}
 
-\bibitem{IEEEhowto:bridle}
-J.S. Bridle, \emph{Probabilistic Interpretation of Feedforward Classification Network Outputs, with Relationships to Statistical Pattern Recognition}, Neurocomputing—Algorithms, Architectures and Applications, F. Fogelman-Soulie and J. Herault, eds., NATO ASI Series F68, Berlin: Springer-Verlag, pp. 227-236, 1989. (Book style with paper title and editor)
+\bibitem{raissi2018}
+M.~Raissi, ``Deep Hidden Physics Models: Deep Learning of Nonlinear Partial
+Differential Equations,'' \emph{Journal of Machine Learning Research},
+vol.~19, no.~25, pp.~1--24, 2018.
 
-\bibitem{IEEEhowto:chen}
-W.-K. Chen, \emph{Linear Networks and Systems}, Belmont, Calif.: Wadsworth, pp. 123-135, 1993. (Book style)
-
-\bibitem{IEEEhowto:poor}
-H. Poor, \emph{A Hypertext History of Multiuser Dimensions}, MUD History, http://www.ccs.neu.edu/home/pb/mud-history.html. 1986. (URL link *include year)
-
-\bibitem{IEEEhowto:elissa}
-K. Elissa, \emph{An Overview of Decision Theory}, unpublished. (Unpublished manuscript)
+\bibitem{finn2017}
+C.~Finn, P.~Abbeel, and S.~Levine, ``Model-Agnostic Meta-Learning for Fast
+Adaptation of Deep Networks,'' in \emph{Proc. 34th Int. Conf. Machine Learning
+(ICML)}, ser. Proceedings of Machine Learning Research, vol.~70,
+pp.~1126--1135, 2017.
 
 \end{thebibliography}
 

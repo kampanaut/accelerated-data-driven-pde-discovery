@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2026/dev/Arch Linux) (preloaded format=pdflatex 2026.1.11)  24 FEB 2026 09:55
+This is pdfTeX, Version 3.141592653-2.6-1.40.27 (TeX Live 2026/dev/Arch Linux) (preloaded format=pdflatex 2026.3.1)  2 MAR 2026 11:04
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -265,28 +265,14 @@ LaTeX Font Info:    Trying to load font information for U+pzd on input line 352.
  (/usr/share/texmf-dist/tex/latex/psnfss/upzd.fd
 File: upzd.fd 2001/06/04 font definitions for U/pzd.
 )
+LaTeX Font Info:    Calculating math sizes for size <9.53561> on input line 410.
+
+
 <Figure1-template.png, id=1, 517.4532pt x 389.7762pt>
 File: Figure1-template.png Graphic file (type png)
 <use Figure1-template.png>
-Package pdftex.def Info: Figure1-template.png  used on input line 414.
+Package pdftex.def Info: Figure1-template.png  used on input line 466.
 (pdftex.def)             Requested size: 180.67499pt x 136.09659pt.
-
-
-LaTeX Warning: `!h' float specifier changed to `!ht'.
-
-
-
-LaTeX Font Info:    Calculating math sizes for size <8.03> on input line 479.
-<table1.png, id=2, 532.8708pt x 492.3996pt>
-File: table1.png Graphic file (type png)
-<use table1.png>
-Package pdftex.def Info: table1.png  used on input line 480.
-(pdftex.def)             Requested size: 252.94499pt x 233.73445pt.
-
-Overfull \hbox (12.00002pt too wide) in paragraph at lines 479--482
- [][] 
- []
-
 
 LaTeX Warning: `!h' float specifier changed to `!ht'.
 
@@ -295,34 +281,47 @@ LaTeX Warning: `!h' float specifier changed to `!ht'.
 [1{/var/lib/texmf/fonts/map/pdftex/updmap/pdftex.map}{/usr/share/texmf-dist/fonts/enc/dvips/base/8r.enc}
 
 
- <./Figure1-template.png>]
+]
+LaTeX Font Info:    Calculating math sizes for size <8.03> on input line 531.
+<table1.png, id=18, 532.8708pt x 492.3996pt>
+File: table1.png Graphic file (type png)
+<use table1.png>
+Package pdftex.def Info: table1.png  used on input line 532.
+(pdftex.def)             Requested size: 252.94499pt x 233.73445pt.
 
-
-Underfull \hbox (badness 3954) in paragraph at lines 577--578
-[]\OT1/ppl/m/n/8.03 W.-K. Chen, \OT1/ppl/m/it/8.03 Lin-ear Net-works and Sys-tems\OT1/ppl/m/n/8.03 , Bel-mont, Calif.:
+Overfull \hbox (12.00002pt too wide) in paragraph at lines 531--534
+ [][] 
  []
 
 
 
-[2 <./table1.png>] (./Report.aux)
+
+
+[2 <./Figure1-template.png> <./table1.png>]
+
+
+
+[3
+
+] (./Report.aux)
  ***********
 LaTeX2e <2024-11-01> patch level 2
 L3 programming layer <2025-01-18>
  ***********
  ) 
 Here is how much of TeX's memory you used:
- 3644 strings out of 475171
- 61130 string characters out of 5767095
- 459013 words of memory out of 5000000
- 26597 multiletter control sequences out of 15000+600000
- 600214 words of font info for 120 fonts, out of 8000000 for 9000
+ 3658 strings out of 475171
+ 61400 string characters out of 5767096
+ 461031 words of memory out of 5000000
+ 26611 multiletter control sequences out of 15000+600000
+ 600668 words of font info for 122 fonts, out of 8000000 for 9000
  17 hyphenation exceptions out of 8191
  59i,12n,67p,711b,377s stack positions out of 10000i,1000n,20000p,200000b,200000s
-</usr/share/texmf-dist/fonts/type1/urw/helvetic/uhvb8a.pfb></usr/share/texmf-dist/fonts/type1/urw/helvetic/uhvr8a.pfb></usr/share/texmf-dist/fonts/type1/urw/palatino/uplr8a.pfb></usr/share/texmf-dist/fonts/type1/urw/palatino/uplri8a.pfb></usr/share/texmf-dist/fonts/type1/urw/zapfding/uzdr.pfb>
-Output written on Report.pdf (2 pages, 281153 bytes).
+</usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmr7.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/share/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/share/texmf-dist/fonts/type1/urw/helvetic/uhvb8a.pfb></usr/share/texmf-dist/fonts/type1/urw/helvetic/uhvr8a.pfb></usr/share/texmf-dist/fonts/type1/urw/palatino/uplr8a.pfb></usr/share/texmf-dist/fonts/type1/urw/palatino/uplri8a.pfb></usr/share/texmf-dist/fonts/type1/urw/zapfding/uzdr.pfb>
+Output written on Report.pdf (3 pages, 333945 bytes).
 PDF statistics:
- 41 PDF objects out of 1000 (max. 8388607)
- 22 compressed objects within 1 object stream
+ 74 PDF objects out of 1000 (max. 8388607)
+ 42 compressed objects within 1 object stream
  0 named destinations out of 1000 (max. 500000)
  11 words of extra memory for PDF output out of 10000 (max. 10000000)
 
