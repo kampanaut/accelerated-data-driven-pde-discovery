@@ -1692,12 +1692,16 @@ def generate_cross_experiment_scatter(
     if scatter_fixed_steps is None:
         # Legacy: single-step data
         scatter_fixed_steps = [None]
+        all_fixed_steps = scatter_fixed_steps
     else:
-        # Apply step filtering
+        # Keep full list for correct indexing into rec_raw arrays
+        all_fixed_steps = list(scatter_fixed_steps)
+        # Apply step filtering (display only selected steps)
         allowed = sel.steps_for("scatter", [int(s) for s in scatter_fixed_steps])
         scatter_fixed_steps = [s for s in scatter_fixed_steps if int(s) in allowed]
 
-    for step_idx, step_val in enumerate(scatter_fixed_steps):
+    for step_val in scatter_fixed_steps:
+        step_idx = all_fixed_steps.index(step_val)
         # Build panel_data for this step
         panel_data: PanelDataDict = {}
 
