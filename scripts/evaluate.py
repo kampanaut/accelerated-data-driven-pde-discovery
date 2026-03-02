@@ -576,8 +576,6 @@ def evaluate_task(
         # Step-0 prediction (θ* before any fine-tuning)
         bc_model = copy.deepcopy(theta_star)
         pred_snapshots: List[NDArray[np.floating[Any]]] = []
-        with torch.no_grad():
-            pred_snapshots.append(bc_model(bc_h_features).cpu().numpy())
 
         # Prediction callback for fixed_steps
         def _pred_on_step(model: torch.nn.Module, _: int) -> None:
@@ -609,16 +607,13 @@ def evaluate_task(
         step_errors = coeff_recovery["maml"]["error_pct"]
 
         # Save to NPZ
-        all_steps = [0] + fixed_steps
         samples["best_combo/key"] = np.array(best_combo_key)
         samples["best_combo/predictions"] = np.stack(pred_snapshots)
         samples["best_combo/true_targets"] = bc_h_targets.cpu().numpy()
         samples["best_combo/x_pts"] = h_coords[0].cpu().numpy()
         samples["best_combo/y_pts"] = h_coords[1].cpu().numpy()
-        samples["best_combo/steps"] = np.array(all_steps)
-        samples["best_combo/coeff_error"] = np.array(
-            [float("nan")] + step_errors  # step 0 has no coeff estimate
-        )
+        samples["best_combo/steps"] = np.array(fixed_steps)
+        samples["best_combo/coeff_error"] = np.array(step_errors)
 
     return task_result, samples
 
@@ -667,6 +662,17 @@ def main():
         else:
             print(f"Experiment directory not found: {exp_dir}")
             sys.exit(1)
+
+    # Guard: DONE sentinel means training completed — never overwrite
+    # Create samples directory
+    eval_dir = exp_dir / "evaluation"
+    samples_dir = eval_dir / "samples"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+
+    done_path = eval_dir / "DONE"
+    if done_path.exists():
+        print(f"SKIP: {eval_dir.name} already evaluated (DONE sentinel exists). Delete DONE to overwrite.")
+        sys.exit(0)
 
     # Tee stdout to capture all print output for log file
     _tee = _TeeStream(sys.stdout)
@@ -864,11 +870,6 @@ def main():
         "tasks": {},
     }
 
-    # Create samples directory
-    eval_dir = exp_dir / "evaluation"
-    samples_dir = eval_dir / "samples"
-    samples_dir.mkdir(parents=True, exist_ok=True)
-
     # Track per-combo stats by IC type for summary
     combo_stats_by_ic: Dict[str, list] = {}
 
@@ -896,7 +897,7 @@ def main():
         # NaN guard: check all arrays from this task before saving
         nan_keys = [
             k for k, v in task_samples.items()
-            if isinstance(v, np.ndarray) and np.isnan(v).any()
+            if isinstance(v, np.ndarray) and v.dtype.kind == "f"  and np.isnan(v).any()
         ]
         if nan_keys:
             print(f"\nFATAL: NaN detected in {len(nan_keys)} arrays for {task.task_name}:")
@@ -1034,6 +1035,9 @@ def main():
     sys.stdout = _tee.original  # type: ignore[assignment]
     log_path = eval_dir / "evaluate.log"
     log_path.write_text(_tee.getvalue())
+
+    done_path.touch()
+
     print(f"Log saved to {log_path}")
 
 
