@@ -1,10 +1,14 @@
 # Meta-Learning for Accelerated PDE Discovery
 
-Raissi [1] introduced the Deep Hidden Physics framework for data-driven PDE discovery, where a neural network — the PDE operator network — learns the nonlinear mapping from spatial derivatives to the time derivative: u_t = N(u, u_x, u_xx, ...). Once trained, the learned operator encodes the discovered physics, and its weights implicitly represent the PDE coefficients, which can be extracted via Jacobian analysis.
+Raissi [1] introduced the Deep Hidden Physics framework for data-driven PDE discovery, where a neural network — the PDE operator network — learns the nonlinear mapping from spatial derivatives to the time derivative:
+
+$$u_t = \mathcal{N}(u, u_x, u_y, u_{xx}, u_{yy}, \ldots)$$
+
+Once trained, the learned operator encodes the discovered physics, and its weights implicitly represent the PDE coefficients, which can be extracted via Jacobian analysis.
 
 However, this approach requires training a new network from scratch for each system encountered. Every new set of physical parameters demands a full training run, failing to exploit structural similarities across related systems.
 
-Model-Agnostic Meta-Learning (MAML) [2] offers a solution: rather than learning weights for one system, MAML learns a meta-parameter initialisation θ* — a starting point from which the network can rapidly adapt to any system within a task family. Early results on the heat equation show that certain MAML configurations recover PDE coefficients closer to the true value than the baseline — not accurately, but with a clear relative improvement over random initialisation θ₀. Other configurations exhibit two distinct failure modes: coefficients that collapse near zero (the network fits the data but encodes nothing extractable), or anti-tracking, where recovered coefficients systematically invert the sign of the true value — suggesting the network absorbs the coefficient into other terms with a compensating negative contribution. The non-meta-learned baseline consistently falls into one of these failure modes. These observations are specific to the heat equation (pure diffusion); the Brusselator (reaction-diffusion) has not yet shown the same separation.
+Model-Agnostic Meta-Learning (MAML) [2] offers a solution: rather than learning weights for one system, MAML learns a meta-parameter initialisation $\theta^*$ — a starting point from which the network can rapidly adapt to any system within a task family. Early results on the heat equation show that certain MAML configurations recover PDE coefficients closer to the true value than the baseline — not accurately, but with a clear relative improvement over random initialisation $\theta_0$. Other configurations exhibit two distinct failure modes: coefficients that collapse near zero (the network fits the data but encodes nothing extractable), or anti-tracking, where recovered coefficients systematically invert the sign of the true value — suggesting the network absorbs the coefficient into other terms with a compensating negative contribution. The non-meta-learned baseline consistently falls into one of these failure modes. These observations are specific to the heat equation (pure diffusion); the Brusselator (reaction-diffusion) has not yet shown the same separation.
 
 ## Quick Start
 
