@@ -26,6 +26,7 @@ import matplotlib.figure as pltf
 import matplotlib.axes as pltax
 from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D
+import matplotlib.tri as mtri
 from scipy import stats
 
 from src.evaluation.metrics import steps_to_plateau
@@ -1190,89 +1191,82 @@ def plot_best_combo_scatter(
     dpi: int = 150,
 ) -> pltf.Figure:
     """
-    Spatial + correlation scatter showing prediction evolution during fine-tuning.
+    Prediction evolution during fine-tuning using tricontourf.
 
-    One row per step (including step 0 = θ* before adaptation).
-    Three columns: spatial true, spatial pred, correlation scatter.
+    Layout:
+      Row 0: True reference panel (tricontourf) — shown once.
+      Rows 1..N: Predicted (tricontourf) + Pred-vs-True scatter.
 
-    Args:
-        predictions: (n_steps, holdout_size, n_outputs) model predictions
-        true_targets: (holdout_size, n_outputs) ground truth
-        x_pts: (holdout_size,) x positions
-        y_pts: (holdout_size,) y positions
-        steps: (n_steps,) step numbers (0 = pre-adaptation)
-        coeff_errors: (n_steps,) mean coefficient error % at each step
-        output_index: which output dimension to plot (0=u_t, 1=v_t)
-        output_label: label for the output (e.g. "u_t", "v_t")
-        title: figure title
-        save_path: path to save figure
-        dpi: resolution
-
-    Returns:
-        matplotlib Figure object
+    Points are multi-snapshot holdout samples (not a single timestep).
+    Colorscale is percentile-clipped and symmetric around 0.
     """
     n_steps = len(steps)
     true_col = true_targets[:, output_index]
-    figsize = (14, 3.2 * n_steps)
-    fig, axes = plt.subplots(n_steps, 3, figsize=figsize, squeeze=False)
 
-    for row, step in enumerate(steps):
-        pred_col = predictions[row, :, output_index]
+    # Shared triangulation + percentile-clipped symmetric colorscale
+    triang = mtri.Triangulation(x_pts, y_pts)
+    plo, phi = float(np.percentile(true_col, 2)), float(np.percentile(true_col, 98))
+    vlim = max(abs(plo), abs(phi))
+    if vlim == 0:
+        vlim = 1.0
+    levels = np.linspace(-vlim, vlim, 64)
 
-        # Shared colorscale from true values at this row
-        vmin, vmax = float(true_col.min()), float(true_col.max())
+    # Row 0: true reference.  Rows 1..N: predicted + correlation scatter.
+    total_rows = n_steps + 1
+    fig, axes = plt.subplots(total_rows, 2, figsize=(10, 3.0 * total_rows),
+                             squeeze=False)
 
-        # Col 0: Spatial true
-        ax0 = axes[row, 0]
-        sc0 = ax0.scatter(x_pts, y_pts, c=true_col, s=1, cmap="RdBu_r",
-                          vmin=vmin, vmax=vmax, rasterized=True)
-        ax0.set_aspect("equal")
-        if row == 0:
-            ax0.set_title(f"True {output_label}", fontsize=10)
+    # ── Row 0: True reference (col 0), col 1 off ──
+    ax_true = axes[0, 0]
+    ax_true.tricontourf(triang, true_col, levels=levels, cmap="RdBu_r",
+                        extend="both")
+    ax_true.set_aspect("equal")
+    ax_true.set_title(f"True {output_label}  (multi-snapshot holdout)", fontsize=10)
+    ax_true.set_ylabel("Reference", fontsize=9, fontweight="bold")
+    axes[0, 1].axis("off")
 
-        # Col 1: Spatial pred
-        ax1 = axes[row, 1]
-        ax1.scatter(x_pts, y_pts, c=pred_col, s=1, cmap="RdBu_r",
-                    vmin=vmin, vmax=vmax, rasterized=True)
-        ax1.set_aspect("equal")
-        if row == 0:
-            ax1.set_title(f"Predicted {output_label}", fontsize=10)
+    # ── Per-step rows ──
+    for i, step in enumerate(steps):
+        pred_col = predictions[i, :, output_index]
+        row = i + 1
 
-        # Col 2: Correlation scatter
-        ax2 = axes[row, 2]
-        ax2.scatter(true_col, pred_col, s=1, alpha=0.3, rasterized=True)
-        lo = min(vmin, float(pred_col.min()))
-        hi = max(vmax, float(pred_col.max()))
+        # Col 0: Predicted tricontourf (same levels as true)
+        ax_pred = axes[row, 0]
+        ax_pred.tricontourf(triang, pred_col, levels=levels, cmap="RdBu_r",
+                            extend="both")
+        ax_pred.set_aspect("equal")
+        if i == 0:
+            ax_pred.set_title(f"Predicted {output_label}", fontsize=10)
+
+        # Row label
+        step_int = int(step)
+        err = coeff_errors[i]
+        err_str = f"{err:.1f}%" if not np.isnan(err) else "n/a"
+        ax_pred.set_ylabel(f"Step {step_int}\nerr={err_str}",
+                           fontsize=9, fontweight="bold")
+
+        # Col 1: Correlation scatter
+        ax_corr = axes[row, 1]
+        ax_corr.scatter(true_col, pred_col, s=1, alpha=0.3, rasterized=True)
+        lo = min(float(true_col.min()), float(pred_col.min()))
+        hi = max(float(true_col.max()), float(pred_col.max()))
         margin = (hi - lo) * 0.05
         ref = [lo - margin, hi + margin]
-        ax2.plot(ref, ref, "k--", alpha=0.3, linewidth=1)
-        ax2.set_xlim(ref)
-        ax2.set_ylim(ref)
-        ax2.set_aspect("equal")
-        if row == 0:
-            ax2.set_title("Pred vs True", fontsize=10)
-        ax2.set_xlabel(f"True {output_label}", fontsize=8)
-        ax2.set_ylabel(f"Pred {output_label}", fontsize=8)
+        ax_corr.plot(ref, ref, "k--", alpha=0.3, linewidth=1)
+        ax_corr.set_xlim(ref)
+        ax_corr.set_ylim(ref)
+        ax_corr.set_aspect("equal")
+        if i == 0:
+            ax_corr.set_title("Pred vs True", fontsize=10)
+        ax_corr.set_xlabel(f"True {output_label}", fontsize=8)
+        ax_corr.set_ylabel(f"Pred {output_label}", fontsize=8)
 
-        # Row-level R² annotation
+        # R²
         ss_res = float(np.sum((pred_col - true_col) ** 2))
         ss_tot = float(np.sum((true_col - np.mean(true_col)) ** 2))
         r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else float("nan")
-        ax2.annotate(f"R²={r2:.4f}", xy=(0.05, 0.92), xycoords="axes fraction",
-                     fontsize=8, fontweight="bold")
-
-        # Row label: step number + coeff error
-        step_int = int(step)
-        err = coeff_errors[row]
-        err_str = f"{err:.1f}%" if not np.isnan(err) else "n/a"
-
-        # Build recovered coefficient string from coeff_specs
-        coeff_str = f"err={err_str}"
-
-        ax0.set_ylabel(f"Step {step_int}\n{coeff_str}", fontsize=9, fontweight="bold")
-
-        # Colorbar on rightmost spatial panel
-        fig.colorbar(sc0, ax=[ax0, ax1], shrink=0.8, pad=0.02, aspect=30)
+        ax_corr.annotate(f"R²={r2:.4f}", xy=(0.05, 0.92), xycoords="axes fraction",
+                         fontsize=8, fontweight="bold")
 
     fig.suptitle(title, fontsize=13, y=1.01)
     plt.tight_layout()
