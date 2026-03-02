@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from typing import Any
+from typing import Any, ValuesView
 
 import matplotlib.pyplot as plt
 
@@ -277,33 +277,48 @@ def run_r2_analysis(features: torch.Tensor, feature_names: list[str]):
 
 
 def run_lap_analysis(features: torch.Tensor, feature_names: list[str]):
-    """Laplacian-specific R² analysis for 2-field PDEs.
+    """Laplacian-specific R² analysis.
 
-    Tests whether field values [u, v] and other feature groups
-    can reconstruct the Laplacians ∇²u and ∇²v.
+    Tests whether non-RHS feature groups can reconstruct the Laplacian(s).
+    Supports both 2-field (10 features) and 1-field (5 features) PDEs.
     """
-    # Feature indices: [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy]
-    #                   0  1   2    3    4     5     6    7    8     9
-    u_xx = features[:, 4]
-    u_yy = features[:, 5]
-    v_xx = features[:, 8]
-    v_yy = features[:, 9]
+    n_feat = len(feature_names)
 
-    lap_u = u_xx + u_yy
-    lap_v = v_xx + v_yy
+    if n_feat == 10:
+        # 2-field: [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy]
+        #           0  1   2    3    4     5     6    7    8     9
+        lap_u = features[:, 4] + features[:, 5]
+        lap_v = features[:, 8] + features[:, 9]
 
-    targets = {"∇²u": lap_u, "∇²v": lap_v}
+        targets = {"∇²u": lap_u, "∇²v": lap_v}
 
-    groups = {
-        "[u, v]": [0, 1],
-        "[u_x, u_y]": [2, 3],
-        "[v_x, v_y]": [6, 7],
-        "[u, v, u_x, u_y]": [0, 1, 2, 3],
-        "[all \\ {u_xx,u_yy}]": [0, 1, 2, 3, 6, 7, 8, 9],
-        "[all \\ {v_xx,v_yy}]": [0, 1, 2, 3, 4, 5, 6, 7],
-        "{u_xx, u_yy}": [4, 5],
-        "{v_xx, v_yy}": [8, 9],
-    }
+        groups = {
+            "[u, v]": [0, 1],
+            "[u_x, u_y]": [2, 3],
+            "[v_x, v_y]": [6, 7],
+            "[u, v, u_x, u_y]": [0, 1, 2, 3],
+            "[all \\ {u_xx,u_yy}]": [0, 1, 2, 3, 6, 7, 8, 9],
+            "[all \\ {v_xx,v_yy}]": [0, 1, 2, 3, 4, 5, 6, 7],
+            "[u_xx, u_yy]": [4, 5],
+            "[v_xx, v_yy]": [8, 9],
+            "[all]": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        }
+    elif n_feat == 5:
+        # 1-field: [u, u_x, u_y, u_xx, u_yy]
+        #           0   1    2    3     4
+        lap_u = features[:, 3] + features[:, 4]
+
+        targets = {"∇²u": lap_u}
+
+        groups = {
+            "[u]": [0],
+            "[u_x, u_y]": [1, 2],
+            "[u, u_x, u_y]": [0, 1, 2],
+            "[u_xx, u_yy]": [3, 4],
+            "[all]": [0, 1, 2, 3, 4],
+        }
+    else:
+        raise ValueError(f"Unsupported input features of {n_feat}")
 
     results: dict[str, dict[str, float]] = {}
 
@@ -428,13 +443,16 @@ def _draw_lap_panel(
 def plot_lap_analysis(
     results: dict[str, dict[str, float]], feature_names: list[str], output_dir: Path
 ):
-    """Laplacian-specific R² figure for 2-field PDEs. 2x2 layout."""
+    """Laplacian-specific R² figure. Adapts layout to number of targets."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     targets = list(results.keys())
+    n_rows = len(targets)
     groups = [k for k in results[targets[0]] if k.startswith(("[", "{"))]
 
-    _, axes = plt.subplots(2, 2, figsize=(18, 12))
+    fig, axes = plt.subplots(n_rows, 2, figsize=(18, 6 * n_rows))
+    if n_rows == 1:
+        axes = axes[np.newaxis, :]  # ensure 2D indexing
 
     for row, tname in enumerate(targets):
         # Left: pairwise r²(target, each feature)
@@ -514,9 +532,8 @@ def main():
         S, Vt, corr, r2_values, feature_names, all_names, args.output_dir
     )
 
-    if len(feature_names) == 10:
-        lap_results = run_lap_analysis(features, feature_names)
-        plot_lap_analysis(lap_results, feature_names, args.output_dir)
+    lap_results = run_lap_analysis(features, feature_names)
+    plot_lap_analysis(lap_results, feature_names, args.output_dir)
 
     # Restore stdout and save log
     sys.stdout = tee.original
