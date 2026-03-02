@@ -110,7 +110,7 @@ def generate_config(
         },
         "visualization": {
             "dpi": 300,
-            "only": "scatter,jacobian[0,1,25,500,1000],best-combo",
+            "only": "scatter[0,1,1000],best-combo",
         },
     }
 

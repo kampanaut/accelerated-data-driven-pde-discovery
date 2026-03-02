@@ -72,7 +72,7 @@ evaluation:
   holdout_size: 5000
 visualization:
   dpi: 300
-  only: scatter,jacobian[0,1,25,500,1000],best-combo
+  only: scatter[0,1,1000],best-combo
   compare_experiments:
   - br-3-1step-k800-metal
   - br-4-1step-k10-metal
