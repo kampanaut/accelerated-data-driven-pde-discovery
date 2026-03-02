@@ -178,7 +178,8 @@ class PDETask(ABC):
         self,
         K_shot: int,
         query_size: int,
-        seed: Optional[int] = None,
+        k_seed: Optional[int] = None,
+        snapshot_seed: Optional[int] = None,
     ) -> Tuple[
         Tuple[torch.Tensor, torch.Tensor],
         Tuple[torch.Tensor, torch.Tensor],
@@ -199,21 +200,28 @@ class PDETask(ABC):
         n_total = K_shot + query_size
 
         # Torch RNG on device
-        gen = torch.Generator(device=self.device)
-        if seed is not None:
-            gen.manual_seed(seed)
+        k_shot_gen = torch.Generator(device=self.device)
+        if k_seed is not None:
+            k_shot_gen.manual_seed(k_seed)
+
+        snapshot_gen = torch.Generator(device=self.device)
+        if snapshot_seed is not None:
+            snapshot_gen.manual_seed(snapshot_seed)
+        else:
+            snapshot_gen = k_shot_gen
+
 
         # Sample random snapshot indices (uniform random — discrete dimension)
         snap_idx = torch.randint(
-            0, self.n_snapshots, (n_total,), generator=gen, device=self.device
+            0, self.n_snapshots, (n_total,), generator=snapshot_gen, device=self.device
         )
 
         # Sobol quasi-random spatial coordinates for uniform coverage
         # (Wu et al. 2023: Sobol beats uniform random and LHS for PDE collocation)
         sobol_seed = (
-            seed
-            if seed is not None
-            else int(torch.randint(0, 2**31, (1,), generator=gen).item())
+            k_seed
+            if k_seed is not None
+            else int(torch.randint(0, 2**31, (1,), generator=k_shot_gen).item())
         )
         sobol = torch.quasirandom.SobolEngine(
             dimension=2, scramble=True, seed=sobol_seed

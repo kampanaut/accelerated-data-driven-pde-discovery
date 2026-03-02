@@ -578,7 +578,7 @@ class MAMLTrainer:
         support, query, support_coords, query_coords = task.get_support_query_split(
             K_shot=self.config.k_shot,
             query_size=self.config.query_size,
-            seed=seed,
+            k_seed=seed,
         )
 
         if self.config.inner_steps == 0:

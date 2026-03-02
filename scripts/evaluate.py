@@ -311,7 +311,8 @@ def evaluate_task(
         support_clean, holdout_clean, support_coords, holdout_coords = task.get_support_query_split(
             K_shot=k,
             query_size=actual_holdout,
-            seed=k_seed,
+            k_seed=k_seed,
+            snapshot_seed=seed,
         )
 
         for noise_idx, noise in enumerate(noise_levels):
@@ -556,7 +557,8 @@ def evaluate_task(
         s_clean, h_clean, s_coords, h_coords = task.get_support_query_split(
             K_shot=best_k,
             query_size=actual_holdout,
-            seed=best_k_seed,
+            k_seed=best_k_seed,
+            snapshot_seed=seed
         )
 
         # Apply noise if needed
