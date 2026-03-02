@@ -839,7 +839,8 @@ def main():
     spectral_cfg = train_cfg.get("spectral_loss", {})
     spectral_mode_size: int = spectral_cfg.get("mode_size", 0) if spectral_cfg.get("enabled", False) else 0
     max_grad_norm: float = train_cfg.get("max_grad_norm", 0.0)
-    zero_non_rhs: bool = train_cfg.get("zero_non_rhs_features", False)
+    _train_zero = train_cfg.get("zero_non_rhs_features", False)
+    zero_non_rhs: bool = eval_cfg.get("zero_non_rhs_features", _train_zero)
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
