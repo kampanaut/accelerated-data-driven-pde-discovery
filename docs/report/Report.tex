@@ -152,7 +152,7 @@
 
 % *** SPECIALIZED LIST PACKAGES ***
 %
-%\usepackage{algorithmic}
+\usepackage{algorithmic}
 % algorithmic.sty was written by Peter Williams and Rogerio Brito.
 % This package provides an algorithmic environment fo describing algorithms.
 % You can use the algorithmic environment in-text or within a figure
@@ -322,7 +322,7 @@
 % not capitalized unless they are the first or last word of the title.
 % Linebreaks \\ can be used within to get better formatting as desired.
 % Do not put math or special symbols in the title.
-\title{Meta-Learning for Accelerated PDE Discovery}
+\title{Meta-Learning for Amortised PDE Discovery}
 %
 %
 % author  
@@ -401,21 +401,41 @@ biological signalling. While the governing equations for many systems are well
 established, there exist phenomena whose underlying PDEs are unknown or only
 partially understood. Data-driven PDE discovery addresses this gap: given
 observations of a system's evolution, can we recover the governing equation
-directly from data?
+directly from pointwise data?
 
 Raissi \cite{raissi2018} introduced the Deep Hidden Physics framework, in which
-a neural network --- the PDE operator network --- learns the nonlinear mapping
+a neural network, the PDE operator network, learns the nonlinear mapping
 from spatial derivatives to the time derivative:
 %
 \begin{equation}
-u_t = \mathcal{N}(u, u_x, u_y, u_{xx}, u_{yy}, \ldots)
+u_t = \mathcal{N}(u, u_x, u_y, u_{xx}, u_{yy})
 \label{eq:pde_discovery}
 \end{equation}
 %
 Given solution data and its derivatives, the network is trained to approximate
 the right-hand side of the PDE. Once trained, the learned operator encodes the
 discovered physics: its weights implicitly represent the PDE coefficients,
-which can be extracted via Jacobian analysis.
+which can be extracted via Jacobian probing.
+
+In Raissi's formulation, two networks are trained in tandem: a \emph{solution
+network} that approximates the field $u(\mathbf{x}, t)$ from sparse
+observations, and the PDE operator network $\mathcal{N}$ that learns the
+right-hand side. The solution network provides spatial derivatives via
+automatic differentiation, while the operator network constrains the solution
+to satisfy the discovered PDE. When a high-fidelity numerical solver is
+available, however, the solution network becomes unnecessary: the solver
+provides exact solution fields and their spatial derivatives directly. This
+\emph{decoupled} setting --- which Raissi showed to be viable --- isolates the
+PDE discovery problem to learning the operator $\mathcal{N}$ alone, and is the
+setting adopted in this work.
+
+PARAPHRASE THIS: Representing the nonlinear function N by a deep neural network is the novelty
+of the current work. Deep neural networks are a richer family of function
+approximators and consequently we do not have to commit to a particular class
+of basis functions such as polynomials or sines and cosines. This
+expressiveness comes at the cost of losing interpretability of the learned
+dynamics. However, there is nothing hindering the use of a particular class of
+basis functions in order obtain more interpretable equations [35].
 
 However, this approach requires training a new network from scratch for each
 system encountered. Every new set of physical parameters --- a different
@@ -426,142 +446,190 @@ Navier-Stokes learns representations relevant to nearby viscosities, yet none
 of this knowledge transfers to the next training run.
 
 Model-Agnostic Meta-Learning (MAML) \cite{finn2017} offers a solution to this
-transfer problem. Rather than learning a single set of weights for one system,
+training problem. Rather than learning a single set of weights for one system,
 MAML learns a meta-parameter \emph{initialisation} $\theta^*$ --- a starting point in the loss
 landscape from which the network can rapidly adapt to any system within a task
 family of one PDE. This solves the expensive training of a large model or scarce
 dataset.
 
-% NOTE: Also mention how Raissi did the experiment first, the coupled Solution Network and
-% PDE Operator Network. What the loss function looks like, so that we can communicate more
-% what the paper is trying to amortise.
+This work applies MAML to the decoupled PDE operator network to
+\emph{amortise} the discovery of PDE coefficients across a family of related
+systems. During meta-training, the algorithm samples tasks from a distribution
+of PDE instances --- each characterised by different physical parameters ---
+and learns an initialisation $\theta^*$ that minimises the expected
+post-adaptation loss across the family. Empirically, the resulting $\theta^*$ encodes a
+\emph{prior} over the coefficient space: before any task-specific fine-tuning,
+the network already represents a meaningful estimate of the PDE coefficients.
+Adaptation then refines this estimate toward the true parameters of the target
+system, reducing the per-instance cost from full training to a small number of
+gradient steps. The nature of this estimate --- whether it reflects a measure of central
+tendency, a minimax strategy over the task distribution, or an artefact of the
+loss landscape geometry --- is itself an empirical question examined in this paper.
 
-In this paper MAML will be used to find the meta-parameter
-\emph{initialisation} $\theta^{*}$ for PDE operator network
-$\mathcal{N}_{\rho}$ for the PDE $\rho$. $\mathcal{N}_\rho$ is initialised with
-with random $\theta_0$ parameters. $\tau(\rho)$ is the task distribution for
-the $\rho$ family, and contains tasks of $\{\vec{x}_{(i)}, \vec{y}_{(i)}\}$
-pairs. $\vec{x}_{(i)}$ is the input spatial derivatives features, where
-$\vec{y_{(i)}}$ is the target time derivatives.
+Formally, let $\mathcal{N}_\theta$ denote the PDE operator network
+parameterised by $\theta$. For a PDE family $\rho$, the task distribution
+$\tau(\rho)$ generates tasks $\mathcal{T}_i$, each consisting of support and
+query sets of $\{(\mathbf{x}_j, \mathbf{y}_j)\}$ pairs, where $\mathbf{x}_j$
+are input spatial derivative features and $\mathbf{y}_j$ are target time
+derivatives. The MAML inner loop adapts $\theta^*$ to a task-specific
+$\theta'_i$ by gradient descent on the support set, traversing the loss
+landscape toward the task's local minimum. The outer loop then updates
+$\theta^*$ based on the query-set performance of the adapted parameters
+$\theta'_i$ across all sampled tasks which gives way to steering the next
+initialisation away from regions where task-specific adaptation fails to
+generalise.
 
-% TODO(me): Write 1-2 paragraphs here covering:
-% - What this project specifically does: applies MAML to PDE operator networks
-%   across multiple PDE families (NS, Brusselator, lambda-omega, heat, NL heat, FHN)
-% - The research questions: Does MAML accelerate PDE discovery? Does it
-%   generalise to OOD initial conditions? What determines successful
-%   coefficient recovery?
-% - Brief paper roadmap (Section II: related work, III: methodology, etc.)
+This work investigates whether MAML can amortise PDE coefficient recovery. 
+
+$$
+u_t = D \nabla^2 u \text{ Heat equation}
+$$
+
+$$
+u_t = D (1-u)\nabla^2 u \text{ Nonlinear Heat equation}
+$$
+
+Heat equation and nonlinear heat equation are chosen to be the functions
+approximated by the MAML MLP. 
+
+Defining the requirements of amortisation is the objective of this paper. This
+work examines how the distribution of the training tasks affects the quality of
+amortisation, and what failure modes arise afterwards. 
 
 \section{Related Work}
-This section presents a survey of existing work on the problems that this project addresses. It should be between 2 to 3 pages in length. The rest of this section shows the formats of subsections as well as some general formatting information for tables, figures, references and equations.
+% --- Data-driven PDE discovery: the field ---
+% Raissi I/II/III (coupled U-net + N-net, decoupled setting)
+% SINDy / PDE-FIND (Rudy et al. 2017) — sparse regression on candidate library
+% Lü et al. 2024 (FBR-PDE-FIND) — forward-backward regression extension
+\subsection{Data-Driven PDE Discovery}
+% TODO(me): Raissi's operator network in more detail than the intro.
+% Contrast implicit (neural) vs explicit (library-based) coefficient recovery.
+% SINDy: build Theta, sparsity-promoting regression, ill-conditioning issues.
+% Lü et al.: FBR refinement, same library paradigm.
+% Close with: all per-system, none amortise across a family.
 
-\subsection{Main Text}
-The font used for the main text should be Palatino and the font size should be 9.5. The first line of all paragraphs should be indented by 0.5cm, except for the first paragraph of each section, subsection, subsubsection etc. (the paragraph immediately after the header) where no indentation is needed.
+% --- Meta-learning applied to PDEs ---
+% FOMAML / Reptile (Nichol et al. 2018) — first-order approximations, Taylor analysis
+% Meta-PDE (Qin et al. 2022) — MAML + PINNs for forward solving (not discovery)
+% MeTAL (Baik et al. 2021) — task-adaptive inner loss
+\subsection{Meta-Learning for Scientific Computing}
+% TODO(me): MAML already introduced; here expand on variants.
+% Reptile: why multi-step inner loops matter (second-order term).
+% Meta-PDE: closest prior work, but forward solver not coefficient discovery.
+% MeTAL: learned inner loss, orthogonal to initialisation quality.
+% Close with: none apply meta-learning to coefficient recovery specifically.
 
-\subsection{Figures and Tables}
-In general, figures and tables should not appear before they are cited. Place figure captions below the figures; place table titles above the tables. If your figure has two parts, for example, include the labels “(a)” and “(b)” as part of the artwork. Please verify that figures and tables you mention in the text actually exist. Make sure that all tables and figures are numbered as shown in Table \ref{table_example} and Figure \ref{fig:my_label} below.
-
-\begin{figure}[!h]
-    \centering
-    \includegraphics[width=2.5in]{Figure1-template.png}
-    \caption{Magnetization as a function of applied field. There is a period after the figure number, followed by two spaces. It is good practice to explain the significance of the figure in the caption}
-    \label{fig:my_label}
-\end{figure}
-
-% An example of a floating figure using the graphicx package.
-% Note that \label must occur AFTER (or within) \caption.
-% For figures, \caption should occur after the \includegraphics.
-% Note that IEEEtran v1.7 and later has special internal code that
-% is designed to preserve the operation of \label within \caption
-% even when the captionsoff option is in effect. However, because
-% of issues like this, it may be the safest practice to put all your
-% \label just after \caption rather than within \caption{}.
-%
-% Reminder: the "draftcls" or "draftclsnofoot", not "draft", class
-% option should be used if it is desired that the figures are to be
-% displayed while in draft mode.
-%
-%\begin{figure}[!h]
-%\centering
-%\includegraphics[width=2.5in]{myfigure}
-%\caption{Simulation results for the network.}
-%\label{fig_sim}
-%\end{figure}
-
-% An example of a double column floating figure using two subfigures.
-% (The subfig.sty package must be loaded for this to work.)
-% The subfigure \label commands are set within each subfloat command,
-% and the \label for the overall figure must come after \caption.
-% \hfil is used as a separator to get equal spacing.
-% Watch out that the combined width of all the subfigures on a 
-% line do not exceed the text width or a line break will occur.
-%
-%\begin{figure*}[!t]
-%\centering
-%\subfloat[Case I]{\includegraphics[width=2.5in]{box}%
-%\label{fig_first_case}}
-%\hfil
-%\subfloat[Case II]{\includegraphics[width=2.5in]{box}%
-%\label{fig_second_case}}
-%\caption{Simulation results for the network.}
-%\label{fig_sim}
-%\end{figure*}
-%
-% Note that often IEEE papers with subfigures do not employ subfigure
-% captions (using the optional argument to \subfloat[]), but instead will
-% reference/describe all of them (a), (b), etc., within the main caption.
-% Be aware that for subfig.sty to generate the (a), (b), etc., subfigure
-% labels, the optional argument to \subfloat must be present. If a
-% subcaption is not desired, just leave its contents blank,
-% e.g., \subfloat[].
-
-\subsection{References}
-The list of cited references should appear at the end of the report, listed by order of appearance in the paper. The required style is to note citations in individual brackets, followed by a comma, e.g. “[1], [5]” (as opposed to the more common “[1, 5]” form.) Citation ranges should be formatted as follows: [1], [2], [3], [4] (as opposed to [1]-[4]). When citing a section in a book, please give the relevant page numbers [2]. In sentences, refer simply to the reference number, as in [3]. Do not use “Ref. [3]” or “reference [3]” At the beginning of a sentence use the author names instead of “Reference [3],” e.g., “Smith and Smith [3] show ... .”. 
+% --- Failure modes that explain absorption ---
+% Simplicity bias (Shah et al. 2020) — MLP takes simplest predictive feature
+% Shortcut learning (Geirhos et al. 2020) — unifying taxonomy
+% PINN failure modes (Krishnapriyan et al. 2021) — optimisation vs capacity
+\subsection{Shortcut Learning and Optimisation Failure Modes}
+% TODO(me): Shortcut learning as unifying framework.
+% Simplicity bias: extreme invariance to complex features when simple ones exist.
+% Connect to coefficient absorption: reaction terms provide simpler path than diffusion.
+% Krishnapriyan: failure is optimisation, not capacity — parallels our finding
+% that low collinearity is necessary but not sufficient.
+% PINNsFormer (Zhao et al. 2024) could get a sentence here if relevant. 
 
 \section{Methodology}
-This section presents the solutions to the problems in detail. The design and implementation details should all be placed in this section. You may create a number of sub-sections, each focusing on one issue.
 
-This section should be between 4 to 6 pages in length.
+\subsection{PDE Operator Discovery}
 
-\begin{table}[!h]
-% increase table row spacing, adjust to taste
-\caption{Units for Magnetic Properties}
-\label{table_example}
-\centering
-\begin{tabular}{c}
- \includegraphics[width=3.5in]{table1.png}
-\end{tabular}
-\end{table}
-
-% An example of a floating table. Note that, for IEEE style tables, the
-% \caption command should come BEFORE the table and, given that table
-% captions serve much like titles, are usually capitalized except for words
-% such as a, an, and, as, at, but, by, for, in, nor, of, on, or, the, to
-% and up, which are usually not capitalized unless they are the first or
-% last word of the caption. Table text will default to \footnotesize as
-% the IEEE normally uses this smaller font for tables.
-% The \label must come after \caption as always.
+Raissi~\cite{raissi2018} considers nonlinear partial differential equations of
+the general form
 %
-%\begin{table}[!t]
-%% increase table row spacing, adjust to taste
-%\renewcommand{\arraystretch}{1.3}
-% if using array.sty, it might be a good idea to tweak the value of
-% \extrarowheight as needed to properly center the text within the cells
-%\caption{An Example of a Table}
-%\label{table_example}
-%\centering
-%% Some packages, such as MDW tools, offer better commands for making tables
-%% than the plain LaTeX2e tabular which is used here.
-%\begin{tabular}{|c||c|}
-%\hline
-%One & Two\\
-%\hline
-%Three & Four\\
-%\hline
-%\end{tabular}
-%\end{table}
+\begin{equation}\label{eq:pde_general}
+  u_t = \mathcal{N}(t,\, x,\, u,\, u_x,\, u_{xx},\, \ldots),
+\end{equation}
+%
+where $\mathcal{N}$ is an unknown nonlinear function of time~$t$, space~$x$,
+the solution~$u$, and its spatial derivatives. Given scattered observations
+$\{t^i, x^i, u^i\}_{i=1}^{N}$, the goal is to learn~$\mathcal{N}$ and
+thereby discover the governing PDE.
 
-\noindent \textit{Statements that serve as captions for the entire table do not need footnote letters.  E.g. Mx = maxwell, G = gauss, Oe = oersted; Wb = weber, V = volt, s = second, T = tesla, m = meter, A = ampere, J = joule, kg = kilogram, H = henry.}
+The approach approximates both the unknown solution~$u$ and the nonlinear
+function~$\mathcal{N}$ with deep neural networks, and defines a \emph{deep
+hidden physics model}
+%
+\begin{equation}\label{eq:residual}
+  f := u_t - \mathcal{N}(t,\, x,\, u,\, u_x,\, u_{xx},\, \ldots).
+\end{equation}
+%
+Derivatives of the neural network~$u$ with respect to time and space are
+obtained via automatic differentiation. Parameters of both networks are learned
+by minimising the sum of squared errors
+%
+\begin{equation}\label{eq:raissi_loss}
+  \sum_{i=1}^{N}
+    \bigl(\lvert u(t^i, x^i) - u^i \rvert^2
+    + \lvert f(t^i, x^i) \rvert^2\bigr),
+\end{equation}
+%
+where $\{t^i, x^i, u^i\}_{i=1}^{N}$ denote the training data on~$u$. The
+first term fits the data by adjusting the parameters of the neural network~$u$;
+the second learns the parameters of the network~$\mathcal{N}$ by trying to
+satisfy the PDE at the collocation points $(t^i, x^i)$.
+
+When a numerical solver provides the solution~$u$ and its derivatives
+directly, the solution network is unnecessary. In this \emph{decoupled}
+setting we train only the operator network, reducing the loss to
+%
+\begin{equation}\label{eq:decoupled_loss}
+  \mathcal{L}(\theta)
+  = \frac{1}{N} \sum_{i=1}^{N}
+    \bigl\lVert \mathcal{N}_\theta(\mathbf{x}_i) - \mathbf{y}_i \bigr\rVert^2,
+\end{equation}
+%
+where $\mathbf{x}_i$ collects the solver-provided features (field values and
+spatial derivatives) and $\mathbf{y}_i$ the time derivatives serving as
+targets. This then allows us to amortise the PDE Operator Network
+Regularisation Agent with MAML.
+
+\subsection{Meta-Learning via MAML}
+
+Given a distribution of PDE tasks $p(\mathcal{T})$, each characterised by
+different physical parameters, MAML seeks an initialisation $\theta$ from
+which a small number of gradient steps on any sampled task yields good
+generalisation. The procedure is:
+
+\begin{figure}[!h]
+\renewcommand{\algorithmicrequire}{\textbf{Require:}}
+\begin{algorithmic}[1]
+\REQUIRE $p(\mathcal{T})$: distribution over PDE tasks
+\REQUIRE $\alpha, \beta$: inner and outer step sizes
+\STATE Randomly initialise $\theta$
+\WHILE{not converged}
+  \STATE Sample batch of tasks $\mathcal{T}_i \sim p(\mathcal{T})$
+  \FORALL{$\mathcal{T}_i$}
+    \STATE Sample support set $\mathcal{D}_i = \{(\mathbf{x}^{(j)},
+           \mathbf{y}^{(j)})\}_{j=1}^{K}$ from $\mathcal{T}_i$
+    \STATE Evaluate $\nabla_\theta \mathcal{L}_{\mathcal{T}_i}(f_\theta)$
+           using $\mathcal{D}_i$
+    \STATE Compute adapted parameters:
+           $\theta'_i = \theta - \alpha \nabla_\theta
+           \mathcal{L}_{\mathcal{T}_i}(f_\theta)$
+    \STATE Sample query set $\mathcal{D}'_i$ from $\mathcal{T}_i$
+           (disjoint from $\mathcal{D}_i$)
+  \ENDFOR
+  \STATE Update $\theta \leftarrow \theta - \beta \nabla_\theta
+         \sum_{\mathcal{T}_i} \mathcal{L}_{\mathcal{T}_i}(f_{\theta'_i})$
+         using each $\mathcal{D}'_i$
+\ENDWHILE
+\STATE \textbf{return} $\theta^*$ \COMMENT{meta-learned initialisation}
+\end{algorithmic}
+\caption{MAML for PDE coefficient recovery (after
+Finn et al.~\cite{finn2017}).}
+\label{alg:maml}
+\end{figure}
+
+The inner loop (lines 5--8) adapts to a single task using $K$~support
+samples; the outer loop (line 10) updates~$\theta$ so that the
+\emph{post-adaptation} loss on held-out query samples is minimised across all
+sampled tasks. The meta-gradient in line~10 differentiates through the inner
+update, requiring a second-order gradient computation.
+
+% TODO(me): subsections for experimental specifics —
+% task definition, data generation, evaluation protocol, Jacobian extraction
 
 \section{Results}
 This section presents the results of the solutions. It should include information on experimental settings. The results should demonstrate the claimed benefits/disadvantages of the proposed solutions.
