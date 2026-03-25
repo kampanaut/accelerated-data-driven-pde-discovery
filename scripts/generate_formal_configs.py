@@ -36,6 +36,7 @@ FIXED_STEPS = [0, 1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500,
 # ── Variant definitions ─────────────────────────────────────────────────
 Variant = namedtuple("Variant", [
     "label", "configs_dir", "models_dir", "zero_non_rhs", "layers_fn",
+    "log_weights", "weight_init",
 ])
 
 def _cheat_layers(pde: PDE) -> list[dict]:
@@ -43,9 +44,12 @@ def _cheat_layers(pde: PDE) -> list[dict]:
     return [{"input": pde.input_dim}, {"output": pde.output_dim, "bias": False}]
 
 VARIANTS = [
-    Variant("formal",  "configs/formal",  "data/models/formal",  False, None),
-    Variant("zeroed",  "configs/zeroed",  "data/models/zeroed",  True,  None),
-    Variant("cheat",   "configs/cheat",   "data/models/cheat",   False, _cheat_layers),
+    Variant("formal",            "configs/formal",            "data/models/formal",            False, None,          False, None),
+    Variant("zeroed",            "configs/zeroed",            "data/models/zeroed",            True,  None,          False, None),
+    Variant("cheat",             "configs/cheat",             "data/models/cheat",             False, _cheat_layers, True,  None),
+    Variant("cheat_zeroed",      "configs/cheat_zeroed",      "data/models/cheat_zeroed",      True,  _cheat_layers, True,  None),
+    Variant("cheat_zero_init",   "configs/cheat_zero_init",   "data/models/cheat_zero_init",   False, _cheat_layers, True,  "zeros"),
+    Variant("cheat_zeroed_zinit","configs/cheat_zeroed_zinit","data/models/cheat_zeroed_zinit", True,  _cheat_layers, True,  "zeros"),
 ]
 
 
@@ -65,6 +69,8 @@ def generate_config(
     models_dir: str,
     zero_non_rhs_features: bool,
     layers_fn: Optional[Callable] = None,
+    log_weights: bool = False,
+    weight_init: Optional[str] = None,
 ) -> dict:
     """Build the full config dict for one experiment."""
     flags = loss_mode_flags(loss_mode)
@@ -105,6 +111,9 @@ def generate_config(
         "zero_non_rhs_features": zero_non_rhs_features,
     }
 
+    if weight_init is not None:
+        training["weight_init"] = weight_init
+
     if flags["spectral"]:
         training["spectral_loss"] = {"enabled": True}
 
@@ -135,6 +144,7 @@ def generate_config(
             "deriv_threshold": 0.0005,
             "fixed_steps": FIXED_STEPS,
             "holdout_size": 5000,
+            "log_weights": log_weights,
         },
         "visualization": {
             "dpi": 300,
@@ -217,6 +227,8 @@ def main():
                 spec.pde, spec.exp_number, spec.inner_steps, spec.k_shot,
                 spec.loss_mode, variant.models_dir, variant.zero_non_rhs,
                 layers_fn=variant.layers_fn,
+                log_weights=variant.log_weights,
+                weight_init=variant.weight_init,
             )
             group = scatter_groups[(spec.pde.name, spec.loss_mode)]
             config["visualization"]["compare_experiments"] = group

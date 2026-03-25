@@ -66,6 +66,7 @@ evaluation:
   - 800
   - 1000
   holdout_size: 5000
+  log_weights: true
 visualization:
   dpi: 300
   only: scatter[0,1,1000],best-combo

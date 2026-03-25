@@ -199,6 +199,14 @@ def main():
     train_cfg = config["training"]
     net_config = NetworkConfig.from_dict(train_cfg)
     model = PDEOperatorNetwork(net_config)
+
+    weight_init = train_cfg.get("weight_init", None)
+    if weight_init == "zeros":
+        with torch.no_grad():
+            for p in model.parameters():
+                p.zero_()
+        print(f"Weight init: zeros ({sum(p.numel() for p in model.parameters())} params zeroed)")
+
     print(model)
     print()
 

@@ -257,6 +257,7 @@ def evaluate_task(
     loss_type: str = "normalized_mse",
     spectral_mode_size: int = 0,
     max_grad_norm: float = 0.0,
+    log_weights: bool = False,
     zero_non_rhs_features: bool = False,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
@@ -343,22 +344,48 @@ def evaluate_task(
                 # --- Build callback for intermediate Jacobian extraction ---
                 maml_jac_snapshots: List[JacobianResults] = []
                 maml_pred_snapshots: List[NDArray[np.integer[Any]]] = []
+                maml_weight_snapshots: List[np.ndarray] = []
                 baseline_jac_snapshots: List[JacobianResults] = []
                 baseline_pred_snapshots: List[NDArray[np.integer[Any]]] = []
+                baseline_weight_snapshots: List[np.ndarray] = []
+
+                _WEIGHT_LABELS_5 = ["u", "u_x", "u_y", "u_xx", "u_yy"]
+                _WEIGHT_LABELS_10 = ["u", "v", "u_x", "u_y", "u_xx", "u_yy",
+                                     "v_x", "v_y", "v_xx", "v_yy"]
 
                 def _make_on_step(
                     jac_list: List[JacobianResults],
                     pred_list: List[np.ndarray],
                     h_feat: torch.Tensor,
                     h_tgt: torch.Tensor,
+                    weight_list: Optional[List[np.ndarray]] = None,
+                    method_label: str = "",
                 ) -> Callable[[torch.nn.Module, int], None]:
-                    def on_step(model: torch.nn.Module, _: int) -> None:
+                    _printed_header = [False]  # mutable flag for newline before first weight log
+
+                    def on_step(model: torch.nn.Module, step: int) -> None:
                         jac = analyze_jacobian(model, h_feat, specs, device=device)
                         jac_list.append(jac)
                         with torch.no_grad():
                             pred = model(h_feat)
                             pred_errors = (pred - h_tgt).abs().cpu().numpy()
                         pred_list.append(pred_errors)
+                        if weight_list is not None:
+                            if not _printed_header[0]:
+                                print()  # newline after "K=..., noise=...%" line
+                                _printed_header[0] = True
+                            flat = torch.cat([
+                                p.detach().cpu().flatten() for p in model.parameters()
+                            ]).numpy()
+                            weight_list.append(flat)
+                            n = len(flat)
+                            labels = (
+                                _WEIGHT_LABELS_5 if n == 5
+                                else _WEIGHT_LABELS_10 if n == 10
+                                else [f"w{i}" for i in range(n)]
+                            )
+                            parts = [f"{l}={v:+.4f}" for l, v in zip(labels, flat)]
+                            print(f"      [{method_label:>4s}] step {step:4d}: {'  '.join(parts)}")
 
                     return on_step
 
@@ -378,6 +405,8 @@ def evaluate_task(
                         maml_pred_snapshots,
                         holdout_features,
                         holdout_targets,
+                        maml_weight_snapshots if log_weights else None,
+                        method_label="MAML",
                     ),
                     metal=metal,
                     loss_type=loss_type,
@@ -404,6 +433,8 @@ def evaluate_task(
                         baseline_pred_snapshots,
                         holdout_features,
                         holdout_targets,
+                        baseline_weight_snapshots if log_weights else None,
+                        method_label="BL",
                     ),
                     loss_type=loss_type,
                     coords=support_coords,
@@ -429,9 +460,9 @@ def evaluate_task(
 
                 # Stack per-step Jacobian distributions into NPZ
                 # Shape: (n_fixed_steps, holdout_size)
-                for label, jac_snaps, pred_snaps in [
-                    ("maml", maml_jac_snapshots, maml_pred_snapshots),
-                    ("baseline", baseline_jac_snapshots, baseline_pred_snapshots),
+                for label, jac_snaps, pred_snaps, w_snaps in [
+                    ("maml", maml_jac_snapshots, maml_pred_snapshots, maml_weight_snapshots),
+                    ("baseline", baseline_jac_snapshots, baseline_pred_snapshots, baseline_weight_snapshots),
                 ]:
                     for coeff_name in jac_snaps[0].estimates.keys():
                         stacked = np.stack(
@@ -444,6 +475,9 @@ def evaluate_task(
                         )
                     # pred_errors: (n_fixed_steps, holdout_size, 2)
                     samples[f"{combo_key}/{label}/pred_errors"] = np.stack(pred_snaps)
+                    # weights: (n_fixed_steps, n_params) — only if log_weights enabled
+                    if w_snaps:
+                        samples[f"{combo_key}/{label}/weights"] = np.stack(w_snaps)
 
                 # Store coefficient recovery summary in task_result (arrays)
                 coeff_key = f"coefficient_recovery_{combo_key}"
@@ -823,6 +857,7 @@ def main():
     fine_tune_lr = eval_cfg.get("fine_tune_lr", 0.01)
     max_steps = eval_cfg.get("max_steps", 1000)
     fixed_steps: List[int] = eval_cfg.get("fixed_steps", [50, 100, 200])
+    log_weights: bool = eval_cfg.get("log_weights", False)
     loss_type: str = train_cfg.get("loss_function", "normalized_mse")
     spectral_cfg = train_cfg.get("spectral_loss", {})
     spectral_mode_size: int = spectral_cfg.get("mode_size", 0) if spectral_cfg.get("enabled", False) else 0
@@ -897,6 +932,7 @@ def main():
             loss_type=loss_type,
             spectral_mode_size=spectral_mode_size,
             max_grad_norm=max_grad_norm,
+            log_weights=log_weights,
             zero_non_rhs_features=zero_non_rhs,
         )
 
