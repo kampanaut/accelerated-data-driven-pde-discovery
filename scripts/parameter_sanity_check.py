@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 
 from src.training.task_loader import MetaLearningDataLoader, TASK_REGISTRY
-from src.networks.pde_operator_network import PDEOperatorNetwork
+from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
 
 
 def load_checkpoint(path: Path) -> dict:
@@ -90,14 +90,8 @@ def compute_gradient_check(
     k_shot: int = 500,
     seed: int = 42,
 ):
-    model = PDEOperatorNetwork(
-        input_dim=config.get("input_dim", 10),
-        output_dim=config.get("output_dim", 2),
-        hidden_dims=config.get("hidden_dims", [100, 100]),
-        activation=config.get("activation", "tanh"),
-        conv_filters=config.get("conv_filters", 0),
-        conv_kernel_size=config.get("conv_kernel_size", 3),
-    )
+    net_config = NetworkConfig.from_dict(config)
+    model = PDEOperatorNetwork(net_config)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)

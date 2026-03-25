@@ -46,7 +46,7 @@ class _TeeStream:
 import yaml
 import torch
 
-from src.networks.pde_operator_network import PDEOperatorNetwork
+from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, TASK_REGISTRY
 from src.training.maml import MAMLTrainer, MAMLConfig
 
@@ -197,20 +197,8 @@ def main():
     print("-" * 60)
 
     train_cfg = config["training"]
-    hidden_dims = train_cfg.get("hidden_dims", [100, 100])
-    activation = train_cfg.get("activation", "tanh")
-
-    input_dim = train_cfg.get("input_dim", 10)
-    output_dim = train_cfg.get("output_dim", 2)
-
-    model = PDEOperatorNetwork(
-        input_dim=input_dim,
-        output_dim=output_dim,
-        hidden_dims=hidden_dims,
-        activation=activation,
-        conv_filters=train_cfg.get("conv_filters", 0),
-        conv_kernel_size=train_cfg.get("conv_kernel_size", 3),
-    )
+    net_config = NetworkConfig.from_dict(train_cfg)
+    model = PDEOperatorNetwork(net_config)
     print(model)
     print()
 
@@ -236,12 +224,7 @@ def main():
         torch.save(
             {
                 "model_state_dict": model.state_dict(),
-                "config": {
-                    "hidden_dims": hidden_dims,
-                    "activation": activation,
-                    "input_dim": input_dim,
-                    "output_dim": output_dim,
-                },
+                "config": net_config.to_dict(),
                 "timestamp": datetime.now().isoformat(),
             },
             initial_checkpoint_path,

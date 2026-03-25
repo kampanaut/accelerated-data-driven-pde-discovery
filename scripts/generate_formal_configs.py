@@ -1,12 +1,13 @@
-"""Generate formal experiment configs (with and without zeroed non-RHS features).
+"""Generate formal experiment configs.
 
 Grid per variant: 2 inner_steps × 2 k_shot × 4 loss_modes × 3 PDEs = 48
-Total: 48 formal + 48 zeroed = 96 configs
+Variants: formal (standard MLP), zeroed (masked non-RHS features), cheat (linear model)
 """
 
 import yaml
 from collections import namedtuple
 from pathlib import Path
+from typing import Callable, Optional
 
 # ── PDE definitions ──────────────────────────────────────────────────────
 PDE = namedtuple("PDE", ["name", "pde_type", "train_dir", "val_dir", "test_dir",
@@ -33,11 +34,18 @@ LOSS_MODES = ["baseline", "metal", "spectral", "metal-spectral"]
 FIXED_STEPS = [0, 1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
 
 # ── Variant definitions ─────────────────────────────────────────────────
-Variant = namedtuple("Variant", ["label", "configs_dir", "models_dir", "zero_non_rhs"])
+Variant = namedtuple("Variant", [
+    "label", "configs_dir", "models_dir", "zero_non_rhs", "layers_fn",
+])
+
+def _cheat_layers(pde: PDE) -> list[dict]:
+    """Linear model: input → output with no bias, no hidden layers."""
+    return [{"input": pde.input_dim}, {"output": pde.output_dim, "bias": False}]
 
 VARIANTS = [
-    Variant("formal",  "configs/formal",  "data/models/formal",  False),
-    Variant("zeroed",  "configs/zeroed",  "data/models/zeroed",  True),
+    Variant("formal",  "configs/formal",  "data/models/formal",  False, None),
+    Variant("zeroed",  "configs/zeroed",  "data/models/zeroed",  True,  None),
+    Variant("cheat",   "configs/cheat",   "data/models/cheat",   False, _cheat_layers),
 ]
 
 
@@ -56,11 +64,24 @@ def generate_config(
     loss_mode: str,
     models_dir: str,
     zero_non_rhs_features: bool,
+    layers_fn: Optional[Callable] = None,
 ) -> dict:
     """Build the full config dict for one experiment."""
     flags = loss_mode_flags(loss_mode)
     name = f"{pde.name}-{exp_number}-{inner_steps}step-k{k_shot}-{loss_mode}"
     query_size = 1600 if k_shot == 800 else 2000
+
+    # Model architecture: layers (new) or old fields — inserted here to
+    # preserve key ordering in YAML (model fields come after log_interval)
+    if layers_fn is not None:
+        model_fields: dict = {"layers": layers_fn(pde)}
+    else:
+        model_fields = {
+            "hidden_dims": [100, 100],
+            "activation": "silu",
+            "input_dim": pde.input_dim,
+            "output_dim": pde.output_dim,
+        }
 
     training: dict = {
         "inner_lr": 0.0001,
@@ -72,10 +93,7 @@ def generate_config(
         "max_iterations": 500,
         "patience": 300,
         "log_interval": 1,
-        "hidden_dims": [100, 100],
-        "activation": "silu",
-        "input_dim": pde.input_dim,
-        "output_dim": pde.output_dim,
+        **model_fields,
         "first_order": False,
         "warmup_iterations": 100,
         "use_scheduler": True,
@@ -198,6 +216,7 @@ def main():
             config = generate_config(
                 spec.pde, spec.exp_number, spec.inner_steps, spec.k_shot,
                 spec.loss_mode, variant.models_dir, variant.zero_non_rhs,
+                layers_fn=variant.layers_fn,
             )
             group = scatter_groups[(spec.pde.name, spec.loss_mode)]
             config["visualization"]["compare_experiments"] = group

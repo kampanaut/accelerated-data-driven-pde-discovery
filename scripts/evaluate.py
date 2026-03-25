@@ -33,7 +33,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from src.networks.pde_operator_network import PDEOperatorNetwork
+from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
 from src.training.maml import MeTALModule
 from src.training.spectral_loss import compute_spectral_loss
@@ -67,7 +67,7 @@ def load_config(config_path: Path) -> dict:
 
 
 def load_model_from_checkpoint(
-    checkpoint_path: Path, device: str, model_config: dict
+    checkpoint_path: Path, device: str, net_config: NetworkConfig
 ) -> PDEOperatorNetwork:
     """
     Load model from checkpoint.
@@ -75,22 +75,14 @@ def load_model_from_checkpoint(
     Args:
         checkpoint_path: Path to .pt checkpoint file
         device: Device to load model to
-        model_config: Optional model architecture config. If None, tries to extract
-                     from checkpoint (works for initial_model.pt format)
+        net_config: Network architecture config
 
     Returns:
         Loaded PDEOperatorNetwork
     """
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    model = PDEOperatorNetwork(
-        input_dim=model_config.get("input_dim", 10),
-        output_dim=model_config.get("output_dim", 2),
-        hidden_dims=model_config.get("hidden_dims", [100, 100]),
-        activation=model_config.get("activation", "tanh"),
-        conv_filters=model_config.get("conv_filters", 0),
-        conv_kernel_size=model_config.get("conv_kernel_size", 3),
-    )
+    model = PDEOperatorNetwork(net_config)
 
     model.load_state_dict(checkpoint["model_state_dict"])
     return model.to(device)
@@ -744,17 +736,10 @@ def main():
 
     # Get model architecture from training config
     train_cfg = config.get("training", {})
-    model_config = {
-        "input_dim": train_cfg.get("input_dim", 10),
-        "output_dim": train_cfg.get("output_dim", 2),
-        "hidden_dims": train_cfg.get("hidden_dims", [100, 100]),
-        "activation": train_cfg.get("activation", "tanh"),
-        "conv_filters": train_cfg.get("conv_filters", 0),
-        "conv_kernel_size": train_cfg.get("conv_kernel_size", 3),
-    }
+    net_config = NetworkConfig.from_dict(train_cfg)
 
-    theta_star = load_model_from_checkpoint(theta_star_path, device, model_config)
-    theta_0 = load_model_from_checkpoint(theta_0_path, device, model_config)
+    theta_star = load_model_from_checkpoint(theta_star_path, device, net_config)
+    theta_0 = load_model_from_checkpoint(theta_0_path, device, net_config)
 
     print(f"θ* loaded from: {theta_star_path}")
     print(f"θ₀ loaded from: {theta_0_path}")
@@ -784,7 +769,7 @@ def main():
             sys.exit(1)
 
         n_base_params = sum(1 for _ in theta_star.parameters())
-        output_dim = model_config.get("output_dim", 2)
+        output_dim = net_config.output_dim
         inner_steps = config.get("training", {}).get("inner_steps", 1)
         metal_hidden_dim = (
             config.get("training", {}).get("metal", {}).get("hidden_dim", 64)
