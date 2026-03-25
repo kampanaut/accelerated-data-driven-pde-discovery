@@ -1,0 +1,83 @@
+experiment:
+  name: heat-23-1step-k800-metal-spectral
+  pde_type: heat
+  seed: 42
+  device: cuda
+output:
+  base_dir: data/models/cheat_zeroed_expect_finn/heat
+data:
+  meta_train_dir: data/datasets/heat_train-1
+  meta_val_dir: data/datasets/heat_val-1
+  meta_test_dir: data/datasets/heat_test-1
+training:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  inner_steps: 1
+  meta_batch_size: 8
+  k_shot: 800
+  query_size: 1600
+  max_iterations: 500
+  patience: 300
+  log_interval: 1
+  layers:
+  - input: 5
+  - output: 1
+    bias: false
+  first_order: false
+  warmup_iterations: 100
+  use_scheduler: true
+  scheduler_type: warm_restarts
+  T_0: 200
+  T_mult: 2
+  min_lr: 1.0e-06
+  max_grad_norm: 100.0
+  zero_non_rhs_features: true
+  weight_init: expected
+  spectral_loss:
+    enabled: true
+  metal:
+    enabled: true
+    hidden_dim: 64
+evaluation:
+  k_values:
+  - 800
+  - 1000
+  - 1600
+  - 3000
+  - 5000
+  noise_levels:
+  - 0.0
+  - 0.01
+  - 0.05
+  - 0.1
+  fine_tune_lr: 0.01
+  max_steps: 50
+  deriv_threshold: 0.0005
+  fixed_steps:
+  - 0
+  - 1
+  - 5
+  - 10
+  - 25
+  - 50
+  - 100
+  - 150
+  - 200
+  - 250
+  - 300
+  - 350
+  - 400
+  - 450
+  - 500
+  - 800
+  - 1000
+  holdout_size: 5000
+  log_weights: true
+visualization:
+  dpi: 300
+  only: scatter[0,1,1000],best-combo
+  compare_experiments:
+  - heat-23-1step-k800-metal-spectral
+  - heat-24-1step-k10-metal-spectral
+  - heat-31-5step-k800-metal-spectral
+  - heat-32-5step-k10-metal-spectral

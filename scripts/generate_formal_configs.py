@@ -36,20 +36,31 @@ FIXED_STEPS = [0, 1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500,
 # ── Variant definitions ─────────────────────────────────────────────────
 Variant = namedtuple("Variant", [
     "label", "configs_dir", "models_dir", "zero_non_rhs", "layers_fn",
-    "log_weights", "weight_init",
+    "log_weights", "weight_init", "overrides",
 ])
 
 def _cheat_layers(pde: PDE) -> list[dict]:
     """Linear model: input → output with no bias, no hidden layers."""
     return [{"input": pde.input_dim}, {"output": pde.output_dim, "bias": False}]
 
+# Finn-style LR overrides: inner_lr=0.01, fine_tune_lr=0.01, max_steps=50
+_FINN_LR = {
+    "training": {"inner_lr": 0.01},
+    "evaluation": {"fine_tune_lr": 0.01, "max_steps": 50},
+}
+
 VARIANTS = [
-    Variant("formal",              "configs/formal",              "data/models/formal",              False, None,          False, None),
-    Variant("zeroed",              "configs/zeroed",              "data/models/zeroed",              True,  None,          False, None),
-    Variant("cheat",               "configs/cheat",               "data/models/cheat",               False, _cheat_layers, True,  None),
-    Variant("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed",        True,  _cheat_layers, True,  None),
-    Variant("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected",      False, _cheat_layers, True,  "expected"),
-    Variant("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect", True,  _cheat_layers, True,  "expected"),
+    Variant("formal",              "configs/formal",              "data/models/formal",              False, None,          False, None,       None),
+    Variant("zeroed",              "configs/zeroed",              "data/models/zeroed",              True,  None,          False, None,       None),
+    Variant("cheat",               "configs/cheat",               "data/models/cheat",               False, _cheat_layers, True,  None,       None),
+    Variant("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed",        True,  _cheat_layers, True,  None,       None),
+    Variant("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected",      False, _cheat_layers, True,  "expected", None),
+    Variant("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect", True,  _cheat_layers, True,  "expected", None),
+    # Finn-style LR (inner_lr=0.01, fine_tune_lr=0.01, max_eval_steps=50)
+    Variant("cheat_finn",               "configs/cheat_finn",               "data/models/cheat_finn",               False, _cheat_layers, True,  None,       _FINN_LR),
+    Variant("cheat_zeroed_finn",        "configs/cheat_zeroed_finn",        "data/models/cheat_zeroed_finn",        True,  _cheat_layers, True,  None,       _FINN_LR),
+    Variant("cheat_expected_finn",      "configs/cheat_expected_finn",      "data/models/cheat_expected_finn",      False, _cheat_layers, True,  "expected", _FINN_LR),
+    Variant("cheat_zeroed_expect_finn", "configs/cheat_zeroed_expect_finn", "data/models/cheat_zeroed_expect_finn", True,  _cheat_layers, True,  "expected", _FINN_LR),
 ]
 
 
@@ -71,6 +82,7 @@ def generate_config(
     layers_fn: Optional[Callable] = None,
     log_weights: bool = False,
     weight_init: Optional[str] = None,
+    overrides: Optional[dict] = None,
 ) -> dict:
     """Build the full config dict for one experiment."""
     flags = loss_mode_flags(loss_mode)
@@ -120,7 +132,7 @@ def generate_config(
     if flags["metal"]:
         training["metal"] = {"enabled": True, "hidden_dim": 64}
 
-    return {
+    config = {
         "experiment": {
             "name": name,
             "pde_type": pde.pde_type,
@@ -151,6 +163,14 @@ def generate_config(
             "only": "scatter[0,1,1000],best-combo",
         },
     }
+
+    # Apply overrides (e.g., Finn-style LR)
+    if overrides:
+        for section, values in overrides.items():
+            if section in config:
+                config[section].update(values)
+
+    return config
 
 
 SCRIPT_DIR = Path(__file__).parent
@@ -229,6 +249,7 @@ def main():
                 layers_fn=variant.layers_fn,
                 log_weights=variant.log_weights,
                 weight_init=variant.weight_init,
+                overrides=variant.overrides,
             )
             group = scatter_groups[(spec.pde.name, spec.loss_mode)]
             config["visualization"]["compare_experiments"] = group
