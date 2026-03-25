@@ -44,12 +44,12 @@ def _cheat_layers(pde: PDE) -> list[dict]:
     return [{"input": pde.input_dim}, {"output": pde.output_dim, "bias": False}]
 
 VARIANTS = [
-    Variant("formal",            "configs/formal",            "data/models/formal",            False, None,          False, None),
-    Variant("zeroed",            "configs/zeroed",            "data/models/zeroed",            True,  None,          False, None),
-    Variant("cheat",             "configs/cheat",             "data/models/cheat",             False, _cheat_layers, True,  None),
-    Variant("cheat_zeroed",      "configs/cheat_zeroed",      "data/models/cheat_zeroed",      True,  _cheat_layers, True,  None),
-    Variant("cheat_zero_init",   "configs/cheat_zero_init",   "data/models/cheat_zero_init",   False, _cheat_layers, True,  "zeros"),
-    Variant("cheat_zeroed_zinit","configs/cheat_zeroed_zinit","data/models/cheat_zeroed_zinit", True,  _cheat_layers, True,  "zeros"),
+    Variant("formal",              "configs/formal",              "data/models/formal",              False, None,          False, None),
+    Variant("zeroed",              "configs/zeroed",              "data/models/zeroed",              True,  None,          False, None),
+    Variant("cheat",               "configs/cheat",               "data/models/cheat",               False, _cheat_layers, True,  None),
+    Variant("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed",        True,  _cheat_layers, True,  None),
+    Variant("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected",      False, _cheat_layers, True,  "expected"),
+    Variant("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect", True,  _cheat_layers, True,  "expected"),
 ]
 
 
