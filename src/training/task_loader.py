@@ -302,6 +302,8 @@ class PDETask(ABC):
         E_y = torch.exp(1j * torch.outer(y_pts, self.ky))  # (n_total, ny)
 
         unique_snaps, inverse = torch.unique(snap_idx, return_inverse=True)
+        # sort_order and counts must be on self.device for indexing phase matrices
+        inverse = inverse.to(self.device)
         sort_order = torch.argsort(inverse, stable=True)
         counts = torch.bincount(inverse)
 

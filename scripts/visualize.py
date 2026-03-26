@@ -12,6 +12,7 @@ Usage:
 import dataclasses
 import json
 import re
+import sys
 import argparse
 import shutil
 from pathlib import Path
@@ -1893,6 +1894,21 @@ def main():
         config_only = viz_cfg.get("only")
         if config_only is not None:
             sel = parse_only(config_only)
+
+    if not exp_dir.exists():
+        # Scan for suffixed directories (ISNAN → skip, ENDNAN → usable)
+        candidates = sorted(exp_dir.parent.glob(f"{exp_name}-*"))
+        isnan = [d for d in candidates if d.name.endswith("-ISNAN")]
+        endnan = [d for d in candidates if "-ENDNAN@" in d.name]
+        if isnan:
+            print(f"SKIP: {isnan[0].name} is flagged ISNAN. Nothing to visualize.")
+            sys.exit(0)
+        elif endnan:
+            exp_dir = endnan[0]
+            print(f"Using flagged directory: {exp_dir.name}")
+        else:
+            print(f"Experiment directory not found: {exp_dir}")
+            sys.exit(1)
 
     eval_base_dir = exp_dir / "evaluation"
     results_path = eval_base_dir / "results.json"
