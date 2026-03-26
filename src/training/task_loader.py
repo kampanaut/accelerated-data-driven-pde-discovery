@@ -1171,10 +1171,10 @@ class MetaLearningDataLoader:
             if total_hat < (free_vram - headroom):
                 for t in self.tasks:
                     t.promote_storage("cuda")
-                print(f"\n  Promoted *_hat to GPU ({total_hat / 1024**3:.1f} GB, "
+                print(f"\n  Promoted storage tensors to GPU ({total_hat / 1024**3:.1f} GB, "
                       f"free: {free_vram / 1024**3:.1f} GB)")
             else:
-                print(f"\n  Keeping *_hat on CPU ({total_hat / 1024**3:.1f} GB, "
+                print(f"\n  Keeping storage tensors on CPU ({total_hat / 1024**3:.1f} GB, "
                       f"free: {free_vram / 1024**3:.1f} GB)")
 
     def sample_batch(self, n_tasks: int, seed: Optional[int] = None) -> List[PDETask]:
