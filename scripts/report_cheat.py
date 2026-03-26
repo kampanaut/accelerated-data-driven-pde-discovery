@@ -294,6 +294,16 @@ def write_per_variant_log(variant_dir: Path, model_type: str, out_path: Path):
                             split_data["last"].append((w_l[3], w_l[4]))
                             nonrhs_data["last"].append(w_l[:3])
 
+            # Compute E[D_true] from tasks
+            true_ds = [
+                task_data["coefficients"]["D"]
+                for task_data in results["tasks"].values()
+                if "coefficients" in task_data and "D" in task_data.get("coefficients", {})
+            ]
+            if true_ds:
+                lines.append(f"  E[D_true] = {np.mean(true_ds):.4f}  (mean across {len(true_ds)} test tasks)")
+                lines.append("")
+
             # w_uxx / w_uyy split
             lines.append(f"  [cheat] w_uxx / w_uyy split (noise=0%, avg over K values, tasks):")
             for label, pairs in split_data.items():
