@@ -462,7 +462,7 @@ def main():
 
     if summaries:
         print(f"\nWriting cross-variant summary...")
-        write_cross_variant_log(summaries, args.output_dir / "cross_variant.log")
+        write_cross_variant_log(summaries, args.output_dir / "cheat_cross_variant.log")
 
     print("\nDone.")
 
