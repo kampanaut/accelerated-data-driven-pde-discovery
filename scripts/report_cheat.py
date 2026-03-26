@@ -235,9 +235,27 @@ def write_per_variant_log(variant_dir: Path, model_type: str, out_path: Path):
                                        if r["error_pct"] is not None])
                     true_val = recoveries[0]["true"]
                     task_errors.append(avg_err)
+
+                    # For cheat: show individual w_uxx, w_uyy from weight NPZ
+                    weight_suffix = ""
+                    if model_type == "cheat":
+                        w_uxx_vals = []
+                        w_uyy_vals = []
+                        for combo_key in combos:
+                            w_traj = load_weight_trajectory(
+                                model_dir, task_name, combo_key, "maml"
+                            )
+                            if w_traj is not None and step_idx < len(w_traj):
+                                w_uxx_vals.append(w_traj[step_idx][3])
+                                w_uyy_vals.append(w_traj[step_idx][4])
+                        if w_uxx_vals:
+                            avg_uxx = np.mean(w_uxx_vals)
+                            avg_uyy = np.mean(w_uyy_vals)
+                            weight_suffix = f"  w_uxx={avg_uxx:.4f}  w_uyy={avg_uyy:.4f}"
+
                     lines.append(
                         f"    {task_name:30s}  D_true={true_val:.4f}  "
-                        f"D_rec={avg_rec:.4f}  err={avg_err:.1f}%"
+                        f"D_rec={avg_rec:.4f}  err={avg_err:.1f}%{weight_suffix}"
                     )
 
             if task_errors:
