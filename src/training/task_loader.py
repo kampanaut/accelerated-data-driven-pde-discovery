@@ -69,6 +69,7 @@ class PDETask(ABC):
     def __init__(self, npz_path: Path, device: str = "cuda"):
         self.npz_path = Path(npz_path)
         self.device = device
+        self.storage_device = "cpu"  # where *_hat tensors live; promoted to GPU if room
         data = np.load(npz_path, allow_pickle=True)
 
         # Common metadata
@@ -114,6 +115,21 @@ class PDETask(ABC):
     def _extract_pde_params(self) -> None:
         """Extract PDE-specific coefficients from metadata."""
         pass
+
+    def _hat_tensor_names(self) -> list[str]:
+        """Return names of *_hat attributes on this task."""
+        return [k for k in self.__dict__ if k.endswith("_hat")]
+
+    def hat_memory_bytes(self) -> int:
+        """Total memory of *_hat tensors in bytes."""
+        return sum(getattr(self, k).nelement() * getattr(self, k).element_size()
+                   for k in self._hat_tensor_names())
+
+    def promote_storage(self, device: str) -> None:
+        """Move *_hat tensors to the given device."""
+        for k in self._hat_tensor_names():
+            setattr(self, k, getattr(self, k).to(device))
+        self.storage_device = device
 
     @abstractmethod
     def evaluate_collocations(
@@ -1128,6 +1144,20 @@ class MetaLearningDataLoader:
                 f"{k}={v:.6f}" if v else f"{k}=unknown" for k, v in coeffs.items()
             )
             print(f"  {name:30s}  {task.n_samples:>7,} samples  {coeff_str}")
+
+        # Auto-promote *_hat to GPU if enough VRAM
+        if device == "cuda" and torch.cuda.is_available() and len(self.tasks) > 0:
+            total_hat = sum(t.hat_memory_bytes() for t in self.tasks)
+            free_vram = torch.cuda.mem_get_info()[0]
+            headroom = 2 * (1024 ** 3)  # reserve 2 GB for model + activations
+            if total_hat < (free_vram - headroom):
+                for t in self.tasks:
+                    t.promote_storage("cuda")
+                print(f"\n  Promoted *_hat to GPU ({total_hat / 1024**3:.1f} GB, "
+                      f"free: {free_vram / 1024**3:.1f} GB)")
+            else:
+                print(f"\n  Keeping *_hat on CPU ({total_hat / 1024**3:.1f} GB, "
+                      f"free: {free_vram / 1024**3:.1f} GB)")
 
     def sample_batch(self, n_tasks: int, seed: Optional[int] = None) -> List[PDETask]:
         """

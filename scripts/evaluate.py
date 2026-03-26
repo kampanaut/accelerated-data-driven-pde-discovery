@@ -30,6 +30,7 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 from numpy.typing import NDArray
 import yaml
 import torch
+torch.set_num_threads(4)
 import torch.nn.functional as F
 import numpy as np
 
