@@ -265,16 +265,18 @@ class PDETask(ABC):
         if k_seed is not None:
             k_shot_gen.manual_seed(k_seed)
 
-        snapshot_gen = torch.Generator(device=self.device)
+        snapshot_gen = torch.Generator(device=self.storage_device)
         if snapshot_seed is not None:
             snapshot_gen.manual_seed(snapshot_seed)
-        else:
+        elif k_seed is not None:
+            snapshot_gen.manual_seed(k_seed)
+        elif self.storage_device == self.device:
             snapshot_gen = k_shot_gen
 
 
         # Sample random snapshot indices (uniform random — discrete dimension)
         snap_idx = torch.randint(
-            0, self.n_snapshots, (n_total,), generator=snapshot_gen, device=self.device
+            0, self.n_snapshots, (n_total,), generator=snapshot_gen, device=self.storage_device
         )
 
         # Sobol quasi-random spatial coordinates for uniform coverage
@@ -314,7 +316,7 @@ class PDETask(ABC):
         )  # (len(unique_snaps), max(counts), ny)
 
         feats, tgts = self.evaluate_collocations(
-            unique_snaps.to(device="cpu"), E_x_compact, E_y_compact
+            unique_snaps, E_x_compact, E_y_compact
         )
 
         mask_idx = torch.arange(0, E_x_compact.shape[1], device=self.device).unsqueeze(

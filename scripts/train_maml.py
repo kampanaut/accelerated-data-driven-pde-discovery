@@ -45,7 +45,8 @@ class _TeeStream:
 
 import yaml
 import torch
-torch.set_num_threads(4)
+torch.set_num_threads(9)
+torch.set_num_interop_threads(4)
 
 from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, TASK_REGISTRY
