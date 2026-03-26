@@ -117,18 +117,36 @@ class PDETask(ABC):
         pass
 
     def _hat_tensor_names(self) -> list[str]:
-        """Return names of *_hat attributes on this task."""
-        return [k for k in self.__dict__ if k.endswith("_hat")]
+        """Return attribute names of *_hat Fourier coefficient tensors.
+
+        Scans instance __dict__ for any attribute ending in '_hat'
+        (e.g., u_hat, v_hat, p_hat). Used by hat_memory_bytes() and
+        promote_storage() to operate generically across PDE types.
+        """
+        names = []
+        for attr_name in self.__dict__:
+            if attr_name.endswith("_hat"):
+                names.append(attr_name)
+        return names
 
     def hat_memory_bytes(self) -> int:
-        """Total memory of *_hat tensors in bytes."""
-        return sum(getattr(self, k).nelement() * getattr(self, k).element_size()
-                   for k in self._hat_tensor_names())
+        """Total memory consumed by *_hat tensors in bytes."""
+        total = 0
+        for name in self._hat_tensor_names():
+            tensor = getattr(self, name)
+            total += tensor.nelement() * tensor.element_size()
+        return total
 
     def promote_storage(self, device: str) -> None:
-        """Move *_hat tensors to the given device."""
-        for k in self._hat_tensor_names():
-            setattr(self, k, getattr(self, k).to(device))
+        """Move all *_hat tensors to the given device in-place.
+
+        Called by MetaLearningDataLoader after loading all tasks,
+        if enough VRAM is available. Avoids repeated CPU→GPU transfers
+        during get_support_query_split().
+        """
+        for name in self._hat_tensor_names():
+            tensor = getattr(self, name)
+            setattr(self, name, tensor.to(device))
         self.storage_device = device
 
     @abstractmethod
