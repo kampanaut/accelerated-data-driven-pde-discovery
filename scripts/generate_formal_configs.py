@@ -46,7 +46,11 @@ def _cheat_layers(pde: PDE) -> list[dict]:
 # Finn-style LR overrides: inner_lr=0.01, fine_tune_lr=0.01, max_steps=50
 _FINN_LR = {
     "training": {"inner_lr": 0.01},
-    "evaluation": {"fine_tune_lr": 0.01, "max_steps": 50},
+    "evaluation": {
+        "fine_tune_lr": 0.01,
+        "max_steps": 50,
+        "fixed_steps": [0, 1, 5, 10, 25, 50],
+    },
 }
 
 VARIANTS = [
