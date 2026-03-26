@@ -346,8 +346,8 @@ class BrusselatorTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.storage_device)
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.storage_device)
 
     def _extract_pde_params(self) -> None:
         self.D_u = self.simulation_params.get("D_u") or self.ic_config.get("D_u_used")
@@ -473,8 +473,8 @@ class FitzHughNagumoTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.storage_device)
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.storage_device)
 
     def _extract_pde_params(self) -> None:
         self.b = self.simulation_params.get("b", 0.0)
@@ -618,8 +618,8 @@ class LambdaOmegaTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.storage_device)
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.storage_device)
 
     def _extract_pde_params(self) -> None:
         D_u = self.simulation_params.get("D_u")
@@ -758,9 +758,9 @@ class NavierStokesTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
-        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device="cpu")
-        self.p_hat = torch.tensor(data["p_hat"], dtype=torch.complex128, device="cpu")
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.storage_device)
+        self.v_hat = torch.tensor(data["v_hat"], dtype=torch.complex128, device=self.storage_device)
+        self.p_hat = torch.tensor(data["p_hat"], dtype=torch.complex128, device=self.storage_device)
 
     def _extract_pde_params(self) -> None:
         self.nu = float(self.simulation_params.get("nu") or self.ic_config.get("nu"))
@@ -892,7 +892,7 @@ class HeatEquationTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.storage_device)
 
     def _extract_pde_params(self) -> None:
         D = self.simulation_params.get("D")
@@ -995,7 +995,7 @@ class NLHeatEquationTask(PDETask):
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
-        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device="cpu")
+        self.u_hat = torch.tensor(data["u_hat"], dtype=torch.complex128, device=self.storage_device)
 
     def _extract_pde_params(self) -> None:
         K = self.simulation_params.get("K")
