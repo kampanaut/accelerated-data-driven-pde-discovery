@@ -1205,10 +1205,9 @@ def _scatter_panel(
         all_true.extend(true_vals.tolist())
         all_rec.extend(recovered_vals.tolist())
 
-        # Paired entries: even = MAML, odd = baseline (from same experiment)
-        exp_idx = i // 2
-        is_baseline = (i % 2) == 1
-        marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
+        # Each model entry (MAML and BL separately) gets its own marker
+        exp_idx = i
+        is_baseline = "(BL)" in label
         ic_types = [_ic_type(n) for n in task_names]
 
         # Scatter: border colored by IC type, no fill.
@@ -1386,17 +1385,15 @@ def plot_coefficient_scatter_grid(
                     reg_handles.append(handle)
                     seen_labels.add(lbl)
     if reg_handles and first_key is not None:
-        # Build marker-shape handles for each experiment
-        # Paired entries: even index = MAML, odd = baseline; one marker per experiment
-        first_models = panel_data.get(first_key, [])
+        # Build marker-shape handles for each model entry (MAML + BL each get own marker)
+        all_models = []
+        for key in panel_data:
+            for entry in panel_data[key]:
+                if entry[3] not in {e[3] for e in all_models}:
+                    all_models.append(entry)
         marker_handles = []
-        seen_exp = set()
-        for i, (_, _, _, label) in enumerate(first_models):
-            exp_idx = i // 2
-            if exp_idx in seen_exp:
-                continue
-            seen_exp.add(exp_idx)
-            marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
+        for i, (_, _, _, label) in enumerate(all_models):
+            marker = MODEL_MARKERS[i % len(MODEL_MARKERS)]
             # Use short label (strip stats)
             short = label.split(":")[0].strip() if ":" in label else label
             marker_handles.append(
