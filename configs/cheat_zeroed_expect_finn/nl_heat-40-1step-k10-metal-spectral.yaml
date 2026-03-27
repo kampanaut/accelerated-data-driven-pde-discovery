@@ -64,5 +64,3 @@ visualization:
   compare_experiments:
   - nl_heat-39-1step-k800-metal-spectral
   - nl_heat-40-1step-k10-metal-spectral
-  - nl_heat-47-5step-k800-metal-spectral
-  - nl_heat-48-5step-k10-metal-spectral

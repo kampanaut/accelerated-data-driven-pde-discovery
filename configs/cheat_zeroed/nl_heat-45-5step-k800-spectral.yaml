@@ -57,7 +57,5 @@ visualization:
   dpi: 300
   only: scatter[0,5,50],best-combo
   compare_experiments:
-  - nl_heat-37-1step-k800-spectral
-  - nl_heat-38-1step-k10-spectral
   - nl_heat-45-5step-k800-spectral
   - nl_heat-46-5step-k10-spectral

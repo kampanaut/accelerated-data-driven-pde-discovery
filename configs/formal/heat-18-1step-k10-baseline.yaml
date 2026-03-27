@@ -60,5 +60,3 @@ visualization:
   compare_experiments:
   - heat-17-1step-k800-baseline
   - heat-18-1step-k10-baseline
-  - heat-25-5step-k800-baseline
-  - heat-26-5step-k10-baseline

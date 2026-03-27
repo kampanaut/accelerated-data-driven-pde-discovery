@@ -200,11 +200,11 @@ def enumerate_experiments() -> list[ExperimentSpec]:
     return specs
 
 
-def build_scatter_groups(specs: list[ExperimentSpec]) -> dict[tuple[str, str], list[str]]:
-    """Group experiment names by (pde_name, loss_mode) for scatter comparison."""
-    groups: dict[tuple[str, str], list[str]] = {}
+def build_scatter_groups(specs: list[ExperimentSpec]) -> dict[tuple, list[str]]:
+    """Group experiment names by (pde_name, loss_mode, inner_steps) for scatter comparison."""
+    groups: dict[tuple, list[str]] = {}
     for spec in specs:
-        groups.setdefault((spec.pde.name, spec.loss_mode), []).append(spec.name)
+        groups.setdefault((spec.pde.name, spec.loss_mode, spec.inner_steps), []).append(spec.name)
     return groups
 
 
@@ -255,7 +255,7 @@ def main():
                 weight_init=variant.weight_init,
                 overrides=variant.overrides,
             )
-            group = scatter_groups[(spec.pde.name, spec.loss_mode)]
+            group = scatter_groups[(spec.pde.name, spec.loss_mode, spec.inner_steps)]
             config["visualization"]["compare_experiments"] = group
             name = config["experiment"]["name"]
             rel_path = f"{variant.configs_dir}/{name}.yaml"

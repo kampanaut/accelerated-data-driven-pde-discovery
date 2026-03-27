@@ -64,5 +64,3 @@ visualization:
   compare_experiments:
   - br-7-1step-k800-metal-spectral
   - br-8-1step-k10-metal-spectral
-  - br-15-5step-k800-metal-spectral
-  - br-16-5step-k10-metal-spectral

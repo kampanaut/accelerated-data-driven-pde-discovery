@@ -58,5 +58,3 @@ visualization:
   compare_experiments:
   - nl_heat-33-1step-k800-baseline
   - nl_heat-34-1step-k10-baseline
-  - nl_heat-41-5step-k800-baseline
-  - nl_heat-42-5step-k10-baseline

@@ -58,7 +58,5 @@ visualization:
   dpi: 300
   only: scatter[0,5,50],best-combo
   compare_experiments:
-  - br-5-1step-k800-spectral
-  - br-6-1step-k10-spectral
   - br-13-5step-k800-spectral
   - br-14-5step-k10-spectral

@@ -60,7 +60,5 @@ visualization:
   dpi: 300
   only: scatter[0,5,50],best-combo
   compare_experiments:
-  - heat-23-1step-k800-metal-spectral
-  - heat-24-1step-k10-metal-spectral
   - heat-31-5step-k800-metal-spectral
   - heat-32-5step-k10-metal-spectral

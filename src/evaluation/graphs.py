@@ -1211,20 +1211,33 @@ def _scatter_panel(
         marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
         ic_types = [_ic_type(n) for n in task_names]
 
-        # Scatter by IC type
+        # Scatter by IC type (color = IC type, no model-specific marker)
         for ic, color in ic_color_map.items():
             mask = np.array([t == ic for t in ic_types])
             if not mask.any():
                 continue
+            marker_style = "o" if not is_baseline else "x"
             ax.scatter(
                 true_vals[mask],
                 recovered_vals[mask],
                 c=color,
-                marker=marker,
+                marker=marker_style,
                 s=45,
                 alpha=0.75,
-                edgecolors="k",
+                edgecolors="k" if not is_baseline else "none",
                 linewidths=0.4,
+            )
+
+        # Label each point with short task name (e.g., "t01", "gb01")
+        for j, tname in enumerate(task_names):
+            short = tname.split("_fourier")[0].split("heat_")[-1]  # e.g., "gb_t01"
+            parts = short.split("_")
+            short_label = parts[-1] if len(parts) >= 2 else short  # "t01" or "001"
+            ax.annotate(
+                short_label,
+                (true_vals[j], recovered_vals[j]),
+                fontsize=5, alpha=0.6,
+                textcoords="offset points", xytext=(3, 3),
             )
 
         # Regression line + Pearson r (dark for MAML, light for baseline)

@@ -60,5 +60,3 @@ visualization:
   compare_experiments:
   - heat-21-1step-k800-spectral
   - heat-22-1step-k10-spectral
-  - heat-29-5step-k800-spectral
-  - heat-30-5step-k10-spectral
