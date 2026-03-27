@@ -1377,13 +1377,15 @@ def plot_coefficient_scatter_grid(
     # --- Bottom legend: model markers + regression line info ---
     # Harvest regression-line handles from all panels (different K columns have different models)
     reg_handles = []
-    seen_labels: set[str] = set()
+    seen_model_names: set[str] = set()
     for row in axes:
         for ax in row:
             for handle, lbl in zip(*ax.get_legend_handles_labels()):
-                if lbl not in seen_labels:
+                # Dedup by model name (before the ": r=..." stats)
+                model_name = lbl.split(":")[0].strip() if ":" in lbl else lbl
+                if model_name not in seen_model_names:
                     reg_handles.append(handle)
-                    seen_labels.add(lbl)
+                    seen_model_names.add(model_name)
     if reg_handles and first_key is not None:
         # Build marker-shape handles for each model entry (MAML + BL each get own marker)
         all_models = []
