@@ -1618,33 +1618,25 @@ def validate_experiment_compatibility(
     experiment_results: list[Tuple[str, dict]],
 ) -> Tuple[list[int], list[float]]:
     """
-    Validate that all experiments have identical k_values and noise_levels.
+    Collect the union of k_values and noise_levels across all experiments.
 
-    Returns the common (k_values, noise_levels).
-    Raises ValueError on mismatch.
+    Each experiment may have different K values (e.g., K=800 vs K=10).
+    The scatter grid uses the union as columns, and each experiment only
+    populates panels matching its own K values.
+
+    Returns the union (k_values, noise_levels), both sorted.
     """
     if not experiment_results:
         raise ValueError("No experiments to validate.")
 
-    ref_name, ref_data = experiment_results[0]
-    ref_k = ref_data["config"]["k_values"]
-    ref_noise = ref_data["config"]["noise_levels"]
+    all_k: set[int] = set()
+    all_noise: set[float] = set()
 
-    for name, data in experiment_results[1:]:
-        k = data["config"]["k_values"]
-        noise = data["config"]["noise_levels"]
+    for _name, data in experiment_results:
+        all_k.update(data["config"]["k_values"])
+        all_noise.update(data["config"]["noise_levels"])
 
-        if k != ref_k:
-            raise ValueError(
-                f"k_values mismatch: {ref_name} has {ref_k}, but {name} has {k}"
-            )
-        if noise != ref_noise:
-            raise ValueError(
-                f"noise_levels mismatch: {ref_name} has {ref_noise}, "
-                f"but {name} has {noise}"
-            )
-
-    return ref_k, ref_noise
+    return sorted(all_k), sorted(all_noise)
 
 
 def generate_cross_experiment_scatter(
