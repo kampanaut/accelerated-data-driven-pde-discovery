@@ -162,7 +162,7 @@ def generate_config(
         },
         "visualization": {
             "dpi": 300,
-            "only": "scatter[0,1,1000],best-combo",
+            "only": f"scatter[0,{inner_steps},50],best-combo",
         },
     }
 

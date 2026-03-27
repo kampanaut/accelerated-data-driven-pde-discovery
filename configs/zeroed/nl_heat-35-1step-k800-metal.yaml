@@ -59,7 +59,7 @@ evaluation:
   log_weights: false
 visualization:
   dpi: 300
-  only: scatter[0,1,1000],best-combo
+  only: scatter[0,1,50],best-combo
   compare_experiments:
   - nl_heat-35-1step-k800-metal
   - nl_heat-36-1step-k10-metal

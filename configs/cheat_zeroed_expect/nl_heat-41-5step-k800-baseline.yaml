@@ -54,7 +54,7 @@ evaluation:
   log_weights: true
 visualization:
   dpi: 300
-  only: scatter[0,1,1000],best-combo
+  only: scatter[0,5,50],best-combo
   compare_experiments:
   - nl_heat-33-1step-k800-baseline
   - nl_heat-34-1step-k10-baseline

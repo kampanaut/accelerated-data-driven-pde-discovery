@@ -60,7 +60,7 @@ evaluation:
   log_weights: false
 visualization:
   dpi: 300
-  only: scatter[0,1,1000],best-combo
+  only: scatter[0,5,50],best-combo
   compare_experiments:
   - heat-23-1step-k800-metal-spectral
   - heat-24-1step-k10-metal-spectral

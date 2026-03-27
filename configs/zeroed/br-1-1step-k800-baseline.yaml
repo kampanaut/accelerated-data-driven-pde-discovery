@@ -56,7 +56,7 @@ evaluation:
   log_weights: false
 visualization:
   dpi: 300
-  only: scatter[0,1,1000],best-combo
+  only: scatter[0,1,50],best-combo
   compare_experiments:
   - br-1-1step-k800-baseline
   - br-2-1step-k10-baseline
