@@ -112,22 +112,30 @@ def get_noise0_combos(task_data: dict) -> list[str]:
     return sorted(combos)
 
 
-def get_designed_step_idx(config: dict) -> int:
-    """Get the step index corresponding to inner_steps from config."""
-    inner_steps = config["training"]["inner_steps"]
-    fixed_steps = config["evaluation"]["fixed_steps"]
+def get_fixed_steps_from_results(results: dict) -> list[int]:
+    """Extract actual fixed_steps from results.json (not config, which may be stale)."""
+    for task_data in results["tasks"].values():
+        for key in task_data:
+            if key.startswith("coefficient_recovery_"):
+                fs = task_data[key].get("fixed_steps")
+                if fs is not None:
+                    return fs
+    return []
+
+
+def get_designed_step_idx(inner_steps: int, fixed_steps: list[int]) -> int:
+    """Get the step index corresponding to inner_steps."""
     if inner_steps in fixed_steps:
         return fixed_steps.index(inner_steps)
-    # Find closest
     for i, s in enumerate(fixed_steps):
         if s >= inner_steps:
             return i
     return len(fixed_steps) - 1
 
 
-def get_last_step_idx(config: dict) -> int:
+def get_last_step_idx(fixed_steps: list[int]) -> int:
     """Get the last step index."""
-    return len(config["evaluation"]["fixed_steps"]) - 1
+    return len(fixed_steps) - 1
 
 
 def format_weights(w: np.ndarray, labels: list[str]) -> str:
@@ -198,9 +206,10 @@ def write_per_variant_log(variant_dir: Path, model_type: str, out_path: Path):
                 loss_mode = mode
                 break
 
-        designed_idx = get_designed_step_idx(config)
-        last_idx = get_last_step_idx(config)
-        fixed_steps = config["evaluation"]["fixed_steps"]
+        fixed_steps = get_fixed_steps_from_results(results)
+        inner_steps = config["training"]["inner_steps"]
+        designed_idx = get_designed_step_idx(inner_steps, fixed_steps)
+        last_idx = get_last_step_idx(fixed_steps)
         designed_step = fixed_steps[designed_idx]
         last_step = fixed_steps[last_idx]
 
@@ -271,7 +280,7 @@ def write_per_variant_log(variant_dir: Path, model_type: str, out_path: Path):
 
             # Collect weight trajectories across tasks for split analysis
             split_data = {"theta_star": [], "designed": [], "last": []}
-            nonrhs_data = {"theta_star": [], "last": []}
+            nonrhs_data = {"theta_star": [], "designed": [], "last": []}
 
             if theta_star_w is not None:
                 split_data["theta_star"].append(
@@ -289,6 +298,7 @@ def write_per_variant_log(variant_dir: Path, model_type: str, out_path: Path):
                         if designed_idx < len(w_traj):
                             w_d = w_traj[designed_idx]
                             split_data["designed"].append((w_d[3], w_d[4]))
+                            nonrhs_data["designed"].append(w_d[:3])
                         if last_idx < len(w_traj):
                             w_l = w_traj[last_idx]
                             split_data["last"].append((w_l[3], w_l[4]))
