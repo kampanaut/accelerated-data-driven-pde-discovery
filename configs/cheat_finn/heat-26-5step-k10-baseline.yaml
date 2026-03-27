@@ -34,11 +34,7 @@ training:
   zero_non_rhs_features: false
 evaluation:
   k_values:
-  - 800
-  - 1000
-  - 1600
-  - 3000
-  - 5000
+  - 10
   noise_levels:
   - 0.0
   - 0.01
@@ -49,7 +45,6 @@ evaluation:
   deriv_threshold: 0.0005
   fixed_steps:
   - 0
-  - 1
   - 5
   - 10
   - 25

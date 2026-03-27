@@ -48,8 +48,6 @@ _FINN_LR = {
     "training": {"inner_lr": 0.01},
     "evaluation": {
         "fine_tune_lr": 0.01,
-        "max_steps": 50,
-        "fixed_steps": [0, 1, 5, 10, 25, 50],
     },
 }
 
@@ -153,12 +151,12 @@ def generate_config(
         },
         "training": training,
         "evaluation": {
-            "k_values": [800, 1000, 1600, 3000, 5000],
+            "k_values": [k_shot],
             "noise_levels": [0.0, 0.01, 0.05, 0.10],
             "fine_tune_lr": 0.00001,
-            "max_steps": 1000,
+            "max_steps": 50,
             "deriv_threshold": 0.0005,
-            "fixed_steps": FIXED_STEPS,
+            "fixed_steps": [0] + sorted(set([inner_steps, 5, 10, 25, 50])),
             "holdout_size": 5000,
             "log_weights": log_weights,
         },

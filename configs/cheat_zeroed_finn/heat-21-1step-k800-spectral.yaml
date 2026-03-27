@@ -37,10 +37,6 @@ training:
 evaluation:
   k_values:
   - 800
-  - 1000
-  - 1600
-  - 3000
-  - 5000
   noise_levels:
   - 0.0
   - 0.01
