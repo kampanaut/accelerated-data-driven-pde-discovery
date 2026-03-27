@@ -1716,6 +1716,20 @@ def generate_cross_experiment_scatter(
                             rec_vals: list[float] = []
                             task_names_list: list[str] = []
 
+                            # Find step_idx for THIS experiment's fixed_steps
+                            exp_fixed_steps = None
+                            for _tn, _td in results_data["tasks"].items():
+                                for _ck in _td:
+                                    if _ck.startswith("coefficient_recovery_"):
+                                        exp_fixed_steps = _td[_ck].get("fixed_steps")
+                                        break
+                                if exp_fixed_steps is not None:
+                                    break
+
+                            if exp_fixed_steps is None or step_val not in exp_fixed_steps:
+                                continue
+                            exp_step_idx = exp_fixed_steps.index(step_val)
+
                             for task_name, task_data in results_data["tasks"].items():
                                 if recovery_key not in task_data:
                                     continue
@@ -1732,7 +1746,9 @@ def generate_cross_experiment_scatter(
 
                                 # Index into step if array
                                 if isinstance(rec_raw, list):
-                                    rec_val = rec_raw[step_idx]
+                                    if exp_step_idx >= len(rec_raw):
+                                        continue
+                                    rec_val = rec_raw[exp_step_idx]
                                 else:
                                     rec_val = rec_raw
 
