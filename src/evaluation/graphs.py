@@ -1211,42 +1211,45 @@ def _scatter_panel(
         marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
         ic_types = [_ic_type(n) for n in task_names]
 
-        # Scatter by IC type (color = IC type) with task label inside marker
-        marker_style = "o" if not is_baseline else "s"
-        marker_size = 220 if not is_baseline else 180
+        # Scatter: border colored by IC type, no fill.
+        # Each experiment gets its own marker from MODEL_MARKERS.
+        marker_style = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
+        marker_size = 120
 
+        for ic, color in ic_color_map.items():
+            mask = np.array([t == ic for t in ic_types])
+            if not mask.any():
+                continue
+            ax.scatter(
+                true_vals[mask],
+                recovered_vals[mask],
+                facecolors="none",
+                edgecolors=color,
+                marker=marker_style,
+                s=marker_size,
+                alpha=0.85,
+                linewidths=1.5 if not is_baseline else 0.8,
+            )
+
+        # Label each point centered inside the marker
         for j, tname in enumerate(task_names):
-            ic = ic_types[j]
-            color = ic_color_map.get(ic, "#999")
-
-            # Short label: "t01", "001", etc.
             short = tname.split("_fourier")[0].split("heat_")[-1]
             parts = short.split("_")
             short_label = parts[-1] if len(parts) >= 2 else short
-
-            ax.scatter(
-                [true_vals[j]], [recovered_vals[j]],
-                c=color,
-                marker=marker_style,
-                s=marker_size,
-                alpha=0.6,
-                edgecolors="k",
-                linewidths=0.5,
-            )
             ax.text(
                 true_vals[j], recovered_vals[j], short_label,
-                fontsize=4, ha="center", va="center",
-                color="black", alpha=0.8, fontweight="bold",
+                fontsize=4, alpha=0.7,
+                ha="center", va="center",
             )
 
-        # Regression line + Pearson r (dark for MAML, light for baseline)
+        # Regression line + Pearson r (colored per experiment, solid=MAML, dashed=baseline)
         if len(true_vals) >= 2:
             r, _ = stats.pearsonr(true_vals, recovered_vals)
             slope, intercept = np.polyfit(true_vals, recovered_vals, 1)
             x_fit = np.linspace(true_vals.min(), true_vals.max(), 100)
+            linestyle = "--" if is_baseline else "-"
             color_list = MODEL_COLORS_LIGHT if is_baseline else MODEL_COLORS_DARK
             line_color = color_list[exp_idx % len(color_list)]
-            linestyle = "--" if is_baseline else "-"
             ax.plot(
                 x_fit,
                 (slope * x_fit) + intercept,
@@ -1372,15 +1375,46 @@ def plot_coefficient_scatter_grid(
             title_fontsize=9,
         )
 
-    # --- Bottom legend: regression lines only (no colored model shapes) ---
-    reg_handles = axes[0, 0].get_legend_handles_labels()[0]
-    if reg_handles:
+    # --- Bottom legend: model markers + regression line info ---
+    # Harvest regression-line handles from all panels (different K columns have different models)
+    reg_handles = []
+    seen_labels: set[str] = set()
+    for row in axes:
+        for ax in row:
+            for handle, lbl in zip(*ax.get_legend_handles_labels()):
+                if lbl not in seen_labels:
+                    reg_handles.append(handle)
+                    seen_labels.add(lbl)
+    if reg_handles and first_key is not None:
+        # Build marker-shape handles for each experiment
+        # Paired entries: even index = MAML, odd = baseline; one marker per experiment
+        first_models = panel_data.get(first_key, [])
+        marker_handles = []
+        seen_exp = set()
+        for i, (_, _, _, label) in enumerate(first_models):
+            exp_idx = i // 2
+            if exp_idx in seen_exp:
+                continue
+            seen_exp.add(exp_idx)
+            marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
+            # Use short label (strip stats)
+            short = label.split(":")[0].strip() if ":" in label else label
+            marker_handles.append(
+                Line2D(
+                    [0], [0], marker=marker, color="w", markerfacecolor="none",
+                    markeredgecolor="grey", markeredgewidth=1.2, markersize=8,
+                    label=short,
+                )
+            )
+
+        all_bottom = marker_handles + reg_handles
+        all_bottom_labels = [h.get_label() for h in all_bottom]
         fig.legend(
-            handles=reg_handles,
-            labels=[h.get_label() for h in reg_handles],
+            handles=all_bottom,
+            labels=all_bottom_labels,
             loc="lower center",
             bbox_to_anchor=(0.5, -0.02),
-            ncol=min(len(reg_handles), 4),
+            ncol=min(len(all_bottom), 4),
             fontsize=7,
             framealpha=0.9,
             title="Models",
