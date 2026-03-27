@@ -37,42 +37,26 @@ training:
     enabled: true
 evaluation:
   k_values:
-  - 800
-  - 1000
-  - 1600
-  - 3000
-  - 5000
+  - 10
   noise_levels:
   - 0.0
   - 0.01
   - 0.05
   - 0.1
   fine_tune_lr: 1.0e-05
-  max_steps: 1000
+  max_steps: 50
   deriv_threshold: 0.0005
   fixed_steps:
   - 0
-  - 1
   - 5
   - 10
   - 25
   - 50
-  - 100
-  - 150
-  - 200
-  - 250
-  - 300
-  - 350
-  - 400
-  - 450
-  - 500
-  - 800
-  - 1000
   holdout_size: 5000
   log_weights: true
 visualization:
   dpi: 300
-  only: scatter[0,1,1000],best-combo
+  only: scatter[0,5,50],best-combo
   compare_experiments:
   - heat-21-1step-k800-spectral
   - heat-22-1step-k10-spectral

@@ -56,6 +56,8 @@ VARIANTS = [
     Variant("zeroed",              "configs/zeroed",              "data/models/zeroed",              True,  None,          False, None,       None),
     Variant("cheat",               "configs/cheat",               "data/models/cheat",               False, _cheat_layers, True,  None,       None),
     Variant("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed",        True,  _cheat_layers, True,  None,       None),
+    Variant("cheat_zero_init",     "configs/cheat_zero_init",     "data/models/cheat_zero_init",     False, _cheat_layers, True,  "zeros",    None),
+    Variant("cheat_zeroed_zinit",  "configs/cheat_zeroed_zinit",  "data/models/cheat_zeroed_zinit",  True,  _cheat_layers, True,  "zeros",    None),
     Variant("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected",      False, _cheat_layers, True,  "expected", None),
     Variant("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect", True,  _cheat_layers, True,  "expected", None),
     # Finn-style LR (inner_lr=0.01, fine_tune_lr=0.01, max_eval_steps=50)
