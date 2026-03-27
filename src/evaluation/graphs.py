@@ -1211,33 +1211,32 @@ def _scatter_panel(
         marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
         ic_types = [_ic_type(n) for n in task_names]
 
-        # Scatter by IC type (color = IC type, no model-specific marker)
-        for ic, color in ic_color_map.items():
-            mask = np.array([t == ic for t in ic_types])
-            if not mask.any():
-                continue
-            marker_style = "o" if not is_baseline else "x"
+        # Scatter by IC type (color = IC type) with task label inside marker
+        marker_style = "o" if not is_baseline else "s"
+        marker_size = 220 if not is_baseline else 180
+
+        for j, tname in enumerate(task_names):
+            ic = ic_types[j]
+            color = ic_color_map.get(ic, "#999")
+
+            # Short label: "t01", "001", etc.
+            short = tname.split("_fourier")[0].split("heat_")[-1]
+            parts = short.split("_")
+            short_label = parts[-1] if len(parts) >= 2 else short
+
             ax.scatter(
-                true_vals[mask],
-                recovered_vals[mask],
+                [true_vals[j]], [recovered_vals[j]],
                 c=color,
                 marker=marker_style,
-                s=45,
-                alpha=0.75,
-                edgecolors="k" if not is_baseline else "none",
-                linewidths=0.4,
+                s=marker_size,
+                alpha=0.6,
+                edgecolors="k",
+                linewidths=0.5,
             )
-
-        # Label each point with short task name (e.g., "t01", "gb01")
-        for j, tname in enumerate(task_names):
-            short = tname.split("_fourier")[0].split("heat_")[-1]  # e.g., "gb_t01"
-            parts = short.split("_")
-            short_label = parts[-1] if len(parts) >= 2 else short  # "t01" or "001"
-            ax.annotate(
-                short_label,
-                (true_vals[j], recovered_vals[j]),
-                fontsize=5, alpha=0.6,
-                textcoords="offset points", xytext=(3, 3),
+            ax.text(
+                true_vals[j], recovered_vals[j], short_label,
+                fontsize=4, ha="center", va="center",
+                color="black", alpha=0.8, fontweight="bold",
             )
 
         # Regression line + Pearson r (dark for MAML, light for baseline)
@@ -1373,40 +1372,15 @@ def plot_coefficient_scatter_grid(
             title_fontsize=9,
         )
 
-    # --- Bottom legend: model markers + regression line info ---
-    # Harvest regression-line handles from first panel (those have the r/slope labels)
+    # --- Bottom legend: regression lines only (no colored model shapes) ---
     reg_handles = axes[0, 0].get_legend_handles_labels()[0]
-    if reg_handles and first_key is not None:
-        # Build marker-shape handles for each experiment
-        # Paired entries: even index = MAML, odd = baseline; one marker per experiment
-        first_models = panel_data.get(first_key, [])
-        marker_handles = []
-        seen_exp = set()
-        for i, (_, _, _, label) in enumerate(first_models):
-            exp_idx = i // 2
-            if exp_idx in seen_exp:
-                continue
-            seen_exp.add(exp_idx)
-            marker = MODEL_MARKERS[exp_idx % len(MODEL_MARKERS)]
-            dark_color = MODEL_COLORS_DARK[exp_idx % len(MODEL_COLORS_DARK)]
-            # Use short label (strip stats)
-            short = label.split(":")[0].strip() if ":" in label else label
-            marker_handles.append(
-                Line2D(
-                    [0], [0], marker=marker, color="w", markerfacecolor=dark_color,
-                    markeredgecolor="k", markeredgewidth=0.4, markersize=8,
-                    label=short,
-                )
-            )
-
-        all_bottom = marker_handles + reg_handles
-        all_bottom_labels = [h.get_label() for h in all_bottom]
+    if reg_handles:
         fig.legend(
-            handles=all_bottom,
-            labels=all_bottom_labels,
+            handles=reg_handles,
+            labels=[h.get_label() for h in reg_handles],
             loc="lower center",
             bbox_to_anchor=(0.5, -0.02),
-            ncol=min(len(all_bottom), 4),
+            ncol=min(len(reg_handles), 4),
             fontsize=7,
             framealpha=0.9,
             title="Models",
