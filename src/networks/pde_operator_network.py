@@ -43,12 +43,21 @@ class OutputLayerSpec:
 
 # ── Activation map ──────────────────────────────────────────────────────────
 
+
+class Sin(nn.Module):
+    """Wraps torch.sin as an nn.Module (Raissi 2018 DeepHPM activation)."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sin(x)
+
+
 ACTIVATION_MAP: dict[str, type[nn.Module]] = {
     "tanh": nn.Tanh,
     "relu": nn.ReLU,
     "silu": nn.SiLU,
     "gelu": nn.GELU,
     "mish": nn.Mish,
+    "sin": Sin,
 }
 
 
