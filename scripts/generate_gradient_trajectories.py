@@ -120,7 +120,9 @@ def main():
     exp_name = config["experiment"]["name"]
     base_dir = Path(config["output"]["base_dir"])
     exp_dir = base_dir / exp_name
-    theta_star_path = exp_dir / "checkpoints" / "best_model.pt"
+    final_path = exp_dir / "checkpoints" / "final_model.pt"
+    legacy_path = exp_dir / "checkpoints" / "best_model.pt"
+    theta_star_path = final_path if final_path.exists() else legacy_path
 
     if not theta_star_path.exists():
         print(f"Checkpoint not found: {theta_star_path}")

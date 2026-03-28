@@ -249,9 +249,9 @@ def main():
 
     if not args.resume:
         # Guard against accidental overwrite of a trained experiment
-        best_model_path = exp_dir / "checkpoints" / "best_model.pt"
-        if best_model_path.exists():
-            print(f"ERROR: {best_model_path} already exists.")
+        final_model_path = exp_dir / "checkpoints" / "final_model.pt"
+        if final_model_path.exists():
+            print(f"ERROR: {final_model_path} already exists.")
             print(
                 "  Use --resume to continue training, or delete the experiment directory first."
             )
@@ -294,6 +294,7 @@ def main():
         query_size=train_cfg.get("query_size", 1000),
         max_outer_iterations=train_cfg.get("max_iterations", 10000),
         patience=train_cfg.get("patience", 50),
+        checkpoint_interval=train_cfg.get("checkpoint_interval", 0),
         log_interval=train_cfg.get("log_interval", 10),
         first_order=train_cfg.get("first_order", False),
         warmup_iterations=train_cfg.get("warmup_iterations", 0),
@@ -388,7 +389,7 @@ def main():
     print("=" * 60)
     print()
     print(f"Initial weights (θ₀): {initial_checkpoint_path}")
-    print(f"Best model (θ*): {checkpoint_dir / 'best_model.pt'}")
+    print(f"Final model (θ*): {checkpoint_dir / 'final_model.pt'}")
     print(f"Training history: {history_path}")
     print()
     # Write DONE sentinel — this experiment is complete, never resume

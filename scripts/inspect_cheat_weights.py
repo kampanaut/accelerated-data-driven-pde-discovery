@@ -45,10 +45,13 @@ def main():
         print(f"Directory not found: {args.model_dir}")
         sys.exit(1)
 
-    # Find all experiment dirs with best_model.pt
+    # Find all experiment dirs with a checkpoint
+    def _has_checkpoint(d: Path) -> bool:
+        return (d / "checkpoints" / "final_model.pt").exists() or (d / "checkpoints" / "best_model.pt").exists()
+
     exp_dirs = sorted([
         d for d in args.model_dir.iterdir()
-        if d.is_dir() and (d / "checkpoints" / "best_model.pt").exists()
+        if d.is_dir() and _has_checkpoint(d)
     ])
 
     if not exp_dirs:
@@ -59,8 +62,10 @@ def main():
 
     for exp_dir in exp_dirs:
         name = exp_dir.name
-        best_path = exp_dir / "checkpoints" / "best_model.pt"
-        weights = extract_weights(best_path)
+        ckpt_path = exp_dir / "checkpoints" / "final_model.pt"
+        if not ckpt_path.exists():
+            ckpt_path = exp_dir / "checkpoints" / "best_model.pt"
+        weights = extract_weights(ckpt_path)
         if weights is None:
             continue
 

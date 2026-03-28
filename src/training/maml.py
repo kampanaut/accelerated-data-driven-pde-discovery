@@ -260,7 +260,8 @@ class MAMLConfig:
 
     # Training loop
     max_outer_iterations: int = 10000
-    patience: int = 50  # Iterations before validation check
+    patience: int = 50  # Iterations before validation check (0 = disabled)
+    checkpoint_interval: int = 0  # Periodic save to latest_model.pt (0 = disabled)
     log_interval: int = 10
 
     # FOMAML (first-order approximation - faster, no second derivatives)
@@ -463,11 +464,32 @@ class MAMLTrainer:
             elif schedulers:
                 self.scheduler = schedulers[0]
 
+        # Checkpoint mode validation: exactly one of patience or checkpoint_interval
+        if config.patience > 0 and config.checkpoint_interval == 0:
+            self._patience_enabled = True
+        elif config.patience == 0 and config.checkpoint_interval > 0:
+            self._patience_enabled = False
+        else:
+            raise ValueError(
+                f"Invalid checkpoint config: patience={config.patience}, "
+                f"checkpoint_interval={config.checkpoint_interval}. "
+                f"Use (patience>0, checkpoint_interval=0) for early stopping, "
+                f"or (patience=0, checkpoint_interval>0) for periodic saves."
+            )
+
+        # Bind iteration hook + finalize — no conditionals in the hot loop
+        if self._patience_enabled:
+            self._iteration_hook = self._patience_iteration_hook
+            self._training_finalize = self._patience_finalize
+        else:
+            self._iteration_hook = self._interval_iteration_hook
+            self._training_finalize = self._interval_finalize
+
         # Training state
         self.iteration = 0
         self.best_train_loss = float("inf")
         self.best_val_loss = float("inf")
-        self.best_train_state = None  # Stash weights when train loss improves
+        self.best_train_state = None  # Stash weights when train loss improves (patience mode only)
         self.patience_counter = 0
         self._nan_at: Optional[int] = None
         self.history: Dict[str, List] = {
@@ -726,6 +748,86 @@ class MAMLTrainer:
 
         return total_loss / len(tasks)
 
+    # ------------------------------------------------------------------
+    # Iteration hooks: bound at __init__ based on checkpoint mode
+    # ------------------------------------------------------------------
+
+    def _patience_iteration_hook(
+        self, iteration: int, train_loss: float, log_interval: int, checkpoint_dir: Path
+    ) -> bool:
+        """Per-iteration logic for patience mode: best-tracking + validation."""
+        if train_loss < self.best_train_loss:
+            self.best_train_loss = train_loss
+            self.best_train_state = copy.deepcopy(self.model.state_dict())
+            self.patience_counter = 0
+        else:
+            self.patience_counter += 1
+
+        if iteration % log_interval == 0:
+            lr_str = (
+                f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
+                if self.scheduler
+                else ""
+            )
+            print(
+                f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}"
+            )
+
+        if (
+            self.patience_counter >= self.config.patience
+            and self.val_loader is not None
+        ):
+            if self.validate(train_loss, checkpoint_dir):
+                self.patience_counter = 0
+            else:
+                return True  # early_stopped
+        return False
+
+    def _interval_iteration_hook(
+        self, iteration: int, train_loss: float, log_interval: int, checkpoint_dir: Path
+    ) -> bool:
+        """Per-iteration logic for interval mode: periodic saves, no best-tracking."""
+        if iteration % log_interval == 0:
+            lr_str = (
+                f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
+                if self.scheduler
+                else ""
+            )
+            print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}{lr_str}")
+
+        if (
+            iteration > 0
+            and (iteration % self.config.checkpoint_interval == 0)
+        ):
+            self.save_checkpoint(checkpoint_dir / "latest_model.pt")
+            print(f"  Checkpoint saved at iteration {iteration}.")
+        return False
+
+    def _patience_finalize(
+        self, train_loss: float, early_stopped: bool, checkpoint_dir: Path
+    ) -> None:
+        """End-of-training for patience mode."""
+        if self.val_loader is not None and not early_stopped:
+            print("Doing end-of-loop validation run.")
+            self.validate(train_loss, checkpoint_dir)
+        else:
+            if self.best_train_state is not None:
+                self.model.load_state_dict(self.best_train_state)
+            if not (checkpoint_dir / "final_model.pt").exists():
+                print("Saving final model (no validation checkpoint was saved)...")
+                self.save_checkpoint(checkpoint_dir / "final_model.pt")
+        print(f"  Best train loss: {self.best_train_loss:.6f}")
+        if self.val_loader is not None:
+            print(f"  Best val loss: {self.best_val_loss:.6f}")
+
+    def _interval_finalize(
+        self, train_loss: float, early_stopped: bool, checkpoint_dir: Path
+    ) -> None:
+        """End-of-training for interval mode: save final weights."""
+        self.save_checkpoint(checkpoint_dir / "final_model.pt")
+        print(f"Saved final model to {checkpoint_dir / 'final_model.pt'}.")
+        print(f"  Final train loss: {train_loss:.6f}")
+
     def validate(
         self,
         train_loss: float,
@@ -771,7 +873,7 @@ class MAMLTrainer:
             print("  → Validation improved! Resetting patience.")
 
             print(
-                f"  → Saved checkpoint to {checkpoint_dir / 'best_model.pt'}. Train loss: {winner_train_loss:.6f}, Val loss: {winner_val_loss:.6f}"
+                f"  → Saved checkpoint to {checkpoint_dir / 'final_model.pt'}. Train loss: {winner_train_loss:.6f}, Val loss: {winner_val_loss:.6f}"
             )
             print(f"      - Current weights train_loss: {train_loss}")
             print(f"      - Best-train weights train_loss: {self.best_train_loss}")
@@ -781,7 +883,7 @@ class MAMLTrainer:
             self.best_train_state = copy.deepcopy(winner_state)
             self.best_train_loss = winner_train_loss  # Reset train baseline
 
-            self.save_checkpoint(checkpoint_dir / "best_model.pt")
+            self.save_checkpoint(checkpoint_dir / "final_model.pt")
             self.save_checkpoint(checkpoint_dir / "latest_model.pt")
             return True
         else:
@@ -842,6 +944,10 @@ class MAMLTrainer:
             print(f"  LR scheduler: {sched_desc}")
         if self.config.max_grad_norm > 0:
             print(f"  Grad clip (inner+outer): max_norm={self.config.max_grad_norm}")
+        if self._patience_enabled:
+            print(f"  Checkpoint mode: patience={self.config.patience}")
+        else:
+            print(f"  Checkpoint mode: interval={self.config.checkpoint_interval}")
         if self._resumed:
             print(f"  Resuming from iteration {start_iteration}")
         print()
@@ -871,28 +977,29 @@ class MAMLTrainer:
                 self._nan_at = iteration
                 print(f"\n  NaN detected at iteration {iteration}. Weights are clean (step was skipped).")
 
-                # Compare current (clean) weights vs best-train on validation
-                if self.val_loader is not None and self.best_train_state is not None:
-                    current_state = copy.deepcopy(self.model.state_dict())
-                    current_val = self.evaluate(self.val_loader.tasks)
-                    print(f"  Current weights val_loss: {current_val:.6f}")
+                if self._patience_enabled:
+                    # Compare current (clean) weights vs best-train on validation
+                    if self.val_loader is not None and self.best_train_state is not None:
+                        current_state = copy.deepcopy(self.model.state_dict())
+                        current_val = self.evaluate(self.val_loader.tasks)
+                        print(f"  Current weights val_loss: {current_val:.6f}")
 
-                    self.model.load_state_dict(self.best_train_state)
-                    best_val = self.evaluate(self.val_loader.tasks)
-                    print(f"  Best-train weights val_loss: {best_val:.6f}")
+                        self.model.load_state_dict(self.best_train_state)
+                        best_val = self.evaluate(self.val_loader.tasks)
+                        print(f"  Best-train weights val_loss: {best_val:.6f}")
 
-                    if current_val <= best_val:
-                        self.model.load_state_dict(current_state)
-                        print("  Winner: current weights")
-                    else:
-                        print("  Winner: best-train weights")
-                elif self.best_train_state is not None:
-                    # No val loader — just use best_train_state
-                    self.model.load_state_dict(self.best_train_state)
-                    print("  Restored best-train weights (no val loader).")
+                        if current_val <= best_val:
+                            self.model.load_state_dict(current_state)
+                            print("  Winner: current weights")
+                        else:
+                            print("  Winner: best-train weights")
+                    elif self.best_train_state is not None:
+                        self.model.load_state_dict(self.best_train_state)
+                        print("  Restored best-train weights (no val loader).")
 
-                self.save_checkpoint(checkpoint_dir / "best_model.pt")
-                print(f"  Saved to {checkpoint_dir / 'best_model.pt'}.")
+                # Interval mode: current weights are already clean (step was skipped)
+                self.save_checkpoint(checkpoint_dir / "final_model.pt")
+                print(f"  Saved to {checkpoint_dir / 'final_model.pt'}.")
                 signal.signal(signal.SIGINT, prev_handler)
                 return self.history
 
@@ -904,38 +1011,9 @@ class MAMLTrainer:
             self.history["train_loss"].append(train_loss)
             self.history["iteration"].append(iteration)
 
-            # Level 1: Track train loss improvement and stash best weights
-            if train_loss < self.best_train_loss:
-                self.best_train_loss = train_loss
-                self.best_train_state = copy.deepcopy(self.model.state_dict())
-                self.patience_counter = 0
-            else:
-                self.patience_counter += 1
-
-            # Logging
-            if iteration % log_interval == 0:
-                lr_str = (
-                    f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
-                    if self.scheduler
-                    else ""
-                )
-                if self.val_loader:
-                    print(
-                        f"Iter {iteration:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}"
-                    )
-                else:
-                    print(f"Iter {iteration:5d}: train_loss={train_loss:.6f}{lr_str}")
-
-            # Level 2: Validation check when patience exhausted
-            if (
-                self.patience_counter >= self.config.patience
-                and self.val_loader is not None
-            ):
-                if self.validate(train_loss, checkpoint_dir):
-                    self.patience_counter = 0
-                else:
-                    early_stopped = True
-                    break
+            early_stopped = self._iteration_hook(iteration, train_loss, log_interval, checkpoint_dir)
+            if early_stopped:
+                break
 
             # Graceful shutdown — all iteration state is consistent here
             if self._stop_requested:
@@ -952,26 +1030,10 @@ class MAMLTrainer:
         # Restore original handler
         signal.signal(signal.SIGINT, prev_handler)
 
-        if self.val_loader is not None and not early_stopped:
-            print("Doing end-of-loop validation run.")
-            self.validate(train_loss, checkpoint_dir)
-        else:
-            # Ensure model has best weights regardless of how we exited
-            if self.best_train_state is not None:
-                self.model.load_state_dict(self.best_train_state)
-
-            # Always save final model (in case validation never triggered)
-            if not (checkpoint_dir / "best_model.pt").exists():
-                print(
-                    "Saving final model as best_model.pt (no validation checkpoint was saved)..."
-                )
-                self.save_checkpoint(checkpoint_dir / "best_model.pt")
+        self._training_finalize(train_loss, early_stopped, checkpoint_dir)
 
         print()
         print(f"Training complete at iteration {iteration}")
-        print(f"  Best train loss: {self.best_train_loss:.6f}")
-        if self.val_loader is not None:
-            print(f"  Best val loss: {self.best_val_loss:.6f}")
 
         return self.history
 

@@ -39,7 +39,8 @@ def main():
     exp_name = config["experiment"]["name"]
     base_dir = Path(config["output"]["base_dir"])
     exp_dir = base_dir / exp_name
-    theta_star_path = exp_dir / "checkpoints" / "best_model.pt"
+    final_path = exp_dir / "checkpoints" / "final_model.pt"
+    theta_star_path = final_path if final_path.exists() else exp_dir / "checkpoints" / "best_model.pt"
 
     checkpoint = torch.load(theta_star_path, map_location=device, weights_only=False)
     model = PDEOperatorNetwork(net_config)

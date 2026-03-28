@@ -36,12 +36,21 @@ def load_model_results(model_dir: Path) -> Optional[dict]:
     return {"results": results, "config": config, "dir": model_dir}
 
 
+def _find_checkpoint(model_dir: Path) -> Optional[Path]:
+    """Find θ* checkpoint: final_model.pt → best_model.pt (legacy) → None."""
+    for name in ("final_model.pt", "best_model.pt"):
+        p = model_dir / "checkpoints" / name
+        if p.exists():
+            return p
+    return None
+
+
 def load_theta_star_weights(model_dir: Path) -> Optional[np.ndarray]:
-    """Load θ* weights from best_model.pt checkpoint."""
-    best_path = model_dir / "checkpoints" / "best_model.pt"
-    if not best_path.exists():
+    """Load θ* weights from checkpoint."""
+    ckpt_path = _find_checkpoint(model_dir)
+    if ckpt_path is None:
         return None
-    ckpt = torch.load(best_path, map_location="cpu", weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state = ckpt["model_state_dict"]
     weight_keys = [k for k in state if "weight" in k]
     if len(weight_keys) == 1:

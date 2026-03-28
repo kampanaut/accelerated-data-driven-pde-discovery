@@ -674,7 +674,7 @@ def main():
         "--checkpoint",
         type=Path,
         default=None,
-        help="Path to θ* checkpoint (default: best_model.pt in experiment dir)",
+        help="Path to θ* checkpoint (default: final_model.pt in experiment dir)",
     )
     args = parser.parse_args()
 
@@ -754,13 +754,17 @@ def main():
     if args.checkpoint is not None:
         theta_star_path = args.checkpoint
     else:
-        best_path = exp_dir / "checkpoints" / "best_model.pt"
+        final_path = exp_dir / "checkpoints" / "final_model.pt"
+        best_path = exp_dir / "checkpoints" / "best_model.pt"  # legacy name
         latest_path = exp_dir / "checkpoints" / "latest_model.pt"
-        if best_path.exists():
+        if final_path.exists():
+            theta_star_path = final_path
+        elif best_path.exists():
             theta_star_path = best_path
+            print(f"Using legacy best_model.pt")
         elif latest_path.exists():
             theta_star_path = latest_path
-            print(f"best_model.pt not found — using latest_model.pt")
+            print(f"final_model.pt not found — using latest_model.pt")
         else:
             print(f"No checkpoint found in {exp_dir / 'checkpoints'}")
             sys.exit(1)
