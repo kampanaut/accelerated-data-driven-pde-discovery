@@ -1345,8 +1345,9 @@ class MAMLTrainer:
 
         print(f"Loaded checkpoint from {path}")
         print(f"  Iteration: {self.iteration}")
-        print(f"  Best train loss: {self.best_train_loss:.6f}")
-        print(f"  Best val loss: {self.best_val_loss:.6f}")
+        if self._patience_enabled:
+            print(f"  Best train loss: {self.best_train_loss:.6f}")
+            print(f"  Best val loss: {self.best_val_loss:.6f}")
 
 
 def get_meta_learned_init(
