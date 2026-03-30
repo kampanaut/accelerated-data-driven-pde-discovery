@@ -284,5 +284,198 @@ def main():
         )
 
 
+# ── Grid Part II: MAML++ experiments ────────────────────────────────────
+# Grid 1: Cheat convergence (linear model, 8 configs)
+# Grid 2: MLP formal (silu + sin activations, 16 configs)
+# Total: 24 configs, split into 4 bash scripts of 6 each
+
+_GRID2_LOSS_MODES = ["baseline", "metal", "maml++", "metal+maml++"]
+_GRID2_K_SHOTS = [10, 800]
+
+_MAMLPP_FLAGS = {
+    "msl_enabled": True,
+    "da_enabled": True,
+    "da_threshold": 23000,
+    "lslr_enabled": True,
+    "warmup_iterations": 0,
+}
+
+_GRID2_SHARED_TRAINING = {
+    "inner_lr": 0.01,
+    "outer_lr": 0.001,
+    "inner_steps": 5,
+    "meta_batch_size": 25,
+    "max_iterations": 70000,
+    "patience": 0,
+    "checkpoint_interval": 500,
+    "log_interval": 10,
+    "first_order": False,
+    "warmup_iterations": 0,
+    "use_scheduler": True,
+    "scheduler_type": "cosine",
+    "min_lr": 0.000001,
+    "max_grad_norm": 100.0,
+    "zero_non_rhs_features": True,
+    "loss_function": "normalized_mse",
+}
+
+_GRID2_SHARED_EVAL = {
+    "k_values": None,  # filled per-config from k_shot
+    "noise_levels": [0.0],
+    "fine_tune_lr": 0.01,
+    "max_steps": 50,
+    "deriv_threshold": 0.0005,
+    "fixed_steps": [0, 1, 5, 10, 25, 50],
+    "holdout_size": 5000,
+}
+
+HEAT = PDES[1]  # heat PDE
+
+
+def _grid2_loss_flags(mode: str) -> dict:
+    """Return training config fragment for a Grid 2 loss mode."""
+    flags: dict = {}
+    if mode in ("metal", "metal+maml++"):
+        flags["metal"] = {"enabled": True, "hidden_dim": 64}
+    if mode in ("maml++", "metal+maml++"):
+        flags.update(_MAMLPP_FLAGS)
+    return flags
+
+
+def _grid2_config(
+    exp_num: int,
+    grid_label: str,
+    name: str,
+    k_shot: int,
+    loss_mode: str,
+    models_dir: str,
+    layers: dict,
+    log_weights: bool = False,
+) -> dict:
+    """Build one Grid 2 config dict."""
+    loss_flags = _grid2_loss_flags(loss_mode)
+
+    # Separate metal dict from training-level flags
+    metal_cfg = loss_flags.pop("metal", None)
+
+    training = {
+        **_GRID2_SHARED_TRAINING,
+        **layers,
+        "k_shot": k_shot,
+        "query_size": 1600 if k_shot == 800 else 2000,
+        **loss_flags,
+    }
+
+    if metal_cfg is not None:
+        training["metal"] = metal_cfg
+
+    eval_cfg = {
+        **_GRID2_SHARED_EVAL,
+        "k_values": [k_shot],
+        "log_weights": log_weights,
+    }
+
+    return {
+        "experiment": {
+            "name": name,
+            "pde_type": "heat",
+            "seed": 42,
+            "device": "cuda",
+        },
+        "output": {
+            "base_dir": models_dir,
+        },
+        "data": {
+            "meta_train_dir": HEAT.train_dir,
+            "meta_val_dir": HEAT.val_dir,
+            "meta_test_dir": HEAT.test_dir,
+        },
+        "training": training,
+        "evaluation": eval_cfg,
+        "visualization": {
+            "dpi": 300,
+            "only": "scatter[0,5,50],best-combo",
+        },
+    }
+
+
+def generate_grid_pt2():
+    """Generate cheat2 + mlp configs and 4 runner scripts."""
+    cheat_dir = ROOT_DIR / "configs" / "cheat2"
+    mlp_dir = ROOT_DIR / "configs" / "mlp"
+    cheat_dir.mkdir(parents=True, exist_ok=True)
+    mlp_dir.mkdir(parents=True, exist_ok=True)
+
+    all_configs: list[tuple[int, str]] = []  # (exp_num, rel_path)
+    exp_num = 0
+
+    print(f"\n{'=' * 60}")
+    print("Cheat2: convergence query (linear model)")
+    print(f"{'=' * 60}")
+
+    cheat_layers = {"layers": _cheat_layers(HEAT)}
+
+    for loss_mode in _GRID2_LOSS_MODES:
+        for k_shot in _GRID2_K_SHOTS:
+            exp_num += 1
+            name = f"cheat-{exp_num}-5step-k{k_shot}-{loss_mode}"
+            config = _grid2_config(
+                exp_num, "cheat", name, k_shot, loss_mode,
+                "data/models/cheat2", cheat_layers, log_weights=True,
+            )
+            path = cheat_dir / f"{name}.yaml"
+            rel_path = f"configs/cheat2/{name}.yaml"
+            with open(path, "w") as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            all_configs.append((exp_num, rel_path))
+            print(f"  [{exp_num:2d}] {name}")
+
+    print(f"\n{'=' * 60}")
+    print("MLP: formal re-run (silu + sin)")
+    print(f"{'=' * 60}")
+
+    for activation in ["silu", "sin"]:
+        mlp_layers = {
+            "hidden_dims": [100, 100],
+            "activation": activation,
+            "input_dim": HEAT.input_dim,
+            "output_dim": HEAT.output_dim,
+        }
+        for loss_mode in _GRID2_LOSS_MODES:
+            for k_shot in _GRID2_K_SHOTS:
+                exp_num += 1
+                name = f"heat-{exp_num}-5step-k{k_shot}-{loss_mode}-{activation}"
+                config = _grid2_config(
+                    exp_num, "mlp", name, k_shot, loss_mode,
+                    "data/models/mlp", mlp_layers,
+                )
+                path = mlp_dir / f"{name}.yaml"
+                rel_path = f"configs/mlp/{name}.yaml"
+                with open(path, "w") as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                all_configs.append((exp_num, rel_path))
+                print(f"  [{exp_num:2d}] {name}")
+
+    print(f"\n  Generated {len(all_configs)} configs total")
+
+    # ── Split into 4 runner scripts of 6 each ──────────────────────
+    total = len(all_configs)
+    chunk_size = 6
+    for script_idx in range(4):
+        start = script_idx * chunk_size
+        chunk = all_configs[start : start + chunk_size]
+        _write_phased_script(
+            SCRIPT_DIR / f"run_grid2_{script_idx + 1}.sh", chunk, total,
+        )
+
+    _write_phased_script(
+        SCRIPT_DIR / "run_grid2_all.sh", all_configs, total,
+    )
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if "--grid2" in sys.argv:
+        generate_grid_pt2()
+    else:
+        main()
