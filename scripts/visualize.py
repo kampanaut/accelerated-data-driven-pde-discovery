@@ -1884,22 +1884,22 @@ def main():
     # =========================================================================
     # Full pipeline with --config
     # =========================================================================
-    config = load_config(args.config)
-    exp_name = config["experiment"]["name"]
-    exp_dir = (
-        Path(config.get("output", {}).get("base_dir", "data/models")) / exp_name
-    )
+    from src.config import ExperimentConfig
+    cfg = ExperimentConfig.from_yaml(args.config)
+    # Keep raw dict for discover_comparison_experiments (reads other experiments' configs)
+    config = cfg.to_yaml_dict()
+
+    exp_name = cfg.experiment.name
+    exp_dir = Path(cfg.output.base_dir) / exp_name
 
     print(f"Experiment: {exp_name}")
     print()
 
-    eval_cfg = config.get("evaluation", {})
-    viz_cfg = config.get("visualization", {})
-    dpi = viz_cfg.get("dpi", 150)
+    dpi = cfg.visualization.dpi
 
     # Config-level --only (CLI already parsed above, config is fallback)
     if args.only is None:
-        config_only = viz_cfg.get("only")
+        config_only = cfg.visualization.only
         if config_only is not None:
             sel = parse_only(config_only)
 
@@ -1941,25 +1941,19 @@ def main():
     print()
 
     # Get parameters
+    ev = cfg.evaluation
     k_values: NDArray[np.integer[Any]] = np.array(
-        results["config"].get(
-            "k_values", eval_cfg.get("k_values", np.array([10, 50, 100, 500, 1000]))
-        )
+        results["config"].get("k_values", ev.k_values)
     )
     noise_levels: NDArray[np.floating[Any]] = np.array(
-        results["config"].get(
-            "noise_levels",
-            eval_cfg.get("noise_levels", np.array([0.0, 0.01, 0.05, 0.10])),
-        )
+        results["config"].get("noise_levels", ev.noise_levels)
     )
     fixed_steps: NDArray[np.integer[Any]] = np.array(
-        results["config"].get(
-            "fixed_steps", eval_cfg.get("fixed_steps", np.array([50, 100, 200]))
-        )
+        results["config"].get("fixed_steps", ev.fixed_steps)
     )
-    deriv_threshold = float(eval_cfg.get("deriv_threshold", 1e-7))
+    deriv_threshold = float(ev.deriv_threshold)
     holdout_size = int(
-        results["config"].get("holdout_size", eval_cfg.get("holdout_size", 1000))
+        results["config"].get("holdout_size", ev.holdout_size)
     )
     # Compute metrics only when needed (generalization, loss-ratio, noise/sample)
     if sel.needs_metrics():

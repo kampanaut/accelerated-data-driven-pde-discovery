@@ -43,38 +43,24 @@ class _TeeStream:
         return self.buffer.getvalue()
 
 
-import yaml
 import torch
 torch.set_num_threads(9)
 torch.set_num_interop_threads(4)
 
-from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
+from src.config import ExperimentConfig
+from src.networks.pde_operator_network import PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, TASK_REGISTRY
-from src.training.maml import MAMLTrainer, MAMLConfig
+from src.training.maml import MAMLTrainer
 
 
-def load_config(config_path: Path) -> dict:
-    """Load and validate experiment configuration."""
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-
-    # Validate required sections
-    required = ["experiment", "data", "training"]
-    for section in required:
-        if section not in config:
-            raise ValueError(f"Missing required config section: {section}")
-
-    return config
-
-
-def setup_output_dirs(config: dict) -> Path:
+def setup_output_dirs(cfg: ExperimentConfig) -> Path:
     """Create experiment output directory structure.
 
     Resolves suffixed directories: if the exact name doesn't exist,
     looks for ENDNAN-suffixed dirs (usable) or ISNAN-suffixed dirs (skip).
     """
-    base_dir = Path(config.get("output", {}).get("base_dir", "data/models"))
-    exp_name = config["experiment"]["name"]
+    base_dir = Path(cfg.output.base_dir)
+    exp_name = cfg.experiment.name
     exp_dir = base_dir / exp_name
 
     if not exp_dir.exists():
@@ -117,14 +103,14 @@ def main():
     print("=" * 60)
     print()
 
-    config = load_config(args.config)
-    exp_dir = setup_output_dirs(config)
+    cfg = ExperimentConfig.from_yaml(args.config)
+    exp_dir = setup_output_dirs(cfg)
 
     # Tee stdout to capture all print output for log file
     _tee = _TeeStream(sys.stdout)
     sys.stdout = _tee  # type: ignore[assignment]
 
-    print(f"Experiment: {config['experiment']['name']}")
+    print(f"Experiment: {cfg.experiment.name}")
     print(f"Output directory: {exp_dir}")
     print()
 
@@ -141,14 +127,12 @@ def main():
     # =========================================================================
     # Set random seeds
     # =========================================================================
-    seed = config["experiment"].get("seed", 42)
+    seed = cfg.experiment.seed
+    device = cfg.experiment.device
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    device = config["experiment"].get(
-        "device", "cuda" if torch.cuda.is_available() else "cpu"
-    )
     print(f"Device: {device}")
     print(f"Seed: {seed}")
     print()
@@ -160,8 +144,8 @@ def main():
     print("Loading datasets...")
     print("-" * 60)
 
-    train_dir = Path(config["data"]["meta_train_dir"])
-    val_dir = Path(config["data"]["meta_val_dir"])
+    train_dir = Path(cfg.data.meta_train_dir)
+    val_dir = Path(cfg.data.meta_val_dir)
 
     if not train_dir.exists():
         raise FileNotFoundError(f"Meta-train directory not found: {train_dir}")
@@ -169,7 +153,7 @@ def main():
         raise FileNotFoundError(f"Meta-val directory not found: {val_dir}")
 
     # Select task class based on PDE type
-    pde_type = config["experiment"].get("pde_type", "ns")
+    pde_type = cfg.experiment.pde_type
     task_class = TASK_REGISTRY.get(pde_type)
     if task_class is None:
         raise ValueError(
@@ -198,11 +182,10 @@ def main():
     print("Creating model...")
     print("-" * 60)
 
-    train_cfg = config["training"]
-    net_config = NetworkConfig.from_dict(train_cfg)
+    net_config = cfg.to_network_config()
     model = PDEOperatorNetwork(net_config)
 
-    weight_init = train_cfg.get("weight_init", None)
+    weight_init = cfg.training.weight_init
     if weight_init == "zeros":
         with torch.no_grad():
             for p in model.parameters():
@@ -284,41 +267,7 @@ def main():
     print("Configuring MAML trainer...")
     print("-" * 60)
 
-    metal_cfg = train_cfg.get("metal", {})
-    spectral_cfg = train_cfg.get("spectral_loss", {})
-    maml_config = MAMLConfig(
-        inner_lr=train_cfg.get("inner_lr", 0.01),
-        outer_lr=train_cfg.get("outer_lr", 0.001),
-        adam_betas=tuple(train_cfg.get("adam_betas", [0.9, 0.99])),
-        inner_steps=train_cfg.get("inner_steps", 1),
-        meta_batch_size=train_cfg.get("meta_batch_size", 4),
-        k_shot=train_cfg.get("k_shot", 100),
-        query_size=train_cfg.get("query_size", 1000),
-        max_outer_iterations=train_cfg.get("max_iterations", 10000),
-        patience=train_cfg.get("patience", 50),
-        checkpoint_interval=train_cfg.get("checkpoint_interval", 0),
-        log_interval=train_cfg.get("log_interval", 10),
-        first_order=train_cfg.get("first_order", False),
-        warmup_iterations=train_cfg.get("warmup_iterations", 0),
-        use_scheduler=train_cfg.get("use_scheduler", False),
-        min_lr=train_cfg.get("min_lr", 1e-6),
-        scheduler_type=train_cfg.get("scheduler_type", "cosine"),
-        T_0=train_cfg.get("T_0", 500),
-        T_mult=train_cfg.get("T_mult", 2),
-        device=device,
-        seed=seed,
-        loss_function=train_cfg.get("loss_function", "normalized_mse"),
-        metal_enabled=metal_cfg.get("enabled", False),
-        metal_hidden_dim=metal_cfg.get("hidden_dim", 64),
-        spectral_loss_enabled=spectral_cfg.get("enabled", False),
-        spectral_loss_mode_size=spectral_cfg.get("mode_size", 64),
-        max_grad_norm=train_cfg.get("max_grad_norm", 0.0),
-        zero_non_rhs_features=train_cfg.get("zero_non_rhs_features", False),
-        msl_enabled=train_cfg.get("msl_enabled", False),
-        da_enabled=train_cfg.get("da_enabled", False),
-        da_threshold=train_cfg.get("da_threshold", 200),
-        lslr_enabled=train_cfg.get("lslr_enabled", False),
-    )
+    maml_config = cfg.to_maml_config()
 
     trainer = MAMLTrainer(
         model=model,

@@ -28,13 +28,13 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 
 
 from numpy.typing import NDArray
-import yaml
 import torch
 torch.set_num_threads(9)
 torch.set_num_interop_threads(4)
 import torch.nn.functional as F
 import numpy as np
 
+from src.config import ExperimentConfig
 from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
 from src.training.maml import MeTALModule
@@ -61,11 +61,6 @@ class _TeeStream:
     def getvalue(self) -> str:
         return self.buffer.getvalue()
 
-
-def load_config(config_path: Path) -> dict:
-    """Load experiment configuration."""
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
 
 
 def load_model_from_checkpoint(
@@ -686,9 +681,9 @@ def main():
     print("=" * 60)
     print()
 
-    config = load_config(args.config)
-    exp_name = config["experiment"]["name"]
-    base_dir = Path(config.get("output", {}).get("base_dir", "data/models"))
+    cfg = ExperimentConfig.from_yaml(args.config)
+    exp_name = cfg.experiment.name
+    base_dir = Path(cfg.output.base_dir)
     exp_dir = base_dir / exp_name
 
     if not exp_dir.exists():
@@ -729,11 +724,9 @@ def main():
     # =========================================================================
     # Setup
     # =========================================================================
-    seed = config["experiment"].get("seed", 42)
-    device = config["experiment"].get(
-        "device", "cuda" if torch.cuda.is_available() else "cpu"
-    )
-    pde_type = config["experiment"].get("pde_type", "ns")  # 'ns' or 'br'
+    seed = cfg.experiment.seed
+    device = cfg.experiment.device
+    pde_type = cfg.experiment.pde_type
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -775,8 +768,7 @@ def main():
         raise FileNotFoundError(f"θ₀ checkpoint not found: {theta_0_path}")
 
     # Get model architecture from training config
-    train_cfg = config.get("training", {})
-    net_config = NetworkConfig.from_dict(train_cfg)
+    net_config = cfg.to_network_config()
 
     theta_star = load_model_from_checkpoint(theta_star_path, device, net_config)
     theta_0 = load_model_from_checkpoint(theta_0_path, device, net_config)
@@ -810,10 +802,8 @@ def main():
 
         n_base_params = sum(1 for _ in theta_star.parameters())
         output_dim = net_config.output_dim
-        inner_steps = config.get("training", {}).get("inner_steps", 1)
-        metal_hidden_dim = (
-            config.get("training", {}).get("metal", {}).get("hidden_dim", 64)
-        )
+        inner_steps = cfg.training.inner_steps
+        metal_hidden_dim = cfg.training.metal.hidden_dim
 
         metal_module = MeTALModule(
             n_steps=inner_steps,
@@ -835,7 +825,7 @@ def main():
     print("Loading meta-test tasks...")
     print("-" * 60)
 
-    test_dir = Path(config["data"]["meta_test_dir"])
+    test_dir = Path(cfg.data.meta_test_dir)
     if not test_dir.exists():
         raise FileNotFoundError(f"Meta-test directory not found: {test_dir}")
 
@@ -857,19 +847,17 @@ def main():
     # =========================================================================
     # Evaluation parameters
     # =========================================================================
-    eval_cfg = config["evaluation"]
-    k_values = eval_cfg.get("k_values", [10, 50, 100, 500, 1000])
-    noise_levels = eval_cfg.get("noise_levels", [0.0, 0.01, 0.05, 0.10])
-    fine_tune_lr = eval_cfg.get("fine_tune_lr", 0.01)
-    max_steps = eval_cfg.get("max_steps", 1000)
-    fixed_steps: List[int] = eval_cfg.get("fixed_steps", [50, 100, 200])
-    log_weights: bool = eval_cfg.get("log_weights", False)
-    loss_type: str = train_cfg.get("loss_function", "normalized_mse")
-    spectral_cfg = train_cfg.get("spectral_loss", {})
-    spectral_mode_size: int = spectral_cfg.get("mode_size", 0) if spectral_cfg.get("enabled", False) else 0
-    max_grad_norm: float = train_cfg.get("max_grad_norm", 0.0)
-    _train_zero = train_cfg.get("zero_non_rhs_features", False)
-    zero_non_rhs: bool = eval_cfg.get("zero_non_rhs_features", _train_zero)
+    ev = cfg.evaluation
+    k_values = ev.k_values
+    noise_levels = ev.noise_levels
+    fine_tune_lr = ev.fine_tune_lr
+    max_steps = ev.max_steps
+    fixed_steps: List[int] = ev.fixed_steps
+    log_weights: bool = ev.log_weights
+    loss_type: str = cfg.training.loss_function
+    spectral_mode_size: int = cfg.training.spectral_loss.mode_size if cfg.training.spectral_loss.enabled else 0
+    max_grad_norm: float = cfg.training.max_grad_norm
+    zero_non_rhs: bool = cfg.eval_zero_non_rhs_features
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -898,7 +886,7 @@ def main():
     print("=" * 60)
     print()
 
-    holdout_size = eval_cfg.get("holdout_size", 1000)
+    holdout_size = ev.holdout_size
 
     results: Dict[str, Any] = {
         "experiment_name": exp_name,
@@ -908,8 +896,8 @@ def main():
             "noise_levels": noise_levels,
             "fine_tune_lr": fine_tune_lr,
             "max_steps": max_steps,
-            "threshold": eval_cfg.get("threshold", 1e-6),
-            "fixed_steps": eval_cfg.get("fixed_steps", [50, 100, 200]),
+            "threshold": ev.deriv_threshold,
+            "fixed_steps": fixed_steps,
             "holdout_size": holdout_size,
             "pde_type": pde_type,
         },
