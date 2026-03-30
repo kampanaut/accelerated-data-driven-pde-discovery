@@ -1064,7 +1064,7 @@ class MAMLTrainer:
 
     def train(
         self, checkpoint_dir: Optional[Path] = None, log_interval: Optional[int] = None
-    ) -> Dict[str, List]:
+    ) -> tuple[Dict[str, List], bool]:
         """
         Run full MAML training loop with two-level early stopping.
 
@@ -1143,7 +1143,7 @@ class MAMLTrainer:
                 result = self._run_phase(phase1_start, da_end, checkpoint_dir, log_interval)
                 if result is not None:
                     signal.signal(signal.SIGINT, prev_handler)
-                    return result
+                    return result, False
 
             # Phase 2: second-order
             phase2_start = max(start_iteration, da_end)
@@ -1153,12 +1153,12 @@ class MAMLTrainer:
                 result = self._run_phase(phase2_start, self.config.max_outer_iterations, checkpoint_dir, log_interval)
                 if result is not None:
                     signal.signal(signal.SIGINT, prev_handler)
-                    return result
+                    return result, False
         else:
             result = self._run_phase(start_iteration, self.config.max_outer_iterations, checkpoint_dir, log_interval)
             if result is not None:
                 signal.signal(signal.SIGINT, prev_handler)
-                return result
+                return result, False
 
         # Restore original handler
         signal.signal(signal.SIGINT, prev_handler)
@@ -1168,7 +1168,7 @@ class MAMLTrainer:
         print()
         print(f"Training complete at iteration {self.iteration}")
 
-        return self.history
+        return self.history, True
 
     def _run_phase(
         self,
@@ -1311,10 +1311,10 @@ class MAMLTrainer:
         # Restore RNG states for exact replay
         rng_cpu = checkpoint.get("rng_state_cpu")
         if rng_cpu is not None:
-            torch.random.set_rng_state(rng_cpu)
+            torch.random.set_rng_state(rng_cpu.cpu().to(torch.uint8))
         rng_cuda = checkpoint.get("rng_state_cuda")
         if rng_cuda is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state(rng_cuda)
+            torch.cuda.set_rng_state(rng_cuda.cpu().to(torch.uint8))
 
         # Restore training loop state
         self.patience_counter = checkpoint.get("patience_counter", 0)

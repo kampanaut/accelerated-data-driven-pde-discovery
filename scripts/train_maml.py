@@ -248,14 +248,15 @@ def main():
     initial_checkpoint_path = exp_dir / "checkpoints" / "initial_model.pt"
 
     if not args.resume:
-        # Guard against accidental overwrite of a trained experiment
-        final_model_path = exp_dir / "checkpoints" / "final_model.pt"
-        if final_model_path.exists():
-            print(f"ERROR: {final_model_path} already exists.")
-            print(
-                "  Use --resume to continue training, or delete the experiment directory first."
-            )
-            sys.exit(1)
+        # Guard against accidental overwrite of a trained or interrupted experiment
+        for guard_name in ("final_model.pt", "latest_model.pt"):
+            guard_path = exp_dir / "checkpoints" / guard_name
+            if guard_path.exists():
+                print(f"ERROR: {guard_path} already exists.")
+                print(
+                    "  Use --resume to continue training, or delete the experiment directory first."
+                )
+                sys.exit(1)
 
         print("-" * 60)
         print("Saving initial weights (θ₀)...")
@@ -273,7 +274,7 @@ def main():
         print(f"Saved to: {initial_checkpoint_path}")
         print()
     else:
-        print(f"Resume mode: using existing θ₀ from {initial_checkpoint_path}")
+        print(f"Resume mode: No need to regenerate {initial_checkpoint_path}")
         print()
 
     # =========================================================================
@@ -341,7 +342,7 @@ def main():
     print()
 
     checkpoint_dir = exp_dir / "checkpoints"
-    history = trainer.train(checkpoint_dir=checkpoint_dir)
+    history, done = trainer.train(checkpoint_dir=checkpoint_dir)
 
     # =========================================================================
     # Post-training directory rename
@@ -398,15 +399,22 @@ def main():
     print()
     # Write DONE sentinel — this experiment is complete, never resume
     done_path = exp_dir / "training" / "DONE"
-    done_path.touch()
+    if done:
+        done_path.touch()
 
     print("Next steps:")
     print(f"  python scripts/evaluate.py --config {args.config}")
     print()
 
-    # Save log
+    # Save log — rotate old log on resume
     sys.stdout = _tee.original  # type: ignore[assignment]
     log_path = exp_dir / "training" / "train_maml.log"
+    if log_path.exists() and args.resume:
+        # Find next available suffix
+        i = 1
+        while (exp_dir / "training" / f"train_maml.log.{i}").exists():
+            i += 1
+        log_path.rename(exp_dir / "training" / f"train_maml.log.{i}")
     log_path.write_text(_tee.getvalue())
     print(f"Log saved to {log_path}")
 
