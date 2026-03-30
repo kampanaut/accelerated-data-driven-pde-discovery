@@ -238,6 +238,50 @@ class MeTALModule(nn.Module):
         return (ms + mq).item()
 
 
+# ---------------------------------------------------------------------------
+# LSLR: Per-Layer Per-Step Learning Rates (Antoniou et al., ICLR 2019)
+# ---------------------------------------------------------------------------
+
+
+class LSLRSchedule(nn.Module):
+    """Learnable per-layer per-step inner loop learning rates.
+
+    For each named parameter in the model, holds a vector of N learning rates
+    (one per inner step), initialized to init_lr. These are nn.Parameters
+    optimized by the outer loop — they can go negative (gradient ascent).
+    """
+
+    def __init__(
+        self,
+        named_params: List[Tuple[str, nn.Parameter]],
+        n_steps: int,
+        init_lr: float,
+    ):
+        super().__init__()
+        self.n_steps = n_steps
+        self.param_names: List[str] = []
+        self.lr_dict = nn.ParameterDict()
+
+        for name, _ in named_params:
+            safe_name = name.replace(".", "-")
+            self.param_names.append(name)
+            self.lr_dict[safe_name] = nn.Parameter(
+                torch.ones(n_steps) * init_lr
+            )
+
+    def get_override(self, step: int) -> Dict[str, List[torch.Tensor]]:
+        """Return higher-compatible override dict for a given inner step.
+
+        Returns {'lr': [lr_0, lr_1, ...]} with one entry per param group.
+        """
+        return {
+            "lr": [
+                self.lr_dict[name.replace(".", "-")][step]
+                for name in self.param_names
+            ]
+        }
+
+
 @dataclass
 class MAMLConfig:
     """
@@ -266,6 +310,12 @@ class MAMLConfig:
 
     # FOMAML (first-order approximation - faster, no second derivatives)
     first_order: bool = False
+
+    # MAML++ (Antoniou et al., ICLR 2019)
+    msl_enabled: bool = False  # Multi-Step Loss: query loss at every inner step
+    da_enabled: bool = False  # Derivative-order Annealing: first-order → second-order
+    da_threshold: int = 200  # Iteration to switch from first-order to second-order
+    lslr_enabled: bool = False  # Per-Layer Per-Step Learning Rates
 
     # Device and reproducibility
     device: str = field(
@@ -411,10 +461,23 @@ class MAMLTrainer:
         else:
             self._inner_grad_callback = None
 
-        # Outer loop optimizer (meta-update) — includes MeTAL params if enabled
+        # LSLR: per-layer per-step learnable inner loop LRs
+        self.lslr: Optional[LSLRSchedule] = None
+        if config.lslr_enabled:
+            self.lslr = LSLRSchedule(
+                named_params=list(model.named_parameters()),
+                n_steps=config.inner_steps,
+                init_lr=config.inner_lr,
+            ).to(config.device)
+            n_lslr_params = sum(p.numel() for p in self.lslr.parameters())
+            print(f"  LSLR enabled: {n_lslr_params} learnable LR params")
+
+        # Outer loop optimizer (meta-update) — includes MeTAL + LSLR params
         opt_params = list(self.model.parameters())
         if self.metal is not None:
             opt_params += list(self.metal.parameters())
+        if self.lslr is not None:
+            opt_params += list(self.lslr.parameters())
         self.outer_opt = torch.optim.Adam(opt_params, lr=config.outer_lr)
 
         # LR scheduler: optional warmup → cosine decay (single or warm restarts)
@@ -477,6 +540,19 @@ class MAMLTrainer:
                 f"or (patience=0, checkpoint_interval>0) for periodic saves."
             )
 
+        # DA + warmup mutual exclusion
+        if config.da_enabled and config.warmup_iterations > 0:
+            raise ValueError(
+                "DA (derivative-order annealing) replaces warmup. "
+                "Set warmup_iterations=0 when da_enabled=True."
+            )
+
+        # Bind compute_task — MSL or standard
+        self.compute_task = (
+            self._compute_task_msl if config.msl_enabled
+            else self._compute_task_standard
+        )
+
         # Bind iteration hook + finalize — no conditionals in the hot loop
         if self._patience_enabled:
             self._iteration_hook = self._patience_iteration_hook
@@ -492,6 +568,9 @@ class MAMLTrainer:
         self.best_train_state = None  # Stash weights when train loss improves (patience mode only)
         self.patience_counter = 0
         self._nan_at: Optional[int] = None
+        self._current_first_order = config.first_order
+        self._last_train_loss: float = 0.0
+        self._early_stopped: bool = False
         self.history: Dict[str, List] = {
             "train_loss": [],
             "val_loss": [],
@@ -548,11 +627,12 @@ class MAMLTrainer:
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
         query_x: torch.Tensor,
         step_idx: int,
+        lr_override: Optional[Dict] = None,
     ) -> None:
         """Standard MAML inner step: gradient on configured loss."""
         support_pred = fmodel(support_x)
         support_loss = self.cost_function(support_pred, support_y, support_coords)
-        diffopt.step(support_loss, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
+        diffopt.step(support_loss, override=lr_override, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
 
     def _metal_inner_step(
         self,
@@ -563,6 +643,7 @@ class MAMLTrainer:
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
         query_x: torch.Tensor,
         step_idx: int,
+        lr_override: Optional[Dict] = None,
     ) -> None:
         """MeTAL inner step: support_loss + meta_support_loss + meta_query_loss."""
         assert self.metal is not None
@@ -576,30 +657,18 @@ class MAMLTrainer:
         query_pred = fmodel(query_x)
         meta_query = self.metal.query_step(step_idx, fmodel, query_pred)
 
-        diffopt.step(support_loss + meta_support + meta_query, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
+        diffopt.step(support_loss + meta_support + meta_query, override=lr_override, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Core MAML
     # ------------------------------------------------------------------
 
-    def compute_task(self, task: PDETask, seed: int) -> torch.Tensor:
-        """
-        Compute query loss after inner loop adaptation.
-
-        This is the core MAML operation:
-        1. Get support/query split from task
-        2. Adapt model on support set (inner loop)
-        3. Evaluate adapted model on query set
-        4. Return query loss (gradient flows back to meta-parameters)
-
-        Args:
-            task: PDE task with support/query data
-            seed: Random seed for reproducible support/query split
-
-        Returns:
-            Query loss tensor (differentiable w.r.t. meta-parameters)
-        """
-        # Get support/query split
+    def _task_setup(
+        self, task: PDETask, seed: int
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+               Optional[Tuple[torch.Tensor, torch.Tensor]],
+               Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """Common setup for compute_task variants: split, zero features, set domain."""
         support, query, support_coords, query_coords = task.get_support_query_split(
             K_shot=self.config.k_shot,
             query_size=self.config.query_size,
@@ -622,15 +691,115 @@ class MAMLTrainer:
         self._current_Lx = task.Lx
         self._current_Ly = task.Ly
 
-        # Inner loop optimizer (recreated each task)
-        inner_opt = torch.optim.SGD(self.model.parameters(), lr=self.config.inner_lr)
+        return support_x, support_y, query_x, query_y, support_coords, query_coords
 
-        # Inner loop with higher library
+    def _create_inner_opt(self) -> torch.optim.SGD:
+        """Create inner loop optimizer. Per-param groups when LSLR enabled."""
+        if self.lslr is not None:
+            return torch.optim.SGD(
+                [{"params": [p], "lr": self.config.inner_lr}
+                 for p in self.model.parameters()]
+            )
+        return torch.optim.SGD(self.model.parameters(), lr=self.config.inner_lr)
+
+    def _compute_task_standard(self, task: PDETask, seed: int) -> torch.Tensor:
+        """Standard MAML: query loss after final inner step only."""
+        support_x, support_y, query_x, query_y, support_coords, query_coords = (
+            self._task_setup(task, seed)
+        )
+
+        inner_opt = self._create_inner_opt()
+
         with higher.innerloop_ctx(
             self.model,
             inner_opt,
             copy_initial_weights=False,
-            track_higher_grads=not self.config.first_order,
+            track_higher_grads=not self._current_first_order,
+        ) as (fmodel, diffopt):
+            with torch.no_grad():
+                pre_pred = fmodel(support_x)
+                pre_loss = self.cost_function(pre_pred, support_y, support_coords)
+                pre_metal = ""
+                if self.metal is not None:
+                    pre_query = fmodel(query_x)
+                    ml = self.metal.log_loss(
+                        0, fmodel, pre_pred, support_y, pre_query, self._pointwise_loss
+                    )
+                    pre_metal = f", metal_loss={ml:.6f}"
+                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
+
+            for j in range(self.config.inner_steps):
+                override = self.lslr.get_override(j) if self.lslr else None
+                self._inner_step(
+                    fmodel, diffopt, support_x, support_y, support_coords, query_x, j,
+                    lr_override=override,
+                )
+
+            # Post-adaptation loss (logging only)
+            with torch.no_grad():
+                post_pred = fmodel(support_x)
+                post_loss = self.cost_function(post_pred, support_y, support_coords)
+                post_metal = ""
+                if self.metal is not None:
+                    post_query = fmodel(query_x)
+                    ml = self.metal.log_loss(
+                        self.config.inner_steps - 1,
+                        fmodel, post_pred, support_y, post_query, self._pointwise_loss,
+                    )
+                    post_metal = f", metal_loss={ml:.6f}"
+                print(
+                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
+                    f" ({self.config.inner_steps} steps)"
+                )
+
+            query_pred = fmodel(query_x)
+            query_loss = self.cost_function(query_pred, query_y, query_coords)
+
+        return query_loss
+
+    def _msl_weights(self) -> torch.Tensor:
+        """Compute MSL annealing weights for current iteration.
+
+        Follows Antoniou et al. (ICLR 2019):
+        - All non-final steps start at 1/N, decay linearly, floor at 0.03/N
+        - Final step absorbs the shed weight, capped so sum stays 1.0
+        - decay_rate = 1 / (N * max_outer_iterations)
+        - MSL is active for the entire training (matching the paper)
+        Uses iteration count instead of epochs (we don't have epochs).
+        """
+        N = self.config.inner_steps
+        total_iters = self.config.max_outer_iterations
+
+        decay_rate = 1.0 / N / max(total_iters, 1)
+        floor = 0.03 / N
+
+        w = torch.ones(N, device=self.device) * (1.0 / N)
+
+        # From implementation. Whatever is non-last, decay at the same rate.
+        for i in range(N - 1):
+            w[i] = max(w[i] - (self.iteration * decay_rate), floor)
+
+        # Last step weight decrease differently, specifically, increasing only.
+        w[-1] = min(
+            w[-1] + (self.iteration * (N - 1) * decay_rate),
+            1.0 - ((N - 1) * floor),
+        )
+
+        return w
+
+    def _compute_task_msl(self, task: PDETask, seed: int) -> torch.Tensor:
+        """MSL MAML: weighted query loss at every inner step (Antoniou et al. 2019)."""
+        support_x, support_y, query_x, query_y, support_coords, query_coords = (
+            self._task_setup(task, seed)
+        )
+
+        inner_opt = self._create_inner_opt()
+
+        with higher.innerloop_ctx(
+            self.model,
+            inner_opt,
+            copy_initial_weights=False,
+            track_higher_grads=not self._current_first_order,
         ) as (fmodel, diffopt):
             # Pre-adaptation loss (logging only)
             with torch.no_grad():
@@ -645,11 +814,19 @@ class MAMLTrainer:
                     pre_metal = f", metal_loss={ml:.6f}"
                 print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
 
-            # Inner loop: adapt on support set
+            step_losses: List[torch.Tensor] = []
+            weights = self._msl_weights()
+
             for j in range(self.config.inner_steps):
+                override = self.lslr.get_override(j) if self.lslr else None
                 self._inner_step(
-                    fmodel, diffopt, support_x, support_y, support_coords, query_x, j
+                    fmodel, diffopt, support_x, support_y, support_coords, query_x, j,
+                    lr_override=override,
                 )
+
+                query_pred = fmodel(query_x)
+                step_loss = self.cost_function(query_pred, query_y, query_coords)
+                step_losses.append(weights[j] * step_loss)
 
             # Post-adaptation loss (logging only)
             with torch.no_grad():
@@ -660,11 +837,7 @@ class MAMLTrainer:
                     post_query = fmodel(query_x)
                     ml = self.metal.log_loss(
                         self.config.inner_steps - 1,
-                        fmodel,
-                        post_pred,
-                        support_y,
-                        post_query,
-                        self._pointwise_loss,
+                        fmodel, post_pred, support_y, post_query, self._pointwise_loss,
                     )
                     post_metal = f", metal_loss={ml:.6f}"
                 print(
@@ -672,11 +845,9 @@ class MAMLTrainer:
                     f" ({self.config.inner_steps} steps)"
                 )
 
-            # Evaluate adapted model on query set (standard loss — no MeTAL here)
-            query_pred = fmodel(query_x)
-            query_loss = self.cost_function(query_pred, query_y, query_coords)
+            total_loss = torch.sum(torch.stack(step_losses))
 
-        return query_loss
+        return total_loss
 
     def outer_step(self, tasks: List[PDETask]) -> float:
         """
@@ -934,7 +1105,10 @@ class MAMLTrainer:
         print(f"  Meta batch size: {self.config.meta_batch_size}")
         print(f"  K-shot: {self.config.k_shot}")
         print(f"  Query size: {self.config.query_size}")
-        print(f"  FOMAML: {self.config.first_order}")
+        if self.config.da_enabled:
+            print(f"  DA: first-order until iter {self.config.da_threshold}, then second-order")
+        else:
+            print(f"  FOMAML: {self.config.first_order}")
         if self.config.warmup_iterations > 0:
             print(f"  Warmup: {self.config.warmup_iterations} iterations")
         if self.config.use_scheduler:
@@ -952,9 +1126,6 @@ class MAMLTrainer:
             print(f"  Resuming from iteration {start_iteration}")
         print()
 
-        early_stopped: bool = False
-        train_loss: float = 0.0
-        iteration = start_iteration
         self._stop_requested = False
 
         # Catch Ctrl+C as a stop request — save happens at the iteration boundary
@@ -962,23 +1133,70 @@ class MAMLTrainer:
             signal.SIGINT, lambda *_: setattr(self, "_stop_requested", True)
         )
 
-        for iteration in range(start_iteration, self.config.max_outer_iterations):
+        if self.config.da_enabled:
+            # Phase 1: first-order (cheap pre-training)
+            da_end = min(self.config.da_threshold, self.config.max_outer_iterations)
+            phase1_start = max(start_iteration, 0)
+            if phase1_start < da_end:
+                print(f"  DA Phase 1: first-order, iterations {phase1_start}→{da_end}")
+                self._current_first_order = True
+                result = self._run_phase(phase1_start, da_end, checkpoint_dir, log_interval)
+                if result is not None:
+                    signal.signal(signal.SIGINT, prev_handler)
+                    return result
+
+            # Phase 2: second-order
+            phase2_start = max(start_iteration, da_end)
+            if phase2_start < self.config.max_outer_iterations:
+                print(f"  DA Phase 2: second-order, iterations {phase2_start}→{self.config.max_outer_iterations}")
+                self._current_first_order = False
+                result = self._run_phase(phase2_start, self.config.max_outer_iterations, checkpoint_dir, log_interval)
+                if result is not None:
+                    signal.signal(signal.SIGINT, prev_handler)
+                    return result
+        else:
+            result = self._run_phase(start_iteration, self.config.max_outer_iterations, checkpoint_dir, log_interval)
+            if result is not None:
+                signal.signal(signal.SIGINT, prev_handler)
+                return result
+
+        # Restore original handler
+        signal.signal(signal.SIGINT, prev_handler)
+
+        self._training_finalize(self._last_train_loss, self._early_stopped, checkpoint_dir)
+
+        print()
+        print(f"Training complete at iteration {self.iteration}")
+
+        return self.history
+
+    def _run_phase(
+        self,
+        start_iter: int,
+        end_iter: int,
+        checkpoint_dir: Path,
+        log_interval: int,
+    ) -> Optional[Dict[str, List]]:
+        """Run training iterations from start_iter to end_iter.
+
+        Returns None on normal completion (including early stop via patience).
+        Returns self.history on NaN or Ctrl+C (caller should return immediately).
+        """
+        for iteration in range(start_iter, end_iter):
             self.iteration = iteration
 
-            # Sample task batch
             tasks = self.train_loader.sample_batch(
                 self.config.meta_batch_size, seed=iteration
             )
 
-            # Meta-update
             train_loss = self.outer_step(tasks)
+            self._last_train_loss = train_loss
 
             if torch.tensor(train_loss).isnan():
                 self._nan_at = iteration
                 print(f"\n  NaN detected at iteration {iteration}. Weights are clean (step was skipped).")
 
                 if self._patience_enabled:
-                    # Compare current (clean) weights vs best-train on validation
                     if self.val_loader is not None and self.best_train_state is not None:
                         current_state = copy.deepcopy(self.model.state_dict())
                         current_val = self.evaluate(self.val_loader.tasks)
@@ -997,25 +1215,21 @@ class MAMLTrainer:
                         self.model.load_state_dict(self.best_train_state)
                         print("  Restored best-train weights (no val loader).")
 
-                # Interval mode: current weights are already clean (step was skipped)
                 self.save_checkpoint(checkpoint_dir / "final_model.pt")
                 print(f"  Saved to {checkpoint_dir / 'final_model.pt'}.")
-                signal.signal(signal.SIGINT, prev_handler)
                 return self.history
 
-            # Step LR scheduler
             if self.scheduler is not None:
                 self.scheduler.step()
 
-            # Record history
             self.history["train_loss"].append(train_loss)
             self.history["iteration"].append(iteration)
 
             early_stopped = self._iteration_hook(iteration, train_loss, log_interval, checkpoint_dir)
             if early_stopped:
-                break
+                self._early_stopped = True
+                return None
 
-            # Graceful shutdown — all iteration state is consistent here
             if self._stop_requested:
                 print(
                     f"\n  Stop requested after iteration {iteration}. Saving checkpoint..."
@@ -1024,18 +1238,9 @@ class MAMLTrainer:
                 print(
                     f"  Saved to {checkpoint_dir / 'latest_model.pt'}. Resume with --resume."
                 )
-                signal.signal(signal.SIGINT, prev_handler)
                 return self.history
 
-        # Restore original handler
-        signal.signal(signal.SIGINT, prev_handler)
-
-        self._training_finalize(train_loss, early_stopped, checkpoint_dir)
-
-        print()
-        print(f"Training complete at iteration {iteration}")
-
-        return self.history
+        return None
 
     def pop_nan_iteration(self) -> Optional[int]:
         """Return the iteration where NaN was detected, or None. Resets the flag."""
@@ -1076,6 +1281,10 @@ class MAMLTrainer:
         # MeTAL: save entire module as single file alongside main checkpoint
         if self.metal is not None:
             torch.save(self.metal.state_dict(), path.parent / "metal_state.pt")
+
+        # LSLR: save learned LR parameters
+        if self.lslr is not None:
+            torch.save(self.lslr.state_dict(), path.parent / "lslr_state.pt")
 
     def load_checkpoint(self, path: Path) -> None:
         """
@@ -1123,6 +1332,16 @@ class MAMLTrainer:
                 )
             )
             print(f"  Loaded MeTAL module from {metal_state_path}")
+
+        # LSLR: load learned LR parameters if they exist
+        lslr_state_path = path.parent / "lslr_state.pt"
+        if self.lslr is not None and lslr_state_path.exists():
+            self.lslr.load_state_dict(
+                torch.load(
+                    lslr_state_path, map_location=self.device, weights_only=True
+                )
+            )
+            print(f"  Loaded LSLR module from {lslr_state_path}")
 
         print(f"Loaded checkpoint from {path}")
         print(f"  Iteration: {self.iteration}")
