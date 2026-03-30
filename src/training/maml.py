@@ -296,6 +296,7 @@ class MAMLConfig:
 
     # Outer loop (meta-update)
     outer_lr: float = 0.001  # β: learning rate for meta-update
+    adam_betas: Tuple[float, float] = (0.9, 0.99)  # Adam β1, β2 (Antoniou et al. 2019)
     meta_batch_size: int = 4  # Tasks per meta-update
 
     # Support/query split
@@ -478,7 +479,7 @@ class MAMLTrainer:
             opt_params += list(self.metal.parameters())
         if self.lslr is not None:
             opt_params += list(self.lslr.parameters())
-        self.outer_opt = torch.optim.Adam(opt_params, lr=config.outer_lr)
+        self.outer_opt = torch.optim.Adam(opt_params, lr=config.outer_lr, betas=config.adam_betas)
 
         # LR scheduler: optional warmup → cosine decay (single or warm restarts)
         self.scheduler = None

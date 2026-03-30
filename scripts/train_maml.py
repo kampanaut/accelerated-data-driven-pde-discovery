@@ -289,6 +289,7 @@ def main():
     maml_config = MAMLConfig(
         inner_lr=train_cfg.get("inner_lr", 0.01),
         outer_lr=train_cfg.get("outer_lr", 0.001),
+        adam_betas=tuple(train_cfg.get("adam_betas", [0.9, 0.99])),
         inner_steps=train_cfg.get("inner_steps", 1),
         meta_batch_size=train_cfg.get("meta_batch_size", 4),
         k_shot=train_cfg.get("k_shot", 100),
@@ -380,6 +381,11 @@ def main():
     print("-" * 60)
 
     history_path = exp_dir / "training" / "history.json"
+    if history_path.exists() and args.resume:
+        i = 1
+        while (exp_dir / "training" / f"history.json.{i}").exists():
+            i += 1
+        history_path.rename(exp_dir / "training" / f"history.json.{i}")
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
 
