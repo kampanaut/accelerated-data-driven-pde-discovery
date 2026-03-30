@@ -308,7 +308,7 @@ _GRID2_SHARED_TRAINING = {
     "max_iterations": 70000,
     "patience": 0,
     "checkpoint_interval": 500,
-    "log_interval": 10,
+    "log_interval": 1,
     "first_order": False,
     "warmup_iterations": 0,
     "use_scheduler": True,
