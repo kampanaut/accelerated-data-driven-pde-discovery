@@ -1171,7 +1171,7 @@ class MetaLearningDataLoader:
         if device == "cuda" and torch.cuda.is_available() and len(self.tasks) > 0:
             total_hat = sum(t.hat_memory_bytes() for t in self.tasks)
             free_vram = torch.cuda.mem_get_info()[0]
-            headroom = 2 * (1024 ** 3)  # reserve 2 GB for model + activations
+            headroom = 3 * (1024 ** 3)  # reserve 3 GB for model + collocation transients
             if total_hat < (free_vram - headroom):
                 for t in self.tasks:
                     t.promote_storage("cuda")
