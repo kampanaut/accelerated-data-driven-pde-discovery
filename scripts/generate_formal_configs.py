@@ -89,12 +89,12 @@ GRID2_LOSS_PRESETS = Preset([
         "metal": {"enabled": True, "hidden_dim": 64},
     }),
     ("mamlpp", {
-        "msl_enabled": True, "da_enabled": True, "da_threshold": 1650, "lslr_enabled": True,
+        "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
         "warmup_iterations": 0, "scheduler_type": "cosine",
     }),
     ("mamlpp+metal", {
         "metal": {"enabled": True, "hidden_dim": 64},
-        "msl_enabled": True, "da_enabled": True, "da_threshold": 1650, "lslr_enabled": True,
+        "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
         "warmup_iterations": 0, "scheduler_type": "cosine",
     }),
 ])
@@ -120,7 +120,7 @@ DEFAULT = {
     "adam_betas": [0.9, 0.99],
     "inner_steps": 5,
     "meta_batch_size": 25,
-    "max_iterations": 5000,
+    "max_iterations": 15000,
     "patience": 0,
     "checkpoint_interval": 100,
     "log_interval": 1,
@@ -137,7 +137,7 @@ DEFAULT = {
     # MAML++ defaults (off)
     "msl_enabled": False,
     "da_enabled": False,
-    "da_threshold": 1650,
+    "da_threshold": 5000,
     "lslr_enabled": False,
 
     # MeTAL default (off)
@@ -433,7 +433,7 @@ def _build_config(
             first_order=flat["first_order"],
             msl_enabled=flat.get("msl_enabled", False),
             da_enabled=flat.get("da_enabled", False),
-            da_threshold=flat.get("da_threshold", 1650),
+            da_threshold=flat.get("da_threshold", 5000),
             lslr_enabled=flat.get("lslr_enabled", False),
             warmup_iterations=flat["warmup_iterations"],
             use_scheduler=flat["use_scheduler"],

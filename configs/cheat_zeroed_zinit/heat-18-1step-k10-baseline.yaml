@@ -30,7 +30,7 @@ training:
   first_order: false
   msl_enabled: false
   da_enabled: false
-  da_threshold: 1650
+  da_threshold: 5000
   lslr_enabled: false
   warmup_iterations: 100
   use_scheduler: true
