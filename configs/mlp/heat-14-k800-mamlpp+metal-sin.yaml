@@ -1,0 +1,68 @@
+experiment:
+  name: heat-14-k800-mamlpp+metal-sin
+  pde_type: heat
+  seed: 42
+  device: cuda
+output:
+  base_dir: data/models/mlp
+data:
+  meta_train_dir: data/datasets/heat_train-1
+  meta_val_dir: data/datasets/heat_val-1
+  meta_test_dir: data/datasets/heat_test-1
+training:
+  inner_lr: 0.01
+  outer_lr: 0.001
+  adam_betas:
+  - 0.9
+  - 0.99
+  inner_steps: 5
+  meta_batch_size: 25
+  k_shot: 800
+  query_size: 1600
+  max_iterations: 5000
+  patience: 0
+  checkpoint_interval: 100
+  log_interval: 1
+  hidden_dims:
+  - 100
+  - 100
+  activation: sin
+  input_dim: 5
+  output_dim: 1
+  first_order: false
+  msl_enabled: true
+  da_enabled: true
+  da_threshold: 1650
+  lslr_enabled: true
+  warmup_iterations: 0
+  use_scheduler: true
+  scheduler_type: cosine
+  T_0: 200
+  T_mult: 2
+  min_lr: 1.0e-06
+  loss_function: normalized_mse
+  max_grad_norm: 100.0
+  zero_non_rhs_features: true
+  metal:
+    enabled: true
+    hidden_dim: 64
+evaluation:
+  k_values:
+  - 800
+  noise_levels:
+  - 0.0
+  fine_tune_lr: 0.01
+  max_steps: 50
+  deriv_threshold: 0.0005
+  fixed_steps:
+  - 0
+  - 5
+  - 50
+  holdout_size: 5000
+  log_weights: false
+visualization:
+  dpi: 300
+  only: scatter[0,5,50],best-combo
+  compare_experiments:
+  - heat-14-k800-mamlpp+metal-sin
+  - heat-16-k10-mamlpp+metal-sin

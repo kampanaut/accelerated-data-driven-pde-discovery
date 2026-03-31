@@ -57,15 +57,16 @@ class SpectralLossSection:
 
 @dataclass
 class TrainingSection:
-    """All training fields as they appear in YAML."""
+    """All training fields as they appear in YAML.
 
-    # Inner loop
+    Field order matches the canonical YAML key order (used by to_yaml_dict).
+    """
+
+    # Inner/outer loop
     inner_lr: float = 0.01
-    inner_steps: int = 1
-
-    # Outer loop
     outer_lr: float = 0.001
     adam_betas: list = field(default_factory=lambda: [0.9, 0.99])
+    inner_steps: int = 1
     meta_batch_size: int = 4
 
     # Support/query
@@ -77,6 +78,16 @@ class TrainingSection:
     patience: int = 50
     checkpoint_interval: int = 0
     log_interval: int = 10
+
+    # Network architecture — between log_interval and first_order to match old YAML order
+    # (XOR: layers OR hidden_dims+activation+input_dim+output_dim)
+    hidden_dims: Optional[list] = None
+    activation: Optional[str] = None
+    input_dim: Optional[int] = None
+    output_dim: Optional[int] = None
+    layers: Optional[list] = None
+    conv_filters: int = 0
+    conv_kernel_size: int = 3
 
     # First-order
     first_order: bool = False
@@ -107,18 +118,9 @@ class TrainingSection:
     # Weight initialization (optional: "zeros", "expected", or None for default)
     weight_init: Optional[str] = None
 
-    # Nested sections
-    metal: MetalSection = field(default_factory=MetalSection)
+    # Nested sections (spectral_loss before metal to match old YAML order)
     spectral_loss: SpectralLossSection = field(default_factory=SpectralLossSection)
-
-    # Network architecture (XOR: layers OR hidden_dims+activation+input_dim+output_dim)
-    hidden_dims: Optional[list] = None
-    activation: Optional[str] = None
-    input_dim: Optional[int] = None
-    output_dim: Optional[int] = None
-    layers: Optional[list] = None
-    conv_filters: int = 0
-    conv_kernel_size: int = 3
+    metal: MetalSection = field(default_factory=MetalSection)
 
 
 @dataclass
@@ -199,38 +201,47 @@ class ExperimentConfig:
         """Serialize to canonical YAML dict structure."""
         t = self.training
 
-        # Build training dict from flat fields
+        # Build training dict from flat fields in dataclass field order
         train_dict: dict[str, Any] = {}
-        # Collect all flat fields (skip nested sections and network fields)
         _nested = {"metal", "spectral_loss"}
-        _network = {"hidden_dims", "activation", "input_dim", "output_dim", "layers", "conv_filters", "conv_kernel_size"}
+        # Network fields that are mutually exclusive (layers XOR hidden_dims+friends)
+        _layers_format = {"hidden_dims", "activation", "input_dim", "output_dim"}
+        _conv = {"conv_filters", "conv_kernel_size"}
 
         for f in fields(TrainingSection):
-            if f.name in _nested or f.name in _network:
+            name = f.name
+            val = getattr(t, name)
+
+            # Nested sections — emit inline if enabled
+            if name == "metal":
+                if t.metal.enabled:
+                    train_dict["metal"] = {"enabled": t.metal.enabled, "hidden_dim": t.metal.hidden_dim}
                 continue
-            val = getattr(t, f.name)
-            if val is not None:
-                train_dict[f.name] = val
+            if name == "spectral_loss":
+                if t.spectral_loss.enabled:
+                    train_dict["spectral_loss"] = {"enabled": t.spectral_loss.enabled, "mode_size": t.spectral_loss.mode_size}
+                continue
 
-        # Nested sections — only emit if enabled
-        if t.metal.enabled:
-            train_dict["metal"] = {"enabled": t.metal.enabled, "hidden_dim": t.metal.hidden_dim}
-        if t.spectral_loss.enabled:
-            train_dict["spectral_loss"] = {"enabled": t.spectral_loss.enabled, "mode_size": t.spectral_loss.mode_size}
-
-        # Network config — preserve whichever format was provided
-        if t.layers is not None:
-            train_dict["layers"] = t.layers
-        else:
-            for name in ("hidden_dims", "activation", "input_dim", "output_dim"):
-                val = getattr(t, name)
+            # layers XOR old-format: only emit the format that was provided
+            if name == "layers":
+                if val is not None:
+                    train_dict["layers"] = val
+                continue
+            if name in _layers_format:
+                if t.layers is not None:
+                    continue  # skip old-format fields when layers is set
                 if val is not None:
                     train_dict[name] = val
+                continue
 
-        # Conv fields only if non-default
-        if t.conv_filters > 0:
-            train_dict["conv_filters"] = t.conv_filters
-            train_dict["conv_kernel_size"] = t.conv_kernel_size
+            # Conv only if non-default
+            if name in _conv:
+                if t.conv_filters > 0:
+                    train_dict[name] = val
+                continue
+
+            if val is not None:
+                train_dict[name] = val
 
         # Build evaluation dict
         eval_dict: dict[str, Any] = {}

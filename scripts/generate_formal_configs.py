@@ -392,7 +392,7 @@ def _build_config(
 
     # Fixed steps: include inner_steps as designed step
     inner_steps = flat.get("inner_steps", 5)
-    fixed_steps = sorted(set([0, 1, 5, 10, 25, 50] + [inner_steps]))
+    fixed_steps = sorted(set([0, inner_steps, flat["max_eval_steps"]]))
 
     # Metal / spectral as section objects
     metal_raw = flat.get("metal", {})
@@ -408,7 +408,11 @@ def _build_config(
             seed=flat.get("seed", 42),
             device=flat.get("device", "cuda"),
         ),
-        output=OutputSection(base_dir=meta.models_dir),
+        output=OutputSection(
+            base_dir=(f"{meta.models_dir}/{pde.name}"
+                      if isinstance(merged.get("pde_type"), Axis)
+                      else meta.models_dir),
+        ),
         data=DataSection(
             meta_train_dir=pde.train_dir,
             meta_val_dir=pde.val_dir,
@@ -508,12 +512,23 @@ def generate_variant(meta: VariantMeta, overrides: dict, default: dict = DEFAULT
     print(f"{'=' * 60}")
 
     all_entries: list[tuple[int, str]] = []
+    # For scatter grouping: group configs that share everything except k_shot
+    scatter_groups: dict[tuple, list[str]] = {}
     exp_num = 0
 
     for combo in itertools.product(*axis_values):
         exp_num += 1
         name = _build_name(meta.label, exp_num, merged, default, axis_names, combo)
         config = _build_config(merged, axis_names, combo, meta, name)
+
+        # Build scatter group key: all axis values except k_shot
+        group_key = tuple(
+            (preset_name if isinstance(merged[ax], Preset) else val)
+            for ax, val in zip(axis_names, combo)
+            if ax != "k_shot"
+            for preset_name in ([val[0]] if isinstance(merged[ax], Preset) else [val])
+        )
+        scatter_groups.setdefault(group_key, []).append(name)
 
         path = configs_dir / f"{name}.yaml"
         rel_path = f"{meta.configs_dir}/{name}.yaml"
@@ -522,19 +537,28 @@ def generate_variant(meta: VariantMeta, overrides: dict, default: dict = DEFAULT
         all_entries.append((exp_num, rel_path))
         print(f"  [{exp_num:2d}] {name}")
 
+    # Second pass: set compare_experiments in each config
+    for path in configs_dir.glob("*.yaml"):
+        with open(path) as f:
+            config = yaml.safe_load(f)
+        exp_name = config["experiment"]["name"]
+        for group in scatter_groups.values():
+            if exp_name in group:
+                config["visualization"]["compare_experiments"] = group
+                break
+        with open(path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
     total = exp_num
     print(f"\n  Generated {total} configs in {configs_dir}")
 
-    # Determine PDE names for script naming
-    pde_type = merged.get("pde_type")
-    if isinstance(pde_type, list):
-        pde_names = pde_type
-    else:
-        pde_names = [pde_type]
+    # Per-PDE scripts — group entries by PDE name from filename
+    pde_groups: dict[str, list[tuple[int, str]]] = {}
+    for i, rel_path in all_entries:
+        pde_name = Path(rel_path).stem.split("-")[0]
+        pde_groups.setdefault(pde_name, []).append((i, rel_path))
 
-    # Full scripts
-    for pde_name in pde_names:
-        pde_entries = [(i, p) for i, p in all_entries]  # all are same PDE for now
+    for pde_name, pde_entries in pde_groups.items():
         _write_phased_script(
             SCRIPT_DIR / f"run_{meta.label}_{pde_name}.sh", pde_entries, total,
         )
@@ -545,10 +569,11 @@ def generate_variant(meta: VariantMeta, overrides: dict, default: dict = DEFAULT
 
     # Split for parallel execution (4 configs per chunk)
     chunk_size = 4
+    pde_list = list(pde_groups.keys())
+    pde_label = pde_list[0] if len(pde_list) == 1 else "all"
     for i in range(0, len(all_entries), chunk_size):
         idx = (i // chunk_size) + 1
         chunk = all_entries[i : i + chunk_size]
-        pde_label = pde_names[0] if len(pde_names) == 1 else "all"
         _write_phased_script(
             SCRIPT_DIR / f"run_{meta.label}_{pde_label}_{idx}.sh", chunk, total,
         )

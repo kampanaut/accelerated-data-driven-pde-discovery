@@ -12,24 +12,33 @@ data:
 training:
   inner_lr: 0.01
   outer_lr: 0.001
+  adam_betas:
+  - 0.9
+  - 0.99
   inner_steps: 1
   meta_batch_size: 8
   k_shot: 10
   query_size: 2000
   max_iterations: 500
   patience: 300
+  checkpoint_interval: 0
   log_interval: 1
   layers:
   - input: 10
   - output: 2
     bias: false
   first_order: false
+  msl_enabled: false
+  da_enabled: false
+  da_threshold: 1650
+  lslr_enabled: false
   warmup_iterations: 100
   use_scheduler: true
   scheduler_type: warm_restarts
   T_0: 200
   T_mult: 2
   min_lr: 1.0e-06
+  loss_function: normalized_mse
   max_grad_norm: 100.0
   zero_non_rhs_features: false
   weight_init: expected
@@ -50,9 +59,6 @@ evaluation:
   fixed_steps:
   - 0
   - 1
-  - 5
-  - 10
-  - 25
   - 50
   holdout_size: 5000
   log_weights: true
