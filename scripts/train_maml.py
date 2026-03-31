@@ -149,8 +149,6 @@ def main():
 
     if not train_dir.exists():
         raise FileNotFoundError(f"Meta-train directory not found: {train_dir}")
-    if not val_dir.exists():
-        raise FileNotFoundError(f"Meta-val directory not found: {val_dir}")
 
     # Select task class based on PDE type
     pde_type = cfg.experiment.pde_type
@@ -166,13 +164,20 @@ def main():
     train_loader = MetaLearningDataLoader(
         train_dir, task_class=task_class, task_pattern=task_pattern, device=device
     )
-    val_loader = MetaLearningDataLoader(
-        val_dir, task_class=task_class, task_pattern=task_pattern, device=device
-    )
+
+    # Val loader only needed for patience mode (early stopping)
+    val_loader = None
+    if cfg.training.patience > 0:
+        if not val_dir.exists():
+            raise FileNotFoundError(f"Meta-val directory not found: {val_dir}")
+        val_loader = MetaLearningDataLoader(
+            val_dir, task_class=task_class, task_pattern=task_pattern, device=device
+        )
 
     print()
     print(f"Meta-train tasks: {len(train_loader)}")
-    print(f"Meta-val tasks: {len(val_loader)}")
+    if val_loader is not None:
+        print(f"Meta-val tasks: {len(val_loader)}")
     print()
 
     # =========================================================================
