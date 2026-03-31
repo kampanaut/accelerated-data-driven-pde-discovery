@@ -272,11 +272,9 @@ def main():
     print("Configuring MAML trainer...")
     print("-" * 60)
 
-    maml_config = cfg.to_maml_config()
-
     trainer = MAMLTrainer(
         model=model,
-        config=maml_config,
+        cfg=cfg,
         train_loader=train_loader,
         val_loader=val_loader,
     )

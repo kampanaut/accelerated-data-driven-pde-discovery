@@ -11,7 +11,6 @@ from .task_loader import (
     MetaLearningDataLoader,
 )
 from .maml import (
-    MAMLConfig,
     MAMLTrainer,
     fine_tune,
     get_meta_learned_init,
@@ -24,7 +23,6 @@ __all__ = [
     "LambdaOmegaTask",
     "NavierStokesTask",
     "MetaLearningDataLoader",
-    "MAMLConfig",
     "MAMLTrainer",
     "fine_tune",
     "get_meta_learned_init",

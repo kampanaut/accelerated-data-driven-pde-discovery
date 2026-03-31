@@ -22,6 +22,7 @@ from numpy.typing import NDArray
 import yaml
 import numpy as np
 import matplotlib
+from src.config import ExperimentConfig, OutputSection
 
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
@@ -1501,19 +1502,19 @@ def generate_aggregated_figures(
 
 
 def resolve_experiment_names(
-    config: dict, experiment_names: list[str]
+    cfg: "ExperimentConfig", experiment_names: list[str]
 ) -> list[Tuple[str, Path]]:
     """
     Resolve CLI-provided experiment names to (name, results_path) pairs.
 
     Args:
-        config: Experiment config (for base_dir)
+        cfg: Experiment config (for base_dir)
         experiment_names: List of experiment directory names from --only scatter(...)
 
     Returns:
         List of (dir_name, results_json_path) sorted by dir_name
     """
-    models_root = Path(config.get("output", {}).get("base_dir", "data/models"))
+    models_root = Path(cfg.output.base_dir)
 
     experiments: list[Tuple[str, Path]] = []
     missing: list[str] = []
@@ -1539,7 +1540,7 @@ def resolve_experiment_names(
 
 
 def discover_comparison_experiments(
-    config: dict, current_exp_dir: Path
+    cfg: "ExperimentConfig", current_exp_dir: Path
 ) -> list[Tuple[str, Path]]:
     """
     Discover experiments to compare in the coefficient scatter plot.
@@ -1550,18 +1551,16 @@ def discover_comparison_experiments(
 
     Returns list of (dir_name, results_json_path) sorted by dir_name.
     """
-    current_pde_type = config["experiment"]["pde_type"]
-    models_root = Path(config.get("output", {}).get("base_dir", "data/models"))
+    current_pde_type = cfg.experiment.pde_type
+    models_root = Path(cfg.output.base_dir)
 
-    viz_cfg = config.get("visualization", {})
-    explicit = viz_cfg.get("compare_experiments", [])
+    viz = cfg.visualization
+    explicit = viz.compare_experiments
 
     # Suffix exclusion: regexes tested against dir name. Capture group = iteration count.
-    exclude_patterns = [r"-ISNAN$", r"-ENDNAN@(\d+)$"] + viz_cfg.get(
-        "exclude_suffixes_append", []
-    )
+    exclude_patterns = [r"-ISNAN$", r"-ENDNAN@(\d+)$"] + viz.exclude_suffixes_append
     exclude_re = [re.compile(p) for p in exclude_patterns]
-    exclude_max_iter = viz_cfg.get("exclude_max_iteration", 20)
+    exclude_max_iter = viz.exclude_max_iteration
 
     def _is_excluded(name: str) -> bool:
         for r in exclude_re:
@@ -1857,8 +1856,8 @@ def main():
         print("Generating cross-experiment coefficient scatter (config-less)...")
         print("-" * 60)
 
-        default_config: dict = {"output": {"base_dir": "data/models"}}
-        discovered = resolve_experiment_names(default_config, exp_filter)
+        default_cfg = ExperimentConfig(output=OutputSection(base_dir="data/models"))
+        discovered = resolve_experiment_names(default_cfg, exp_filter)
         if len(discovered) >= 1:
             experiment_results: list[Tuple[str, dict]] = []
             for dir_name, rpath in discovered:
@@ -1884,10 +1883,8 @@ def main():
     # =========================================================================
     # Full pipeline with --config
     # =========================================================================
-    from src.config import ExperimentConfig
     cfg = ExperimentConfig.from_yaml(args.config)
-    # Keep raw dict for discover_comparison_experiments (reads other experiments' configs)
-    config = cfg.to_yaml_dict()
+    # cfg is now passed directly to discover/resolve functions — no raw dict needed
 
     exp_name = cfg.experiment.name
     exp_dir = Path(cfg.output.base_dir) / exp_name
@@ -1978,16 +1975,16 @@ def main():
         # Re-check exp_filter (sel may have been replaced by config-level --only)
         exp_filter = sel.experiments_for("scatter")
         if exp_filter is not None:
-            discovered = resolve_experiment_names(config, exp_filter)
+            discovered = resolve_experiment_names(cfg, exp_filter)
             scatter_output_dirs = [
-                Path(config.get("output", {}).get("base_dir", "data/models"))
+                Path(cfg.output.base_dir)
                 / name
                 / "figures"
                 / "only"
                 for name, _ in discovered
             ]
         else:
-            discovered = discover_comparison_experiments(config, exp_dir)
+            discovered = discover_comparison_experiments(cfg, exp_dir)
             scatter_output_dirs = [output_dir]
 
         if len(discovered) >= 1:

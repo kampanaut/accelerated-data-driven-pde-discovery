@@ -141,6 +141,8 @@ class VisualizationSection:
     dpi: int = 300
     only: Optional[str] = None
     compare_experiments: list = field(default_factory=list)
+    exclude_suffixes_append: list = field(default_factory=list)
+    exclude_max_iteration: int = 20
 
 
 # ── ExperimentConfig ─────────────────────────────────────────────────────
@@ -283,48 +285,6 @@ class ExperimentConfig:
             yaml.dump(self.to_yaml_dict(), f, default_flow_style=False, sort_keys=False)
 
     # ── Conversion to internal configs ───────────────────────────────
-
-    def to_maml_config(self) -> "MAMLConfig":
-        """Build MAMLConfig from this config.
-
-        Handles renames, flattening of nested sections, and cross-section fields.
-        """
-        from .training.maml import MAMLConfig
-
-        t = self.training
-        return MAMLConfig(
-            inner_lr=t.inner_lr,
-            inner_steps=t.inner_steps,
-            outer_lr=t.outer_lr,
-            adam_betas=tuple(t.adam_betas),
-            meta_batch_size=t.meta_batch_size,
-            k_shot=t.k_shot,
-            query_size=t.query_size,
-            max_outer_iterations=t.max_iterations,
-            patience=t.patience,
-            checkpoint_interval=t.checkpoint_interval,
-            log_interval=t.log_interval,
-            first_order=t.first_order,
-            msl_enabled=t.msl_enabled,
-            da_enabled=t.da_enabled,
-            da_threshold=t.da_threshold,
-            lslr_enabled=t.lslr_enabled,
-            device=self.experiment.device,
-            seed=self.experiment.seed,
-            warmup_iterations=t.warmup_iterations,
-            use_scheduler=t.use_scheduler,
-            min_lr=t.min_lr,
-            scheduler_type=t.scheduler_type,
-            T_0=t.T_0,
-            T_mult=t.T_mult,
-            loss_function=t.loss_function,
-            metal_enabled=t.metal.enabled,
-            metal_hidden_dim=t.metal.hidden_dim,
-            spectral_loss_enabled=t.spectral_loss.enabled,
-            spectral_loss_mode_size=t.spectral_loss.mode_size,
-            max_grad_norm=t.max_grad_norm,
-            zero_non_rhs_features=t.zero_non_rhs_features,
-        )
 
     def to_network_config(self) -> "NetworkConfig":
         """Build NetworkConfig from the network fields in the training section."""

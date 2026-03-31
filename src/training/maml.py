@@ -9,9 +9,11 @@ References:
 - Nichol et al. 2018: "On First-Order Meta-Learning Algorithms" (FOMAML)
 """
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Dict, Tuple
+from typing import Callable, List, Optional, Dict, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..config import ExperimentConfig
 import copy
 import signal
 
@@ -282,75 +284,6 @@ class LSLRSchedule(nn.Module):
         }
 
 
-@dataclass
-class MAMLConfig:
-    """
-    Configuration for MAML training.
-
-    Hyperparameter defaults follow Finn et al. 2017 and experiment_bible.md.
-    """
-
-    # Inner loop (task adaptation)
-    inner_lr: float = 0.01  # α: learning rate for task adaptation
-    inner_steps: int = 1  # Number of gradient steps per task
-
-    # Outer loop (meta-update)
-    outer_lr: float = 0.001  # β: learning rate for meta-update
-    adam_betas: Tuple[float, float] = (0.9, 0.99)  # Adam β1, β2 (Antoniou et al. 2019)
-    meta_batch_size: int = 4  # Tasks per meta-update
-
-    # Support/query split
-    k_shot: int = 100  # Support set size for inner loop
-    query_size: int = 1000  # Query set size for meta-gradient
-
-    # Training loop
-    max_outer_iterations: int = 10000
-    patience: int = 50  # Iterations before validation check (0 = disabled)
-    checkpoint_interval: int = 0  # Periodic save to latest_model.pt (0 = disabled)
-    log_interval: int = 10
-
-    # FOMAML (first-order approximation - faster, no second derivatives)
-    first_order: bool = False
-
-    # MAML++ (Antoniou et al., ICLR 2019)
-    msl_enabled: bool = False  # Multi-Step Loss: query loss at every inner step
-    da_enabled: bool = False  # Derivative-order Annealing: first-order → second-order
-    da_threshold: int = 200  # Iteration to switch from first-order to second-order
-    lslr_enabled: bool = False  # Per-Layer Per-Step Learning Rates
-
-    # Device and reproducibility
-    device: str = field(
-        default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
-    )
-    seed: int = 42
-
-    # LR scheduler
-    warmup_iterations: int = 0  # Linear warmup iterations (0 = no warmup)
-    use_scheduler: bool = False  # Use cosine annealing after warmup
-    min_lr: float = 1e-6  # Minimum LR at end of cosine decay
-    scheduler_type: str = "cosine"  # 'cosine' (single decay) or 'warm_restarts'
-    T_0: int = 500  # Initial restart period (warm_restarts only)
-    T_mult: int = 2  # Period multiplier after each restart
-
-    # Loss function: 'mse', 'normalized_mse', 'mae'
-    loss_function: str = "normalized_mse"
-
-    # MeTAL (Baik et al. ICCV 2021): task-adaptive inner-loop loss
-    metal_enabled: bool = False
-    metal_hidden_dim: int = 64
-
-    # Spectral structural loss via NUFFT
-    spectral_loss_enabled: bool = False
-    spectral_loss_mode_size: int = 64
-
-    # Gradient clipping — both inner and outer loops (0 = disabled)
-    # (Qin & Beatson 2022, Meta-PDE: max_norm=100.0 for both loops)
-    max_grad_norm: float = 0.0
-
-    # Zero non-RHS input features to block absorption routes
-    zero_non_rhs_features: bool = False
-
-
 class MAMLTrainer:
     """
     MAML trainer for meta-learning PDE operator initialization.
@@ -364,7 +297,7 @@ class MAMLTrainer:
     def __init__(
         self,
         model: nn.Module,
-        config: MAMLConfig,
+        cfg: "ExperimentConfig",
         train_loader: MetaLearningDataLoader,
         val_loader: Optional[MetaLearningDataLoader] = None,
     ):
@@ -373,20 +306,21 @@ class MAMLTrainer:
 
         Args:
             model: PDE operator network to meta-train
-            config: MAML hyperparameters
+            cfg: Unified experiment config (training params from cfg.training)
             train_loader: Data loader for meta-training tasks
             val_loader: Optional data loader for meta-validation (early stopping)
         """
-        self.config = config
+        t = cfg.training
+        self.config = t  # TrainingSection — all self.config.* reads come from here
         self.train_loader = train_loader
         self.val_loader = val_loader
 
         # Move model to device and store
-        self.model = model.to(config.device)
-        self.device = config.device
+        self.device = cfg.experiment.device
+        self.model = model.to(self.device)
 
         # Pointwise loss — used as base term in cost function
-        loss_type = config.loss_function
+        loss_type = t.loss_function
         if loss_type == "mse":
             self._pointwise_loss = F.mse_loss
         elif loss_type == "normalized_mse":
@@ -407,20 +341,20 @@ class MAMLTrainer:
         # MeTAL: per-step task-adaptive loss (Baik et al. 2021)
         self.metal: Optional[MeTALModule] = None
 
-        if config.metal_enabled:
+        if t.metal.enabled:
             n_base_params = sum(1 for _ in model.parameters())
             output_dim = list(model.parameters())[-1].shape[0]
 
             self.metal = MeTALModule(
-                n_steps=config.inner_steps,
+                n_steps=t.inner_steps,
                 n_base_params=n_base_params,
                 output_dim=output_dim,
-                hidden_dim=config.metal_hidden_dim,
-            ).to(config.device)
+                hidden_dim=t.metal.hidden_dim,
+            ).to(self.device)
 
             n_metal_params = sum(p.numel() for p in self.metal.parameters())
             print(
-                f"  MeTAL enabled: {config.inner_steps} steps × (support + query) networks"
+                f"  MeTAL enabled: {t.inner_steps} steps × (support + query) networks"
             )
             print(f"  Base model params: {n_base_params}, output_dim: {output_dim}")
             print(f"  MeTAL total params: {n_metal_params:,}")
@@ -428,7 +362,7 @@ class MAMLTrainer:
         # Bind cost function — no conditionals in the hot loop
         self.cost_function = (
             self._spectral_cost
-            if config.spectral_loss_enabled
+            if t.spectral_loss.enabled
             else self._pointwise_cost
         )
 
@@ -441,8 +375,8 @@ class MAMLTrainer:
 
         # Inner-loop gradient clipping callback (Qin & Beatson 2022)
         # Norm-based: differentiable, safe for second-order MAML
-        if config.max_grad_norm > 0:
-            max_norm = config.max_grad_norm
+        if t.max_grad_norm > 0:
+            max_norm = t.max_grad_norm
 
             def _clip_inner_grads(
                 grads: List[torch.Tensor],
@@ -464,12 +398,12 @@ class MAMLTrainer:
 
         # LSLR: per-layer per-step learnable inner loop LRs
         self.lslr: Optional[LSLRSchedule] = None
-        if config.lslr_enabled:
+        if t.lslr_enabled:
             self.lslr = LSLRSchedule(
                 named_params=list(model.named_parameters()),
-                n_steps=config.inner_steps,
-                init_lr=config.inner_lr,
-            ).to(config.device)
+                n_steps=t.inner_steps,
+                init_lr=t.inner_lr,
+            ).to(self.device)
             n_lslr_params = sum(p.numel() for p in self.lslr.parameters())
             print(f"  LSLR enabled: {n_lslr_params} learnable LR params")
 
@@ -479,42 +413,42 @@ class MAMLTrainer:
             opt_params += list(self.metal.parameters())
         if self.lslr is not None:
             opt_params += list(self.lslr.parameters())
-        self.outer_opt = torch.optim.Adam(opt_params, lr=config.outer_lr, betas=config.adam_betas)
+        self.outer_opt = torch.optim.Adam(opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas))
 
         # LR scheduler: optional warmup → cosine decay (single or warm restarts)
         self.scheduler = None
-        if config.use_scheduler or config.warmup_iterations > 0:
+        if t.use_scheduler or t.warmup_iterations > 0:
             schedulers = []
             milestones = []
 
             # Phase 1: linear warmup
-            if config.warmup_iterations > 0:
+            if t.warmup_iterations > 0:
                 warmup = torch.optim.lr_scheduler.LinearLR(
                     self.outer_opt,
-                    start_factor=1.0 / config.warmup_iterations,
+                    start_factor=1.0 / t.warmup_iterations,
                     end_factor=1.0,
-                    total_iters=config.warmup_iterations,
+                    total_iters=t.warmup_iterations,
                 )
                 schedulers.append(warmup)
-                milestones.append(config.warmup_iterations)
+                milestones.append(t.warmup_iterations)
 
             # Phase 2: cosine decay
-            if config.use_scheduler:
+            if t.use_scheduler:
                 post_warmup_iters = (
-                    config.max_outer_iterations - config.warmup_iterations
+                    t.max_iterations - t.warmup_iterations
                 )
-                if config.scheduler_type == "warm_restarts":
+                if t.scheduler_type == "warm_restarts":
                     decay = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                         self.outer_opt,
-                        T_0=config.T_0,
-                        T_mult=config.T_mult,
-                        eta_min=config.min_lr,
+                        T_0=t.T_0,
+                        T_mult=t.T_mult,
+                        eta_min=t.min_lr,
                     )
                 else:
                     decay = torch.optim.lr_scheduler.CosineAnnealingLR(
                         self.outer_opt,
                         T_max=post_warmup_iters,
-                        eta_min=config.min_lr,
+                        eta_min=t.min_lr,
                     )
                 schedulers.append(decay)
 
@@ -529,20 +463,20 @@ class MAMLTrainer:
                 self.scheduler = schedulers[0]
 
         # Checkpoint mode validation: exactly one of patience or checkpoint_interval
-        if config.patience > 0 and config.checkpoint_interval == 0:
+        if t.patience > 0 and t.checkpoint_interval == 0:
             self._patience_enabled = True
-        elif config.patience == 0 and config.checkpoint_interval > 0:
+        elif t.patience == 0 and t.checkpoint_interval > 0:
             self._patience_enabled = False
         else:
             raise ValueError(
-                f"Invalid checkpoint config: patience={config.patience}, "
-                f"checkpoint_interval={config.checkpoint_interval}. "
+                f"Invalid checkpoint config: patience={t.patience}, "
+                f"checkpoint_interval={t.checkpoint_interval}. "
                 f"Use (patience>0, checkpoint_interval=0) for early stopping, "
                 f"or (patience=0, checkpoint_interval>0) for periodic saves."
             )
 
         # DA + warmup mutual exclusion
-        if config.da_enabled and config.warmup_iterations > 0:
+        if t.da_enabled and t.warmup_iterations > 0:
             raise ValueError(
                 "DA (derivative-order annealing) replaces warmup. "
                 "Set warmup_iterations=0 when da_enabled=True."
@@ -550,7 +484,7 @@ class MAMLTrainer:
 
         # Bind compute_task — MSL or standard
         self.compute_task = (
-            self._compute_task_msl if config.msl_enabled
+            self._compute_task_msl if t.msl_enabled
             else self._compute_task_standard
         )
 
@@ -569,7 +503,7 @@ class MAMLTrainer:
         self.best_train_state = None  # Stash weights when train loss improves (patience mode only)
         self.patience_counter = 0
         self._nan_at: Optional[int] = None
-        self._current_first_order = config.first_order
+        self._current_first_order = t.first_order
         self._last_train_loss: float = 0.0
         self._early_stopped: bool = False
         self.history: Dict[str, List] = {
@@ -611,7 +545,7 @@ class MAMLTrainer:
             y_pts,
             self._current_Lx,
             self._current_Ly,
-            self.config.spectral_loss_mode_size,
+            self.config.spectral_loss.mode_size,
         )
         return pw + spec
 
@@ -769,7 +703,7 @@ class MAMLTrainer:
         Uses iteration count instead of epochs (we don't have epochs).
         """
         N = self.config.inner_steps
-        total_iters = self.config.max_outer_iterations
+        total_iters = self.config.max_iterations
 
         decay_rate = 1.0 / N / max(total_iters, 1)
         floor = 0.03 / N
@@ -1136,7 +1070,7 @@ class MAMLTrainer:
 
         if self.config.da_enabled:
             # Phase 1: first-order (cheap pre-training)
-            da_end = min(self.config.da_threshold, self.config.max_outer_iterations)
+            da_end = min(self.config.da_threshold, self.config.max_iterations)
             phase1_start = max(start_iteration, 0)
             if phase1_start < da_end:
                 print(f"  DA Phase 1: first-order, iterations {phase1_start}→{da_end}")
@@ -1148,15 +1082,15 @@ class MAMLTrainer:
 
             # Phase 2: second-order
             phase2_start = max(start_iteration, da_end)
-            if phase2_start < self.config.max_outer_iterations:
-                print(f"  DA Phase 2: second-order, iterations {phase2_start}→{self.config.max_outer_iterations}")
+            if phase2_start < self.config.max_iterations:
+                print(f"  DA Phase 2: second-order, iterations {phase2_start}→{self.config.max_iterations}")
                 self._current_first_order = False
-                result = self._run_phase(phase2_start, self.config.max_outer_iterations, checkpoint_dir, log_interval)
+                result = self._run_phase(phase2_start, self.config.max_iterations, checkpoint_dir, log_interval)
                 if result is not None:
                     signal.signal(signal.SIGINT, prev_handler)
                     return result, False
         else:
-            result = self._run_phase(start_iteration, self.config.max_outer_iterations, checkpoint_dir, log_interval)
+            result = self._run_phase(start_iteration, self.config.max_iterations, checkpoint_dir, log_interval)
             if result is not None:
                 signal.signal(signal.SIGINT, prev_handler)
                 return result, False
