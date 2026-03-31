@@ -1,211 +1,470 @@
-"""Generate formal experiment configs.
+"""Generate experiment configs from variant definitions.
 
-Grid per variant: 2 inner_steps × 2 k_shot × 4 loss_modes × 3 PDEs = 48
-Variants: formal (standard MLP), zeroed (masked non-RHS features), cheat (linear model)
+Each variant is a dict of config fields. Values can be:
+- Scalar: fixed for all configs
+- List of scalars: axis (cartesian product)
+- List of (name, dict) tuples: preset axis (dict merges into config, name goes in filename)
+
+A default variant provides baseline values. Named variants override specific fields.
+Filenames include only fields that differ from default, using FIELD_LABELS for short names.
 """
 
+import itertools
 import yaml
 from collections import namedtuple
+from copy import deepcopy
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any
+
+from src.config import (
+    ExperimentConfig, ExperimentSection, OutputSection, DataSection,
+    TrainingSection, EvaluationSection, VisualizationSection,
+    MetalSection, SpectralLossSection,
+)
 
 # ── PDE definitions ──────────────────────────────────────────────────────
 PDE = namedtuple("PDE", ["name", "pde_type", "train_dir", "val_dir", "test_dir",
                           "input_dim", "output_dim"])
 
-PDES = [
-    PDE("br", "br",
-        "data/datasets/br_train-2", "data/datasets/br_val-2", "data/datasets/br_test-2",
-        10, 2),
-    PDE("heat", "heat",
-        "data/datasets/heat_train-1", "data/datasets/heat_val-1", "data/datasets/heat_test-1",
-        5, 1),
-    PDE("nl_heat", "nl_heat",
-        "data/datasets/nl_heat_train-1", "data/datasets/nl_heat_val-1", "data/datasets/nl_heat_test-1",
-        5, 1),
-]
-
-# ── Grid axes ────────────────────────────────────────────────────────────
-INNER_STEPS = [1, 5]
-K_SHOTS = [800, 10]
-LOSS_MODES = ["baseline", "metal", "spectral", "metal-spectral"]
-
-# ── Shared constants ─────────────────────────────────────────────────────
-FIXED_STEPS = [0, 1, 5, 10, 25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 800, 1000]
-
-# ── Variant definitions ─────────────────────────────────────────────────
-Variant = namedtuple("Variant", [
-    "label", "configs_dir", "models_dir", "zero_non_rhs", "layers_fn",
-    "log_weights", "weight_init", "overrides",
-])
-
-def _cheat_layers(pde: PDE) -> list[dict]:
-    """Linear model: input → output with no bias, no hidden layers."""
-    return [{"input": pde.input_dim}, {"output": pde.output_dim, "bias": False}]
-
-# Finn-style LR overrides: inner_lr=0.01, fine_tune_lr=0.01, max_steps=50
-_FINN_LR = {
-    "training": {"inner_lr": 0.01},
-    "evaluation": {
-        "fine_tune_lr": 0.01,
-    },
+PDE_REGISTRY = {
+    "br": PDE("br", "br",
+              "data/datasets/br_train-2", "data/datasets/br_val-2", "data/datasets/br_test-2",
+              10, 2),
+    "heat": PDE("heat", "heat",
+                "data/datasets/heat_train-1", "data/datasets/heat_val-1", "data/datasets/heat_test-1",
+                5, 1),
+    "nl_heat": PDE("nl_heat", "nl_heat",
+                   "data/datasets/nl_heat_train-1", "data/datasets/nl_heat_val-1", "data/datasets/nl_heat_test-1",
+                   5, 1),
 }
 
+# ── Field labels for filenames ───────────────────────────────────────────
+# Only fields that can appear as axes need labels.
+# If a field varies from default and has no label here, the generator errors.
+FIELD_LABELS = {
+    "k_shot": "k",
+    "inner_steps": "step",
+    "activation": "",
+    "inner_lr": "lr",
+    "pde_type": "",
+}
+
+# Fields where the label is a suffix (e.g. "5step") instead of prefix (e.g. "k10")
+FIELD_LABEL_AS_SUFFIX: set[str] = {"inner_steps"}
+
+# Fields always included in filename, even when matching default
+FLAG_ALWAYS: set[str] = {"pde_type"}
+
+# Ordering of fields in filename display. Axes not in this list → error.
+FILENAME_ORDER: list[str] = ["pde_type", "inner_steps", "k_shot", "loss_preset", "activation"]
+
+# Iteration order for cartesian product (controls numbering).
+AXIS_ARRANGEMENT: list[str] = ["pde_type", "inner_steps", "loss_preset", "k_shot", "activation"]
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+
+class Axis:
+    """Marks a list of values as a grid axis (cartesian product)."""
+    def __init__(self, values: list):
+        self.values = values
+
+
+class Preset:
+    """Marks a list of (name, dict) tuples as a preset axis."""
+    def __init__(self, entries: list[tuple[str, dict]]):
+        self.entries = entries
+
+
+def _cheat_layers(input_dim: int, output_dim: int) -> list[dict]:
+    """Linear model: input → output with no bias, no hidden layers."""
+    return [{"input": input_dim}, {"output": output_dim, "bias": False}]
+
+
+# ── Preset definitions ───────────────────────────────────────────────────
+
+GRID2_LOSS_PRESETS = Preset([
+    ("baseline", {}),
+    ("metal", {
+        "metal": {"enabled": True, "hidden_dim": 64},
+    }),
+    ("mamlpp", {
+        "msl_enabled": True, "da_enabled": True, "da_threshold": 1650, "lslr_enabled": True,
+        "warmup_iterations": 0, "scheduler_type": "cosine",
+    }),
+    ("mamlpp+metal", {
+        "metal": {"enabled": True, "hidden_dim": 64},
+        "msl_enabled": True, "da_enabled": True, "da_threshold": 1650, "lslr_enabled": True,
+        "warmup_iterations": 0, "scheduler_type": "cosine",
+    }),
+])
+
+# ── Default variant ──────────────────────────────────────────────────────
+# All variants inherit from this. Override only what differs.
+
+DEFAULT = {
+    # Axes
+    "k_shot": Axis([800, 10]),
+
+    # PDE
+    "pde_type": "heat",
+
+    # Model
+    "hidden_dims": [100, 100],
+    "activation": "silu",
+    "zero_non_rhs_features": True,
+
+    # Training
+    "inner_lr": 0.01,
+    "outer_lr": 0.001,
+    "adam_betas": [0.9, 0.99],
+    "inner_steps": 5,
+    "meta_batch_size": 25,
+    "max_iterations": 5000,
+    "patience": 0,
+    "checkpoint_interval": 100,
+    "log_interval": 1,
+    "first_order": False,
+    "warmup_iterations": 100,
+    "use_scheduler": True,
+    "scheduler_type": "warm_restarts",
+    "T_0": 200,
+    "T_mult": 2,
+    "min_lr": 0.000001,
+    "max_grad_norm": 100.0,
+    "loss_function": "normalized_mse",
+
+    # MAML++ defaults (off)
+    "msl_enabled": False,
+    "da_enabled": False,
+    "da_threshold": 1650,
+    "lslr_enabled": False,
+
+    # MeTAL default (off)
+    "metal": {"enabled": False},
+
+    # Spectral loss default (off)
+    "spectral_loss": {"enabled": False},
+    "spectral_loss_mode_size": 32,
+
+    # Evaluation
+    "fine_tune_lr": 0.01,
+    "max_eval_steps": 50,
+    "noise_levels": [0.0],
+    "holdout_size": 5000,
+
+    # Misc
+    "log_weights": False,
+    "seed": 42,
+    "device": "cuda",
+}
+
+# ── Old grid overrides (diffs from DEFAULT) ──────────────────────────────
+
+OLD_LOSS_PRESETS = Preset([
+    ("baseline", {}),
+    ("metal", {"metal": {"enabled": True, "hidden_dim": 64}}),
+    ("spectral", {"spectral_loss": {"enabled": True, "mode_size": 32}}),
+    ("metal-spectral", {
+        "metal": {"enabled": True, "hidden_dim": 64},
+        "spectral_loss": {"enabled": True, "mode_size": 32},
+    }),
+])
+
+_OLD_BASE = {
+    "pde_type": Axis(["br", "heat", "nl_heat"]),
+    "inner_steps": Axis([1, 5]),
+    "loss_preset": OLD_LOSS_PRESETS,
+    "inner_lr": 0.0001,
+    "meta_batch_size": 8,
+    "max_iterations": 500,
+    "patience": 300,
+    "checkpoint_interval": 0,
+    "zero_non_rhs_features": False,
+    "noise_levels": [0.0, 0.01, 0.05, 0.10],
+    "fine_tune_lr": 0.00001,
+}
+
+_CHEAT_LAYERS = lambda pde: _cheat_layers(pde.input_dim, pde.output_dim)
+_FINN_OVERRIDES = {"inner_lr": 0.01, "fine_tune_lr": 0.01}
+
+# ── Variant definitions ──────────────────────────────────────────────────
+
+VariantMeta = namedtuple("VariantMeta", ["label", "configs_dir", "models_dir"])
+
 VARIANTS = [
-    Variant("formal",              "configs/formal",              "data/models/formal",              False, None,          False, None,       None),
-    Variant("zeroed",              "configs/zeroed",              "data/models/zeroed",              True,  None,          False, None,       None),
-    Variant("cheat",               "configs/cheat",               "data/models/cheat",               False, _cheat_layers, True,  None,       None),
-    Variant("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed",        True,  _cheat_layers, True,  None,       None),
-    Variant("cheat_zero_init",     "configs/cheat_zero_init",     "data/models/cheat_zero_init",     False, _cheat_layers, True,  "zeros",    None),
-    Variant("cheat_zeroed_zinit",  "configs/cheat_zeroed_zinit",  "data/models/cheat_zeroed_zinit",  True,  _cheat_layers, True,  "zeros",    None),
-    Variant("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected",      False, _cheat_layers, True,  "expected", None),
-    Variant("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect", True,  _cheat_layers, True,  "expected", None),
-    # Finn-style LR (inner_lr=0.01, fine_tune_lr=0.01, max_eval_steps=50)
-    Variant("cheat_finn",               "configs/cheat_finn",               "data/models/cheat_finn",               False, _cheat_layers, True,  None,       _FINN_LR),
-    Variant("cheat_zeroed_finn",        "configs/cheat_zeroed_finn",        "data/models/cheat_zeroed_finn",        True,  _cheat_layers, True,  None,       _FINN_LR),
-    Variant("cheat_expected_finn",      "configs/cheat_expected_finn",      "data/models/cheat_expected_finn",      False, _cheat_layers, True,  "expected", _FINN_LR),
-    Variant("cheat_zeroed_expect_finn", "configs/cheat_zeroed_expect_finn", "data/models/cheat_zeroed_expect_finn", True,  _cheat_layers, True,  "expected", _FINN_LR),
+    # ── Old grid variants ────────────────────────────────────────────
+    (VariantMeta("formal",              "configs/formal",              "data/models/formal"),              {**_OLD_BASE}),
+    (VariantMeta("zeroed",              "configs/zeroed",              "data/models/zeroed"),              {**_OLD_BASE, "zero_non_rhs_features": True}),
+    (VariantMeta("cheat",               "configs/cheat",               "data/models/cheat"),               {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True}),
+    (VariantMeta("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed"),        {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True}),
+    (VariantMeta("cheat_zero_init",     "configs/cheat_zero_init",     "data/models/cheat_zero_init"),     {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "zeros"}),
+    (VariantMeta("cheat_zeroed_zinit",  "configs/cheat_zeroed_zinit",  "data/models/cheat_zeroed_zinit"),  {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "zeros"}),
+    (VariantMeta("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected"),      {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "expected"}),
+    (VariantMeta("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect"), {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "expected"}),
+    (VariantMeta("cheat_finn",               "configs/cheat_finn",               "data/models/cheat_finn"),               {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, **_FINN_OVERRIDES}),
+    (VariantMeta("cheat_zeroed_finn",        "configs/cheat_zeroed_finn",        "data/models/cheat_zeroed_finn"),        {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, **_FINN_OVERRIDES}),
+    (VariantMeta("cheat_expected_finn",      "configs/cheat_expected_finn",      "data/models/cheat_expected_finn"),      {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "expected", **_FINN_OVERRIDES}),
+    (VariantMeta("cheat_zeroed_expect_finn", "configs/cheat_zeroed_expect_finn", "data/models/cheat_zeroed_expect_finn"), {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "expected", **_FINN_OVERRIDES}),
+    # ── New grid variants ────────────────────────────────────────────
+    (
+        VariantMeta("cheat2", "configs/cheat2", "data/models/cheat2"),
+        {
+            "loss_preset": GRID2_LOSS_PRESETS,
+            "layers": lambda pde: _cheat_layers(pde.input_dim, pde.output_dim),
+            "log_weights": True,
+        },
+    ),
+    (
+        VariantMeta("mlp", "configs/mlp", "data/models/mlp"),
+        {
+            "loss_preset": GRID2_LOSS_PRESETS,
+            "activation": Axis(["silu", "sin"]),
+        },
+    ),
 ]
 
-
-def loss_mode_flags(mode: str) -> dict:
-    """Return the metal/spectral config fragments for a loss mode."""
-    metal = mode in ("metal", "metal-spectral")
-    spectral = mode in ("spectral", "metal-spectral")
-    return {"metal": metal, "spectral": spectral}
-
-
-def generate_config(
-    pde: PDE,
-    exp_number: int,
-    inner_steps: int,
-    k_shot: int,
-    loss_mode: str,
-    models_dir: str,
-    zero_non_rhs_features: bool,
-    layers_fn: Optional[Callable] = None,
-    log_weights: bool = False,
-    weight_init: Optional[str] = None,
-    overrides: Optional[dict] = None,
-) -> dict:
-    """Build the full config dict for one experiment."""
-    flags = loss_mode_flags(loss_mode)
-    name = f"{pde.name}-{exp_number}-{inner_steps}step-k{k_shot}-{loss_mode}"
-    query_size = 1600 if k_shot == 800 else 2000
-
-    # Model architecture: layers (new) or old fields — inserted here to
-    # preserve key ordering in YAML (model fields come after log_interval)
-    if layers_fn is not None:
-        model_fields: dict = {"layers": layers_fn(pde)}
-    else:
-        model_fields = {
-            "hidden_dims": [100, 100],
-            "activation": "silu",
-            "input_dim": pde.input_dim,
-            "output_dim": pde.output_dim,
-        }
-
-    training: dict = {
-        "inner_lr": 0.0001,
-        "outer_lr": 0.001,
-        "inner_steps": inner_steps,
-        "meta_batch_size": 8,
-        "k_shot": k_shot,
-        "query_size": query_size,
-        "max_iterations": 500,
-        "patience": 300,
-        "log_interval": 1,
-        **model_fields,
-        "first_order": False,
-        "warmup_iterations": 100,
-        "use_scheduler": True,
-        "scheduler_type": "warm_restarts",
-        "T_0": 200,
-        "T_mult": 2,
-        "min_lr": 0.000001,
-        "max_grad_norm": 100.0,
-        "zero_non_rhs_features": zero_non_rhs_features,
-    }
-
-    if weight_init is not None:
-        training["weight_init"] = weight_init
-
-    if flags["spectral"]:
-        training["spectral_loss"] = {"enabled": True}
-
-    if flags["metal"]:
-        training["metal"] = {"enabled": True, "hidden_dim": 64}
-
-    config = {
-        "experiment": {
-            "name": name,
-            "pde_type": pde.pde_type,
-            "seed": 42,
-            "device": "cuda",
-        },
-        "output": {
-            "base_dir": f"{models_dir}/{pde.name}",
-        },
-        "data": {
-            "meta_train_dir": pde.train_dir,
-            "meta_val_dir": pde.val_dir,
-            "meta_test_dir": pde.test_dir,
-        },
-        "training": training,
-        "evaluation": {
-            "k_values": [k_shot],
-            "noise_levels": [0.0, 0.01, 0.05, 0.10],
-            "fine_tune_lr": 0.00001,
-            "max_steps": 50,
-            "deriv_threshold": 0.0005,
-            "fixed_steps": [0] + sorted(set([inner_steps, 5, 10, 25, 50])),
-            "holdout_size": 5000,
-            "log_weights": log_weights,
-        },
-        "visualization": {
-            "dpi": 300,
-            "only": f"scatter[0,{inner_steps},50],best-combo",
-        },
-    }
-
-    # Apply overrides (e.g., Finn-style LR)
-    if overrides:
-        for section, values in overrides.items():
-            if section in config:
-                config[section].update(values)
-
-    return config
-
+# ── Config builder ───────────────────────────────────────────────────────
 
 SCRIPT_DIR = Path(__file__).parent
 ROOT_DIR = Path(__file__).parent.parent
 
 
-ExperimentSpec = namedtuple(
-    "ExperimentSpec", ["pde", "inner_steps", "k_shot", "loss_mode", "exp_number", "name"]
-)
+def _merge_variant(default: dict, overrides: dict) -> dict:
+    """Merge overrides into default. Returns new dict."""
+    merged = deepcopy(default)
+    for k, v in overrides.items():
+        merged[k] = v
+    return merged
 
 
-def enumerate_experiments() -> list[ExperimentSpec]:
-    """First pass: compute all experiment names and metadata."""
-    specs = []
-    exp_number = 0
-    for pde in PDES:
-        for inner_steps in INNER_STEPS:
-            for loss_mode in LOSS_MODES:
-                for k_shot in K_SHOTS:
-                    exp_number += 1
-                    name = f"{pde.name}-{exp_number}-{inner_steps}step-k{k_shot}-{loss_mode}"
-                    specs.append(ExperimentSpec(pde, inner_steps, k_shot, loss_mode, exp_number, name))
-    return specs
+def _validate_presets(overrides: dict) -> None:
+    """Check that preset-owned keys don't overlap with the variant's own overrides."""
+    preset_keys: set[str] = set()
+    top_keys: set[str] = set()
+
+    for key, value in overrides.items():
+        if isinstance(value, Preset):
+            for _, preset_dict in value.entries:
+                preset_keys.update(preset_dict.keys())
+        else:
+            top_keys.add(key)
+
+    overlap = preset_keys & top_keys
+    if overlap:
+        raise ValueError(
+            f"Fields {overlap} appear both in presets and as top-level variant overrides. "
+            f"Remove them from one or the other."
+        )
 
 
-def build_scatter_groups(specs: list[ExperimentSpec]) -> dict[tuple, list[str]]:
-    """Group experiment names by (pde_name, loss_mode, inner_steps) for scatter comparison."""
-    groups: dict[tuple, list[str]] = {}
-    for spec in specs:
-        groups.setdefault((spec.pde.name, spec.loss_mode, spec.inner_steps), []).append(spec.name)
-    return groups
+def _collect_axes(merged: dict) -> tuple[list[str], list[list]]:
+    """Identify axes (Axis/Preset fields), sorted by AXIS_ARRANGEMENT."""
+    unsorted: list[tuple[int, str, list]] = []
+    for key, value in merged.items():
+        if isinstance(value, Preset):
+            order = AXIS_ARRANGEMENT.index(key) if key in AXIS_ARRANGEMENT else len(AXIS_ARRANGEMENT)
+            unsorted.append((order, key, value.entries))
+        elif isinstance(value, Axis):
+            order = AXIS_ARRANGEMENT.index(key) if key in AXIS_ARRANGEMENT else len(AXIS_ARRANGEMENT)
+            unsorted.append((order, key, value.values))
+    unsorted.sort(key=lambda x: x[0])
+    axis_names = [name for _, name, _ in unsorted]
+    axis_values = [vals for _, _, vals in unsorted]
+    return axis_names, axis_values
+
+
+def _build_name(
+    variant_label: str,
+    exp_num: int,
+    merged: dict,
+    default: dict,
+    axis_names: list[str],
+    combo: tuple,
+) -> str:
+    """Build filename from variant label + ordered flags.
+
+    Includes: fields in FLAG_ALWAYS + fields that are axes (vary).
+    Order follows FILENAME_ORDER. Axes not in FILENAME_ORDER → error.
+    """
+    # Map axis names to their current combo values
+    axis_vals = dict(zip(axis_names, combo))
+
+    # Validate all axes are in FILENAME_ORDER
+    for name in axis_names:
+        if name not in FILENAME_ORDER:
+            raise ValueError(
+                f"Axis '{name}' not in FILENAME_ORDER. Add it before generating."
+            )
+
+    parts: list[str] = []
+    index_inserted = False
+
+    for field in FILENAME_ORDER:
+        is_axis = field in axis_vals
+        is_always = field in FLAG_ALWAYS
+
+        if not is_axis and not is_always:
+            continue
+
+        if is_axis:
+            val = axis_vals[field]
+            if isinstance(merged[field], Preset):
+                preset_name, _ = val
+                parts.append(preset_name)
+            else:
+                if field not in FIELD_LABELS:
+                    raise ValueError(
+                        f"Field '{field}' varies but has no entry in FIELD_LABELS."
+                    )
+                label = FIELD_LABELS[field]
+                if field in FIELD_LABEL_AS_SUFFIX:
+                    parts.append(f"{val}{label}")
+                else:
+                    parts.append(f"{label}{val}")
+        else:
+            # FLAG_ALWAYS, not an axis — use the fixed value
+            val = merged[field]
+            if field not in FIELD_LABELS:
+                raise ValueError(
+                    f"Field '{field}' in FLAG_ALWAYS but has no entry in FIELD_LABELS."
+                )
+            label = FIELD_LABELS[field]
+            parts.append(f"{label}{val}")
+
+        # Insert index after the first part (e.g. "heat-1-...")
+        if not index_inserted and parts:
+            parts.append(str(exp_num))
+            index_inserted = True
+
+    return "-".join(parts)
+
+
+def _flatten_combo(
+    merged: dict, axis_names: list[str], combo: tuple
+) -> dict[str, Any]:
+    """Flatten merged dict + combo into a single dict of resolved values."""
+    flat: dict[str, Any] = {}
+    for key, value in merged.items():
+        if key in axis_names:
+            continue
+        if callable(value):
+            continue
+        flat[key] = value
+
+    for axis_name, axis_val in zip(axis_names, combo):
+        if isinstance(merged[axis_name], Preset):
+            _, preset_dict = axis_val
+            flat.update(preset_dict)
+        else:
+            flat[axis_name] = axis_val
+
+    return flat
+
+
+def _build_config(
+    merged: dict,
+    axis_names: list[str],
+    combo: tuple,
+    meta: VariantMeta,
+    exp_name: str,
+) -> dict:
+    """Build YAML config dict via ExperimentConfig (single source of truth)."""
+    flat = _flatten_combo(merged, axis_names, combo)
+
+    # Resolve PDE
+    pde = PDE_REGISTRY[flat["pde_type"]]
+
+    # Resolve layers
+    if "layers" in merged and callable(merged["layers"]):
+        layers_kwargs: dict[str, Any] = {"layers": merged["layers"](pde)}
+    else:
+        layers_kwargs = {
+            "hidden_dims": flat.get("hidden_dims"),
+            "activation": flat.get("activation"),
+            "input_dim": pde.input_dim,
+            "output_dim": pde.output_dim,
+        }
+
+    # Query size heuristic
+    k_shot = flat["k_shot"]
+    query_size = 1600 if k_shot == 800 else 2000
+
+    # Fixed steps: include inner_steps as designed step
+    inner_steps = flat.get("inner_steps", 5)
+    fixed_steps = sorted(set([0, 1, 5, 10, 25, 50] + [inner_steps]))
+
+    # Metal / spectral as section objects
+    metal_raw = flat.get("metal", {})
+    metal = MetalSection(**(metal_raw if isinstance(metal_raw, dict) else {}))
+
+    spectral_raw = flat.get("spectral_loss", {})
+    spectral = SpectralLossSection(**(spectral_raw if isinstance(spectral_raw, dict) else {}))
+
+    cfg = ExperimentConfig(
+        experiment=ExperimentSection(
+            name=exp_name,
+            pde_type=pde.pde_type,
+            seed=flat.get("seed", 42),
+            device=flat.get("device", "cuda"),
+        ),
+        output=OutputSection(base_dir=meta.models_dir),
+        data=DataSection(
+            meta_train_dir=pde.train_dir,
+            meta_val_dir=pde.val_dir,
+            meta_test_dir=pde.test_dir,
+        ),
+        training=TrainingSection(
+            inner_lr=flat["inner_lr"],
+            inner_steps=inner_steps,
+            outer_lr=flat["outer_lr"],
+            adam_betas=flat.get("adam_betas", [0.9, 0.99]),
+            meta_batch_size=flat["meta_batch_size"],
+            k_shot=k_shot,
+            query_size=query_size,
+            max_iterations=flat["max_iterations"],
+            patience=flat["patience"],
+            checkpoint_interval=flat["checkpoint_interval"],
+            log_interval=flat["log_interval"],
+            first_order=flat["first_order"],
+            msl_enabled=flat.get("msl_enabled", False),
+            da_enabled=flat.get("da_enabled", False),
+            da_threshold=flat.get("da_threshold", 1650),
+            lslr_enabled=flat.get("lslr_enabled", False),
+            warmup_iterations=flat["warmup_iterations"],
+            use_scheduler=flat["use_scheduler"],
+            scheduler_type=flat["scheduler_type"],
+            T_0=flat.get("T_0", 200),
+            T_mult=flat.get("T_mult", 2),
+            min_lr=flat["min_lr"],
+            loss_function=flat["loss_function"],
+            max_grad_norm=flat["max_grad_norm"],
+            zero_non_rhs_features=flat["zero_non_rhs_features"],
+            weight_init=flat.get("weight_init"),
+            metal=metal,
+            spectral_loss=spectral,
+            **layers_kwargs,
+        ),
+        evaluation=EvaluationSection(
+            k_values=[k_shot],
+            noise_levels=flat.get("noise_levels", [0.0]),
+            fine_tune_lr=flat["fine_tune_lr"],
+            max_steps=flat.get("max_eval_steps", 50),
+            fixed_steps=fixed_steps,
+            holdout_size=flat["holdout_size"],
+            log_weights=flat.get("log_weights", False),
+        ),
+        visualization=VisualizationSection(
+            dpi=300,
+            only=f"scatter[0,{inner_steps},50],best-combo",
+        ),
+    )
+
+    # Round-trip validation
+    yaml_dict = cfg.to_yaml_dict()
+    ExperimentConfig.from_yaml_dict(yaml_dict)
+
+    return yaml_dict
 
 
 def _write_phased_script(path: Path, entries: list[tuple[int, str]], total: int) -> None:
@@ -232,250 +491,73 @@ def _write_phased_script(path: Path, entries: list[tuple[int, str]], total: int)
     print(f"  Generated {path}")
 
 
-def main():
-    specs = enumerate_experiments()
-    scatter_groups = build_scatter_groups(specs)
-    total = len(specs)
+# ── Main ─────────────────────────────────────────────────────────────────
 
-    for variant in VARIANTS:
-        configs_dir = ROOT_DIR / variant.configs_dir
-        configs_dir.mkdir(parents=True, exist_ok=True)
+def generate_variant(meta: VariantMeta, overrides: dict, default: dict = DEFAULT) -> None:
+    """Generate all configs and runner scripts for one variant."""
+    _validate_presets(overrides)
+    merged = _merge_variant(default, overrides)
+    axis_names, axis_values = _collect_axes(merged)
 
-        print(f"\n{'=' * 60}")
-        print(f"Generating {variant.label} configs (zero_non_rhs={variant.zero_non_rhs})")
-        print(f"{'=' * 60}")
+    configs_dir = ROOT_DIR / meta.configs_dir
+    configs_dir.mkdir(parents=True, exist_ok=True)
 
-        config_paths: list[str] = []
-        for spec in specs:
-            config = generate_config(
-                spec.pde, spec.exp_number, spec.inner_steps, spec.k_shot,
-                spec.loss_mode, variant.models_dir, variant.zero_non_rhs,
-                layers_fn=variant.layers_fn,
-                log_weights=variant.log_weights,
-                weight_init=variant.weight_init,
-                overrides=variant.overrides,
-            )
-            group = scatter_groups[(spec.pde.name, spec.loss_mode, spec.inner_steps)]
-            config["visualization"]["compare_experiments"] = group
-            name = config["experiment"]["name"]
-            rel_path = f"{variant.configs_dir}/{name}.yaml"
-            path = configs_dir / f"{name}.yaml"
-            with open(path, "w") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            config_paths.append(rel_path)
-            print(f"  [{spec.exp_number:2d}/{total}] {path.name}")
+    print(f"\n{'=' * 60}")
+    print(f"{meta.label}: {meta.configs_dir} → {meta.models_dir}")
+    print(f"  Axes: {', '.join(axis_names)}")
+    print(f"{'=' * 60}")
 
-        print(f"\n  Generated {len(specs)} configs in {configs_dir}")
-
-        # Generate bash runner scripts — one per PDE + one combined
-        pde_configs: dict[str, list[tuple[int, str]]] = {}
-        for i, cfg in enumerate(config_paths, 1):
-            pde_name = Path(cfg).stem.split("-")[0]
-            pde_configs.setdefault(pde_name, []).append((i, cfg))
-
-        for pde_name, entries in pde_configs.items():
-            _write_phased_script(
-                SCRIPT_DIR / f"run_{variant.label}_{pde_name}.sh", entries, total,
-            )
-
-        all_entries = [(i, cfg) for i, cfg in enumerate(config_paths, 1)]
-        _write_phased_script(
-            SCRIPT_DIR / f"run_{variant.label}_experiments.sh", all_entries, total,
-        )
-
-
-# ── Grid Part II: MAML++ experiments ────────────────────────────────────
-# Grid 1: Cheat convergence (linear model, 8 configs)
-# Grid 2: MLP formal (silu + sin activations, 16 configs)
-# Total: 24 configs, split into 4 bash scripts of 6 each
-
-_GRID2_LOSS_MODES = ["baseline", "metal", "maml++", "metal+maml++"]
-_GRID2_K_SHOTS = [10, 800]
-
-_MAMLPP_FLAGS = {
-    "msl_enabled": True,
-    "da_enabled": True,
-    "da_threshold": 23000,
-    "lslr_enabled": True,
-    "warmup_iterations": 0,
-}
-
-_GRID2_SHARED_TRAINING = {
-    "inner_lr": 0.01,
-    "outer_lr": 0.001,
-    "inner_steps": 5,
-    "meta_batch_size": 25,
-    "max_iterations": 70000,
-    "patience": 0,
-    "checkpoint_interval": 500,
-    "log_interval": 1,
-    "first_order": False,
-    "warmup_iterations": 0,
-    "use_scheduler": True,
-    "scheduler_type": "cosine",
-    "min_lr": 0.000001,
-    "max_grad_norm": 100.0,
-    "zero_non_rhs_features": True,
-    "loss_function": "normalized_mse",
-}
-
-_GRID2_SHARED_EVAL = {
-    "k_values": None,  # filled per-config from k_shot
-    "noise_levels": [0.0],
-    "fine_tune_lr": 0.01,
-    "max_steps": 50,
-    "deriv_threshold": 0.0005,
-    "fixed_steps": [0, 1, 5, 10, 25, 50],
-    "holdout_size": 5000,
-}
-
-HEAT = PDES[1]  # heat PDE
-
-
-def _grid2_loss_flags(mode: str) -> dict:
-    """Return training config fragment for a Grid 2 loss mode."""
-    flags: dict = {}
-    if mode in ("metal", "metal+maml++"):
-        flags["metal"] = {"enabled": True, "hidden_dim": 64}
-    if mode in ("maml++", "metal+maml++"):
-        flags.update(_MAMLPP_FLAGS)
-    return flags
-
-
-def _grid2_config(
-    exp_num: int,
-    grid_label: str,
-    name: str,
-    k_shot: int,
-    loss_mode: str,
-    models_dir: str,
-    layers: dict,
-    log_weights: bool = False,
-) -> dict:
-    """Build one Grid 2 config dict."""
-    loss_flags = _grid2_loss_flags(loss_mode)
-
-    # Separate metal dict from training-level flags
-    metal_cfg = loss_flags.pop("metal", None)
-
-    training = {
-        **_GRID2_SHARED_TRAINING,
-        **layers,
-        "k_shot": k_shot,
-        "query_size": 1600 if k_shot == 800 else 2000,
-        **loss_flags,
-    }
-
-    if metal_cfg is not None:
-        training["metal"] = metal_cfg
-
-    eval_cfg = {
-        **_GRID2_SHARED_EVAL,
-        "k_values": [k_shot],
-        "log_weights": log_weights,
-    }
-
-    return {
-        "experiment": {
-            "name": name,
-            "pde_type": "heat",
-            "seed": 42,
-            "device": "cuda",
-        },
-        "output": {
-            "base_dir": models_dir,
-        },
-        "data": {
-            "meta_train_dir": HEAT.train_dir,
-            "meta_val_dir": HEAT.val_dir,
-            "meta_test_dir": HEAT.test_dir,
-        },
-        "training": training,
-        "evaluation": eval_cfg,
-        "visualization": {
-            "dpi": 300,
-            "only": "scatter[0,5,50],best-combo",
-        },
-    }
-
-
-def generate_grid_pt2():
-    """Generate cheat2 + mlp configs and 4 runner scripts."""
-    cheat_dir = ROOT_DIR / "configs" / "cheat2"
-    mlp_dir = ROOT_DIR / "configs" / "mlp"
-    cheat_dir.mkdir(parents=True, exist_ok=True)
-    mlp_dir.mkdir(parents=True, exist_ok=True)
-
-    all_configs: list[tuple[int, str]] = []  # (exp_num, rel_path)
+    all_entries: list[tuple[int, str]] = []
     exp_num = 0
 
-    print(f"\n{'=' * 60}")
-    print("Cheat2: convergence query (linear model)")
-    print(f"{'=' * 60}")
+    for combo in itertools.product(*axis_values):
+        exp_num += 1
+        name = _build_name(meta.label, exp_num, merged, default, axis_names, combo)
+        config = _build_config(merged, axis_names, combo, meta, name)
 
-    cheat_layers = {"layers": _cheat_layers(HEAT)}
+        path = configs_dir / f"{name}.yaml"
+        rel_path = f"{meta.configs_dir}/{name}.yaml"
+        with open(path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+        all_entries.append((exp_num, rel_path))
+        print(f"  [{exp_num:2d}] {name}")
 
-    for loss_mode in _GRID2_LOSS_MODES:
-        for k_shot in _GRID2_K_SHOTS:
-            exp_num += 1
-            name = f"cheat-{exp_num}-5step-k{k_shot}-{loss_mode}"
-            config = _grid2_config(
-                exp_num, "cheat", name, k_shot, loss_mode,
-                "data/models/cheat2", cheat_layers, log_weights=True,
-            )
-            path = cheat_dir / f"{name}.yaml"
-            rel_path = f"configs/cheat2/{name}.yaml"
-            with open(path, "w") as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-            all_configs.append((exp_num, rel_path))
-            print(f"  [{exp_num:2d}] {name}")
+    total = exp_num
+    print(f"\n  Generated {total} configs in {configs_dir}")
 
-    print(f"\n{'=' * 60}")
-    print("MLP: formal re-run (silu + sin)")
-    print(f"{'=' * 60}")
+    # Determine PDE names for script naming
+    pde_type = merged.get("pde_type")
+    if isinstance(pde_type, list):
+        pde_names = pde_type
+    else:
+        pde_names = [pde_type]
 
-    for activation in ["silu", "sin"]:
-        mlp_layers = {
-            "hidden_dims": [100, 100],
-            "activation": activation,
-            "input_dim": HEAT.input_dim,
-            "output_dim": HEAT.output_dim,
-        }
-        for loss_mode in _GRID2_LOSS_MODES:
-            for k_shot in _GRID2_K_SHOTS:
-                exp_num += 1
-                name = f"heat-{exp_num}-5step-k{k_shot}-{loss_mode}-{activation}"
-                config = _grid2_config(
-                    exp_num, "mlp", name, k_shot, loss_mode,
-                    "data/models/mlp", mlp_layers,
-                )
-                path = mlp_dir / f"{name}.yaml"
-                rel_path = f"configs/mlp/{name}.yaml"
-                with open(path, "w") as f:
-                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-                all_configs.append((exp_num, rel_path))
-                print(f"  [{exp_num:2d}] {name}")
-
-    print(f"\n  Generated {len(all_configs)} configs total")
-
-    # ── Split into 4 runner scripts of 6 each ──────────────────────
-    total = len(all_configs)
-    chunk_size = 6
-    for script_idx in range(4):
-        start = script_idx * chunk_size
-        chunk = all_configs[start : start + chunk_size]
+    # Full scripts
+    for pde_name in pde_names:
+        pde_entries = [(i, p) for i, p in all_entries]  # all are same PDE for now
         _write_phased_script(
-            SCRIPT_DIR / f"run_grid2_{script_idx + 1}.sh", chunk, total,
+            SCRIPT_DIR / f"run_{meta.label}_{pde_name}.sh", pde_entries, total,
         )
 
     _write_phased_script(
-        SCRIPT_DIR / "run_grid2_all.sh", all_configs, total,
+        SCRIPT_DIR / f"run_{meta.label}_experiments.sh", all_entries, total,
     )
+
+    # Split for parallel execution (4 configs per chunk)
+    chunk_size = 4
+    for i in range(0, len(all_entries), chunk_size):
+        idx = (i // chunk_size) + 1
+        chunk = all_entries[i : i + chunk_size]
+        pde_label = pde_names[0] if len(pde_names) == 1 else "all"
+        _write_phased_script(
+            SCRIPT_DIR / f"run_{meta.label}_{pde_label}_{idx}.sh", chunk, total,
+        )
+
+
+def main():
+    for meta, overrides in VARIANTS:
+        generate_variant(meta, overrides)
 
 
 if __name__ == "__main__":
-    import sys
-    if "--grid2" in sys.argv:
-        generate_grid_pt2()
-    else:
-        main()
+    main()
