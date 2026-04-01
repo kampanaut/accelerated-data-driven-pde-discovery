@@ -1629,7 +1629,7 @@ def discover_comparison_experiments(
 
 
 def validate_experiment_compatibility(
-    experiment_results: list[Tuple[str, dict]],
+    experiment_results: list[Tuple[str, EvaluationResults]],
 ) -> Tuple[list[int], list[float]]:
     """
     Collect the union of k_values and noise_levels across all experiments.
@@ -1646,15 +1646,15 @@ def validate_experiment_compatibility(
     all_k: set[int] = set()
     all_noise: set[float] = set()
 
-    for _name, data in experiment_results:
-        all_k.update(data["config"]["k_values"])
-        all_noise.update(data["config"]["noise_levels"])
+    for _name, er in experiment_results:
+        all_k.update(er.config.k_values)
+        all_noise.update(er.config.noise_levels)
 
     return sorted(all_k), sorted(all_noise)
 
 
 def generate_cross_experiment_scatter(
-    experiment_results: list[Tuple[str, dict]],
+    experiment_results: list[Tuple[str, EvaluationResults]],
     output_dirs: list[Path],
     dpi: int,
     sel: GraphSelection = GraphSelection(
@@ -1672,9 +1672,9 @@ def generate_cross_experiment_scatter(
     k_values, noise_levels = validate_experiment_compatibility(experiment_results)
 
     # Discover coefficient names from first experiment (PDE-constant)
-    any_task = next(iter(experiment_results[0][1]["tasks"].values()))
-    specs = any_task.get("coefficient_specs", [])
-    # Preserve order, deduplicate via dict
+    first_er = experiment_results[0][1]
+    any_task = next(iter(first_er.tasks.values()))
+    specs = any_task.coefficient_specs
     coeff_names = list(dict.fromkeys(s["coeff_name"] for s in specs))
 
     if not coeff_names:
@@ -1683,16 +1683,13 @@ def generate_cross_experiment_scatter(
 
     # Discover fixed_steps from first available combo
     scatter_fixed_steps = None
-    for _name, results_data in experiment_results:
-        for _tn, td in results_data["tasks"].items():
-            for combo_key_str in td:
-                if combo_key_str.startswith("coefficient_recovery_"):
-                    fs = td[combo_key_str].get("fixed_steps")
-                    if fs is not None:
-                        scatter_fixed_steps = fs
-                        break
-            if scatter_fixed_steps is not None:
-                break
+    for _name, er in experiment_results:
+        for task in er.tasks.values():
+            if task.combos:
+                cr = task.combos[0].maml.coefficient_recovery
+                if cr.error_pct:  # has data
+                    scatter_fixed_steps = er.config.fixed_steps
+                    break
         if scatter_fixed_steps is not None:
             break
 
@@ -1718,53 +1715,40 @@ def generate_cross_experiment_scatter(
                     key = (coeff_name, noise, k)
                     models = []
 
-                    for dir_name, results_data in experiment_results:
-                        recovery_key = f"coefficient_recovery_k_{k}_noise_{noise:.2f}"
+                    combo_key = f"k_{k}_noise_{noise:.2f}"
 
-                        # Each experiment contributes MAML + baseline entries
-                        for label_suffix, model_key in [
-                            ("", "maml"),
-                            (" (BL)", "baseline"),
+                    for dir_name, er in experiment_results:
+                        exp_fs = er.config.fixed_steps
+                        if not exp_fs or step_val not in exp_fs:
+                            continue
+                        exp_step_idx = exp_fs.index(step_val)
+
+                        for label_suffix, get_method in [
+                            ("", lambda c: c.maml),
+                            (" (BL)", lambda c: c.baseline),
                         ]:
                             true_vals: list[float] = []
                             rec_vals: list[float] = []
                             task_names_list: list[str] = []
 
-                            # Find step_idx for THIS experiment's fixed_steps
-                            exp_fixed_steps = None
-                            for _tn, _td in results_data["tasks"].items():
-                                for _ck in _td:
-                                    if _ck.startswith("coefficient_recovery_"):
-                                        exp_fixed_steps = _td[_ck].get("fixed_steps")
-                                        break
-                                if exp_fixed_steps is not None:
-                                    break
-
-                            if exp_fixed_steps is None or step_val not in exp_fixed_steps:
-                                continue
-                            exp_step_idx = exp_fixed_steps.index(step_val)
-
-                            for task_name, task_data in results_data["tasks"].items():
-                                if recovery_key not in task_data:
-                                    continue
-                                model_data = task_data[recovery_key].get(model_key, {})
-                                if model_data is None:
-                                    continue
-                                true_k = f"{coeff_name}_true"
-                                rec_k = f"{coeff_name}_recovered"
-                                if true_k not in model_data or rec_k not in model_data:
+                            for task_name, task in er.tasks.items():
+                                try:
+                                    combo = task.combo_by_key(combo_key)
+                                except KeyError:
                                     continue
 
-                                true_val = model_data[true_k]
-                                rec_raw = model_data[rec_k]
+                                method = get_method(combo)
+                                cr = method.coefficient_recovery
+                                if coeff_name not in cr.coefficients:
+                                    continue
 
-                                # Index into step if array
-                                if isinstance(rec_raw, list):
-                                    if exp_step_idx >= len(rec_raw):
-                                        continue
-                                    rec_val = rec_raw[exp_step_idx]
-                                else:
-                                    rec_val = rec_raw
+                                snap = cr.coefficients[coeff_name]
+                                true_val = snap.true_value
+                                recovered = snap.recovered
+
+                                if exp_step_idx >= len(recovered):
+                                    continue
+                                rec_val = recovered[exp_step_idx]
 
                                 if np.isnan(true_val) or np.isnan(rec_val):
                                     continue
@@ -1874,10 +1858,21 @@ def main():
         default_cfg = ExperimentConfig(output=OutputSection(base_dir="data/models"))
         discovered = resolve_experiment_names(default_cfg, exp_filter)
         if len(discovered) >= 1:
-            experiment_results: list[Tuple[str, dict]] = []
+            experiment_results: list[Tuple[str, EvaluationResults]] = []
             for dir_name, rpath in discovered:
-                with open(rpath, "r") as f:
-                    experiment_results.append((dir_name, json.load(f)))
+                raw = load_results(rpath)
+                er = EvaluationResults(
+                    config=EvalConfig(
+                        k_values=raw.get("config", {}).get("k_values", []),
+                        noise_levels=raw.get("config", {}).get("noise_levels", []),
+                        fixed_steps=raw.get("config", {}).get("fixed_steps", []),
+                    ),
+                    tasks={
+                        tn: TaskResult.from_json_and_npz(td, {})
+                        for tn, td in raw.get("tasks", {}).items()
+                    },
+                )
+                experiment_results.append((dir_name, er))
 
             models_root = Path("data/models")
             output_dirs = [
@@ -1996,10 +1991,21 @@ def main():
             scatter_output_dirs = [output_dir]
 
         if len(discovered) >= 1:
-            config_experiment_results: list[Tuple[str, dict]] = []
+            config_experiment_results: list[Tuple[str, EvaluationResults]] = []
             for dir_name, rpath in discovered:
-                with open(rpath, "r") as f:
-                    config_experiment_results.append((dir_name, json.load(f)))
+                raw = load_results(rpath)
+                er = EvaluationResults(
+                    config=EvalConfig(
+                        k_values=raw.get("config", {}).get("k_values", []),
+                        noise_levels=raw.get("config", {}).get("noise_levels", []),
+                        fixed_steps=raw.get("config", {}).get("fixed_steps", []),
+                    ),
+                    tasks={
+                        tn: TaskResult.from_json_and_npz(td, {})
+                        for tn, td in raw.get("tasks", {}).items()
+                    },
+                )
+                config_experiment_results.append((dir_name, er))
 
             generate_cross_experiment_scatter(
                 config_experiment_results, scatter_output_dirs, dpi, sel
