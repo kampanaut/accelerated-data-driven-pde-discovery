@@ -48,18 +48,24 @@ evaluation:
   - 800
   noise_levels:
   - 0.0
-  fine_tune_lr: 0.01
-  max_steps: 50
+  fine_tune_lr: 0.0001
+  max_steps: 1000
   deriv_threshold: 0.0005
   fixed_steps:
   - 0
   - 5
+  - 10
+  - 25
   - 50
+  - 100
+  - 250
+  - 500
+  - 1000
   holdout_size: 5000
   log_weights: false
 visualization:
   dpi: 300
-  only: scatter[0,5,50],best-combo
+  only: scatter[0,5,10,25,50,100,250,500,1000],jacobian[0,5,10,50,100,500,1000],generalization,best-combo
   compare_experiments:
   - heat-9-k800-mamlpp-silu
   - heat-11-k10-mamlpp-silu

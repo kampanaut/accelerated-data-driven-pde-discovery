@@ -90,12 +90,12 @@ GRID2_LOSS_PRESETS = Preset([
     }),
     ("mamlpp", {
         "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
-        "warmup_iterations": 0, "scheduler_type": "cosine",
+        "warmup_iterations": 0, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
     }),
     ("mamlpp+metal", {
         "metal": {"enabled": True, "hidden_dim": 64},
         "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
-        "warmup_iterations": 0, "scheduler_type": "cosine",
+        "warmup_iterations": 0, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
     }),
 ])
 
@@ -149,7 +149,7 @@ DEFAULT = {
 
     # Evaluation
     "fine_tune_lr": 0.01,
-    "max_eval_steps": 50,
+    "max_eval_steps": 1000,
     "noise_levels": [0.0],
     "holdout_size": 5000,
 
@@ -392,7 +392,8 @@ def _build_config(
 
     # Fixed steps: include inner_steps as designed step
     inner_steps = flat.get("inner_steps", 5)
-    fixed_steps = sorted(set([0, inner_steps, flat["max_eval_steps"]]))
+    max_eval = flat["max_eval_steps"]
+    fixed_steps = sorted(set([0, inner_steps, 10, 25, 50, 100, 250, 500, max_eval]))
 
     # Metal / spectral as section objects
     metal_raw = flat.get("metal", {})
@@ -460,7 +461,7 @@ def _build_config(
         ),
         visualization=VisualizationSection(
             dpi=300,
-            only=f"scatter[0,{inner_steps},50],best-combo",
+            only=f"scatter[0,{inner_steps},10,25,50,100,250,500,{max_eval}],jacobian[0,{inner_steps},10,50,100,500,{max_eval}],generalization,best-combo",
         ),
     )
 
