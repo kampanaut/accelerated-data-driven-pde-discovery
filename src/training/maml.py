@@ -284,6 +284,11 @@ class LSLRSchedule(nn.Module):
         }
 
 
+class MAMLConfig:
+    """Legacy stub — exists only so torch.load can unpickle old checkpoints."""
+    pass
+
+
 class MAMLTrainer:
     """
     MAML trainer for meta-learning PDE operator initialization.

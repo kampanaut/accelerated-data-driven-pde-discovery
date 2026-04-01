@@ -77,8 +77,8 @@ import numpy as np
 @dataclass
 class FineTuneResult:
     """Per-step train and holdout losses from fine-tuning."""
-    train_losses: List[float] = field(default_factory=list)
-    holdout_losses: List[float] = field(default_factory=list)
+    train_losses: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
+    holdout_losses: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
 
 
 @dataclass
@@ -206,8 +206,8 @@ class TaskResult:
                 holdout_arr = raw_npz.get(f"{ck}/{label}_holdout_losses")
 
                 ft = FineTuneResult(
-                    train_losses=train_arr.tolist() if train_arr is not None else [],
-                    holdout_losses=holdout_arr.tolist() if holdout_arr is not None else [],
+                    train_losses=train_arr if train_arr is not None else np.array([]),
+                    holdout_losses=holdout_arr if holdout_arr is not None else np.array([]),
                 )
 
                 # Jacobian arrays
@@ -316,8 +316,8 @@ class TaskResult:
             ck = combo.combo_key
 
             for label, method in [("maml", combo.maml), ("baseline", combo.baseline)]:
-                npz[f"{ck}/{label}_train_losses"] = np.array(method.fine_tune.train_losses)
-                npz[f"{ck}/{label}_holdout_losses"] = np.array(method.fine_tune.holdout_losses)
+                npz[f"{ck}/{label}_train_losses"] = method.fine_tune.train_losses
+                npz[f"{ck}/{label}_holdout_losses"] = method.fine_tune.holdout_losses
 
                 for coeff_name, arr in method.jacobian_estimates.items():
                     npz[f"{ck}/{label}/{coeff_name}"] = arr

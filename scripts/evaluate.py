@@ -249,7 +249,10 @@ def fine_tune(
         grad_loss = cost_fn(pred, y)
         _step(i, grad_loss)
 
-    return FineTuneResult(train_losses=train_losses, holdout_losses=holdout_losses)
+    return FineTuneResult(
+        train_losses=np.array(train_losses),
+        holdout_losses=np.array(holdout_losses),
+    )
 
 
 def evaluate_task(
@@ -525,10 +528,9 @@ def evaluate_task(
     # ─── Best-combo prediction capture ─────────────────────────────────────
     # Re-fine-tune the best combo and record model predictions at each step
     # for spatial visualization of how the model adapts.
-    successful_combos = [c for c in task_result.combos if c.error is None and c.maml is not None]
-    if successful_combos:
+    if task_result.combos:
         # Pick combo whose best snapshot has lowest mean coefficient error
-        best = min(successful_combos, key=lambda c: min(c.maml.coefficient_recovery.error_pct))  # type: ignore[union-attr]
+        best = min(task_result.combos, key=lambda c: min(c.maml.coefficient_recovery.error_pct))
         best_k = best.k
         best_k_idx = k_values.index(best_k)
         best_noise = best.noise

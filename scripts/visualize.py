@@ -315,12 +315,12 @@ def generate_per_task_figures(
                         output_indices = [m["output_index"] for m in members]
 
                         maml_ests_full = [
-                            combo.maml.jacobian_estimates.get(n) for n in member_names
+                            combo.maml.jacobian_estimates[n] for n in member_names
                         ]
                         baseline_ests_full = [
-                            combo.baseline.jacobian_estimates.get(n) for n in member_names
+                            combo.baseline.jacobian_estimates[n] for n in member_names
                         ]
-                        true_arr = combo.maml.jacobian_true.get(member_names[0])
+                        true_arr = combo.maml.jacobian_true[member_names[0]]
 
                         if true_arr is None or any(
                             x is None for x in maml_ests_full + baseline_ests_full
@@ -560,12 +560,12 @@ def generate_per_task_figures(
                         combo = combo_lookup[combo_key]
 
                         maml_ests_raw = [
-                            combo.maml.jacobian_estimates.get(n) for n in member_names
+                            combo.maml.jacobian_estimates[n] for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates.get(n) for n in member_names
+                            combo.baseline.jacobian_estimates[n] for n in member_names
                         ]
-                        coeff_true = combo.maml.jacobian_true.get(true_key)
+                        coeff_true = combo.maml.jacobian_true[true_key]
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw
@@ -628,12 +628,12 @@ def generate_per_task_figures(
                         combo = combo_lookup[combo_key]
 
                         maml_ests_raw = [
-                            combo.maml.jacobian_estimates.get(n) for n in member_names
+                            combo.maml.jacobian_estimates[n] for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates.get(n) for n in member_names
+                            combo.baseline.jacobian_estimates[n] for n in member_names
                         ]
-                        coeff_true = combo.maml.jacobian_true.get(true_key)
+                        coeff_true = combo.maml.jacobian_true[true_key]
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
@@ -693,12 +693,12 @@ def generate_per_task_figures(
                         combo = combo_lookup[combo_key]
 
                         maml_ests_raw = [
-                            combo.maml.jacobian_estimates.get(n) for n in member_names
+                            combo.maml.jacobian_estimates[n] for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates.get(n) for n in member_names
+                            combo.baseline.jacobian_estimates[n] for n in member_names
                         ]
-                        coeff_true = combo.maml.jacobian_true.get(true_key)
+                        coeff_true = combo.maml.jacobian_true[true_key]
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
@@ -870,7 +870,7 @@ def generate_aggregated_figures(
 
                         for task_name in task_names:
                             tc = task_combo_lookups[task_name][combo_key]
-                            true_arr = tc.maml.jacobian_true.get(member_names[0])
+                            true_arr = tc.maml.jacobian_true[member_names[0]]
                             if true_arr is None:
                                 continue
                             true_val = float(true_arr[0])
@@ -878,8 +878,8 @@ def generate_aggregated_figures(
                                 continue
 
                             for i, name in enumerate(member_names):
-                                m = tc.maml.jacobian_estimates.get(name)
-                                b = tc.baseline.jacobian_estimates.get(name)
+                                m = tc.maml.jacobian_estimates[name]
+                                b = tc.baseline.jacobian_estimates[name]
                                 if m is not None:
                                     has_data = True
                                     m_step = m[si] if m.ndim == 2 else m
@@ -1144,12 +1144,12 @@ def generate_aggregated_figures(
                         combo = tcl[combo_key]
 
                         maml_ests_raw = [
-                            combo.maml.jacobian_estimates.get(n) for n in member_names
+                            combo.maml.jacobian_estimates[n] for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates.get(n) for n in member_names
+                            combo.baseline.jacobian_estimates[n] for n in member_names
                         ]
-                        coeff_true = combo.maml.jacobian_true.get(true_key)
+                        coeff_true = combo.maml.jacobian_true[true_key]
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw
@@ -1224,12 +1224,12 @@ def generate_aggregated_figures(
                         combo = tcl[combo_key]
 
                         maml_ests_raw = [
-                            combo.maml.jacobian_estimates.get(n) for n in member_names
+                            combo.maml.jacobian_estimates[n] for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates.get(n) for n in member_names
+                            combo.baseline.jacobian_estimates[n] for n in member_names
                         ]
-                        coeff_true = combo.maml.jacobian_true.get(true_key)
+                        coeff_true = combo.maml.jacobian_true[true_key]
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
@@ -1307,12 +1307,12 @@ def generate_aggregated_figures(
                         combo = tcl[combo_key]
 
                         maml_ests_raw = [
-                            combo.maml.jacobian_estimates.get(n) for n in member_names
+                            combo.maml.jacobian_estimates[n] for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates.get(n) for n in member_names
+                            combo.baseline.jacobian_estimates[n] for n in member_names
                         ]
-                        coeff_true = combo.maml.jacobian_true.get(true_key)
+                        coeff_true = combo.maml.jacobian_true[true_key]
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
