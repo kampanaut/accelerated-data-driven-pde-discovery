@@ -163,8 +163,113 @@ class TaskResult:
     combos: List[ComboResult] = field(default_factory=list)
     best_combo: BestComboData = field(default_factory=BestComboData)
 
+    @classmethod
+    def from_json_and_npz(
+        cls, task_dict: Dict[str, Any], raw_npz: Dict[str, Any]
+    ) -> "TaskResult":
+        """Reconstruct TaskResult from results.json task entry + NPZ arrays.
+
+        Inverse of to_json_dict() + to_npz_dict(). Used by visualize.py
+        to load evaluation results into typed structures.
+        """
+        coeff_names = [s["name"] for s in task_dict.get("coefficient_specs", [])]
+
+        # Discover combo keys from NPZ prefixes (skip best_combo)
+        combo_keys: set[str] = set()
+        for key in raw_npz:
+            prefix = key.rsplit("/")[0]
+            if prefix != "best_combo":
+                combo_keys.add(prefix)
+
+        combos: List[ComboResult] = []
+        for ck in sorted(combo_keys):
+            # Parse k and noise from combo_key: "k_800_noise_0.00"
+            parts = ck.split("_")
+            k = int(parts[1])
+            noise = float(parts[3])
+
+            methods: Dict[str, MethodResult] = {}
+            for label in ("maml", "baseline"):
+                train_arr = raw_npz.get(f"{ck}/{label}_train_losses")
+                holdout_arr = raw_npz.get(f"{ck}/{label}_holdout_losses")
+
+                ft = FineTuneResult(
+                    train_losses=train_arr.tolist() if train_arr is not None else [],
+                    holdout_losses=holdout_arr.tolist() if holdout_arr is not None else [],
+                )
+
+                # Jacobian arrays
+                jac_estimates: Dict[str, np.ndarray] = {}
+                jac_true: Dict[str, np.ndarray] = {}
+                for name in coeff_names:
+                    est = raw_npz.get(f"{ck}/{label}/{name}")
+                    if est is not None:
+                        jac_estimates[name] = est
+                    true_val = raw_npz.get(f"{ck}/{label}/{name}_true")
+                    if true_val is not None:
+                        jac_true[name] = true_val
+
+                pred_err = raw_npz.get(f"{ck}/{label}/pred_errors")
+                weights = raw_npz.get(f"{ck}/{label}/weights")
+
+                # Coefficient recovery from JSON
+                recovery_dict = task_dict.get(f"coefficient_recovery_{ck}", {})
+                label_recovery = recovery_dict.get(label, {})
+                summary = _flat_to_summary(label_recovery, coeff_names)
+
+                methods[label] = MethodResult(
+                    fine_tune=ft,
+                    coefficient_recovery=summary,
+                    jacobian_estimates=jac_estimates,
+                    jacobian_true=jac_true,
+                    pred_errors=pred_err if pred_err is not None else np.array([]),
+                    weights=weights if weights is not None else np.array([]),
+                )
+
+            worse_dict = task_dict.get(f"worse_{ck}", {})
+            worse = WorseFlags(
+                loss_steps=worse_dict.get("loss_steps", []),
+                coeff_steps=worse_dict.get("coeff_steps", {}),
+            )
+
+            combos.append(ComboResult(
+                k=k, noise=noise,
+                maml=methods["maml"],
+                baseline=methods["baseline"],
+                worse=worse,
+            ))
+
+        task_worse = WorseFlags(
+            loss_steps=task_dict.get("loss_worse_steps", []),
+            coeff_steps=task_dict.get("coeff_worse_steps", {}),
+        )
+
+        bc = BestComboData()
+        bc_key = raw_npz.get("best_combo/key")
+        if bc_key is not None:
+            bc = BestComboData(
+                combo_key=str(bc_key),
+                predictions=raw_npz.get("best_combo/predictions", np.array([])),
+                true_targets=raw_npz.get("best_combo/true_targets", np.array([])),
+                x_pts=raw_npz.get("best_combo/x_pts", np.array([])),
+                y_pts=raw_npz.get("best_combo/y_pts", np.array([])),
+                steps=raw_npz.get("best_combo/steps", np.array([])),
+                coeff_error=raw_npz.get("best_combo/coeff_error", np.array([])),
+            )
+
+        return cls(
+            task_name=task_dict.get("task_name", ""),
+            coefficients=task_dict.get("coefficients", {}),
+            coefficient_specs=task_dict.get("coefficient_specs", []),
+            ic_type=task_dict.get("ic_type", ""),
+            n_samples=task_dict.get("n_samples", 0),
+            worse=task_worse,
+            combos=combos,
+            best_combo=bc,
+        )
+
     def to_json_dict(self) -> Dict[str, Any]:
-        """Serialize to results.json format (backward compatible)."""
+        """Serialize to results.json format."""
         d: Dict[str, Any] = {
             "task_name": self.task_name,
             "coefficients": self.coefficients,
@@ -318,6 +423,24 @@ def build_method_result(
         jacobian_true=jac_true,
         pred_errors=np.stack(pred_snapshots) if pred_snapshots else np.array([]),
         weights=np.stack(weight_snapshots) if weight_snapshots else np.array([]),
+    )
+
+
+def _flat_to_summary(flat: Dict[str, Any], coeff_names: List[str]) -> SnapshotSummary:
+    """Convert flat {name}_true, {name}_recovered, ... dict to SnapshotSummary."""
+    coefficients: Dict[str, CoefficientSnapshot] = {}
+    for name in coeff_names:
+        if f"{name}_true" in flat:
+            coefficients[name] = CoefficientSnapshot(
+                true_value=flat[f"{name}_true"],
+                recovered=flat.get(f"{name}_recovered", []),
+                error_pct=flat.get(f"{name}_error_pct", []),
+                mean=flat.get(f"{name}_mean", []),
+                std=flat.get(f"{name}_std", []),
+            )
+    return SnapshotSummary(
+        coefficients=coefficients,
+        error_pct=flat.get("error_pct", []),
     )
 
 
