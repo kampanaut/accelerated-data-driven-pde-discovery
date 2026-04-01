@@ -130,7 +130,7 @@ DEFAULT = {
     "scheduler_type": "warm_restarts",
     "T_0": 200,
     "T_mult": 2,
-    "min_lr": 0.000001,
+    "min_lr": 0.00001,
     "max_grad_norm": 100.0,
     "loss_function": "normalized_mse",
 

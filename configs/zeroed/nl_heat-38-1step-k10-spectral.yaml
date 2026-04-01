@@ -39,7 +39,7 @@ training:
   scheduler_type: warm_restarts
   T_0: 200
   T_mult: 2
-  min_lr: 1.0e-06
+  min_lr: 1.0e-05
   loss_function: normalized_mse
   max_grad_norm: 100.0
   zero_non_rhs_features: true
@@ -69,3 +69,5 @@ visualization:
   compare_experiments:
   - nl_heat-37-1step-k800-spectral
   - nl_heat-38-1step-k10-spectral
+  exclude_suffixes_append: []
+  exclude_max_iteration: 20

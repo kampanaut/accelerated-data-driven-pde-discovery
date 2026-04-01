@@ -74,7 +74,7 @@ class TrainingSection:
     query_size: int = 1000
 
     # Training loop
-    max_iterations: int = 10000
+    max_iterations: int = 15000
     patience: int = 50
     checkpoint_interval: int = 0
     log_interval: int = 10
@@ -95,7 +95,7 @@ class TrainingSection:
     # MAML++ (Antoniou et al., ICLR 2019)
     msl_enabled: bool = False
     da_enabled: bool = False
-    da_threshold: int = 200
+    da_threshold: int = 5000
     lslr_enabled: bool = False
 
     # LR scheduler
@@ -104,7 +104,7 @@ class TrainingSection:
     scheduler_type: str = "cosine"
     T_0: int = 500
     T_mult: int = 2
-    min_lr: float = 1e-6
+    min_lr: float = 1e-5
 
     # Loss
     loss_function: str = "normalized_mse"

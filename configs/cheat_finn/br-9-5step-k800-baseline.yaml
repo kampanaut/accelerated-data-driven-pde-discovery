@@ -37,7 +37,7 @@ training:
   scheduler_type: warm_restarts
   T_0: 200
   T_mult: 2
-  min_lr: 1.0e-06
+  min_lr: 1.0e-05
   loss_function: normalized_mse
   max_grad_norm: 100.0
   zero_non_rhs_features: false
@@ -64,3 +64,5 @@ visualization:
   compare_experiments:
   - br-9-5step-k800-baseline
   - br-10-5step-k10-baseline
+  exclude_suffixes_append: []
+  exclude_max_iteration: 20
