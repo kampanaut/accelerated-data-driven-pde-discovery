@@ -21,7 +21,8 @@ import copy
 import json
 import shutil
 import argparse
-from dataclasses import asdict
+
+
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Callable, Optional
@@ -288,7 +289,7 @@ def evaluate_task(
     task_result = TaskResult(
         task_name=task.task_name,
         coefficients=task.diffusion_coeffs,
-        coefficient_specs=[asdict(s) for s in specs],
+        coefficient_specs=list(specs),
         ic_type=task.ic_config.get("type", "unknown"),
         n_samples=task.n_samples,
     )

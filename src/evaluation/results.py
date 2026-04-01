@@ -70,6 +70,8 @@ from typing import Any, Dict, List
 
 import numpy as np
 
+from src.training.task_loader import CoefficientSpec
+
 
 # ── Leaf structures ──────────────────────────────────────────────────────
 
@@ -157,7 +159,7 @@ class TaskResult:
     """Full evaluation result for one test task."""
     task_name: str = ""
     coefficients: Dict[str, float] = field(default_factory=dict)
-    coefficient_specs: list = field(default_factory=list)
+    coefficient_specs: List[CoefficientSpec] = field(default_factory=list)
     ic_type: str = ""
     n_samples: int = 0
     worse: WorseFlags = field(default_factory=WorseFlags)  # union across all combos
@@ -180,7 +182,9 @@ class TaskResult:
         Inverse of to_json_dict() + to_npz_dict(). Used by visualize.py
         to load evaluation results into typed structures.
         """
-        coeff_names = [s["name"] for s in task_dict.get("coefficient_specs", [])]
+        raw_specs = task_dict.get("coefficient_specs", [])
+        specs = [CoefficientSpec(**s) for s in raw_specs]
+        coeff_names = [s.name for s in specs]
 
         # Discover combo keys from NPZ prefixes AND JSON keys
         combo_keys: set[str] = set()
@@ -272,7 +276,7 @@ class TaskResult:
         return cls(
             task_name=task_dict.get("task_name", ""),
             coefficients=task_dict.get("coefficients", {}),
-            coefficient_specs=task_dict.get("coefficient_specs", []),
+            coefficient_specs=specs,
             ic_type=task_dict.get("ic_type", ""),
             n_samples=task_dict.get("n_samples", 0),
             worse=task_worse,
@@ -285,7 +289,7 @@ class TaskResult:
         d: Dict[str, Any] = {
             "task_name": self.task_name,
             "coefficients": self.coefficients,
-            "coefficient_specs": self.coefficient_specs,
+            "coefficient_specs": [asdict(s) for s in self.coefficient_specs],
             "ic_type": self.ic_type,
             "n_samples": self.n_samples,
             "loss_worse_steps": self.worse.loss_steps,

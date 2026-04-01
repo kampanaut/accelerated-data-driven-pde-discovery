@@ -291,7 +291,7 @@ def generate_per_task_figures(
         specs = task.coefficient_specs
         coeff_group: Dict[str, List[Dict[str, Any]]] = {}
         for s in specs:
-            coeff_group.setdefault(s["coeff_name"], []).append(s)
+            coeff_group.setdefault(s.coeff_name, []).append(s)
 
         print(f"  Generating figures for {task_name}...")
 
@@ -311,8 +311,8 @@ def generate_per_task_figures(
                     baseline_pe = combo.baseline.pred_errors if combo.baseline.pred_errors.size > 0 else None
 
                     for coeff_name, members in coeff_group.items():
-                        member_names = [m["name"] for m in members]
-                        output_indices = [m["output_index"] for m in members]
+                        member_names = [m.name for m in members]
+                        output_indices = [m.output_index for m in members]
 
                         maml_ests_full = [
                             combo.maml.jacobian_estimates[n] for n in member_names
@@ -548,7 +548,7 @@ def generate_per_task_figures(
         # ---------------------------------------------------------------------
         if sel.enabled("coeff-heatmap"):
             for coeff_name, members in coeff_group.items():
-                member_names = [m["name"] for m in members]
+                member_names = [m.name for m in members]
                 true_key = f"{member_names[0]}_true"
                 maml_errors = np.full((len(noise_levels), len(k_values)), np.nan)
                 baseline_errors = np.full((len(noise_levels), len(k_values)), np.nan)
@@ -615,7 +615,7 @@ def generate_per_task_figures(
         # ---------------------------------------------------------------------
         if sel.enabled("coeff-vs-k"):
             for coeff_name, members in coeff_group.items():
-                member_names = [m["name"] for m in members]
+                member_names = [m.name for m in members]
                 true_key = f"{member_names[0]}_true"
 
                 for noise in noise_levels:
@@ -680,7 +680,7 @@ def generate_per_task_figures(
         # ---------------------------------------------------------------------
         if sel.enabled("coeff-vs-noise"):
             for coeff_name, members in coeff_group.items():
-                member_names = [m["name"] for m in members]
+                member_names = [m.name for m in members]
                 true_key = f"{member_names[0]}_true"
 
                 for k in k_values:
@@ -810,7 +810,7 @@ def generate_aggregated_figures(
     task_combo_lookups = {tn: {c.combo_key: c for c in t.combos} for tn, t in tasks.items()}
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for s in specs:
-        grouped.setdefault(s["coeff_name"], []).append(s)
+        grouped.setdefault(s.coeff_name, []).append(s)
 
     agg_dir = output_dir / "aggregated"
     agg_dir.mkdir(parents=True, exist_ok=True)
@@ -863,7 +863,7 @@ def generate_aggregated_figures(
                     )
 
                     for coeff_name, members in grouped.items():
-                        member_names = [m["name"] for m in members]
+                        member_names = [m.name for m in members]
                         maml_all: list[list[float]] = [[] for _ in members]
                         baseline_all: list[list[float]] = [[] for _ in members]
                         has_data = False
@@ -1125,7 +1125,7 @@ def generate_aggregated_figures(
     # -------------------------------------------------------------------------
     if sel.enabled("coeff-heatmap"):
         for coeff_name, members in grouped.items():
-            member_names = [m["name"] for m in members]
+            member_names = [m.name for m in members]
             true_key = f"{member_names[0]}_true"
             maml_error_stack = []
             baseline_error_stack = []
@@ -1207,7 +1207,7 @@ def generate_aggregated_figures(
     # -------------------------------------------------------------------------
     if sel.enabled("coeff-vs-k"):
         for coeff_name, members in grouped.items():
-            member_names = [m["name"] for m in members]
+            member_names = [m.name for m in members]
             true_key = f"{member_names[0]}_true"
 
             for noise in noise_levels:
@@ -1290,7 +1290,7 @@ def generate_aggregated_figures(
     # -------------------------------------------------------------------------
     if sel.enabled("coeff-vs-noise"):
         for coeff_name, members in grouped.items():
-            member_names = [m["name"] for m in members]
+            member_names = [m.name for m in members]
             true_key = f"{member_names[0]}_true"
 
             for k in k_values:
@@ -1531,7 +1531,7 @@ def generate_cross_experiment_scatter(
     first_er = experiment_results[0][1]
     any_task = next(iter(first_er.tasks.values()))
     specs = any_task.coefficient_specs
-    coeff_names = list(dict.fromkeys(s["coeff_name"] for s in specs))
+    coeff_names = list(dict.fromkeys(s.coeff_name for s in specs))
 
     if not coeff_names:
         print("  No coefficient specs found — skipping scatter.")
