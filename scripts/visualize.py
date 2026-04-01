@@ -246,7 +246,7 @@ def compute_all_metrics(
             maml_losses = combo.maml.fine_tune.train_losses
             baseline_losses = combo.baseline.fine_tune.train_losses
 
-            if not maml_losses or not baseline_losses:
+            if maml_losses.size == 0 or baseline_losses.size == 0:
                 continue
 
             metrics = compute_comparison_metrics(
@@ -421,7 +421,7 @@ def generate_per_task_figures(
                     maml_losses = combo.maml.fine_tune.train_losses
                     baseline_losses = combo.baseline.fine_tune.train_losses
 
-                    if not maml_losses or not baseline_losses:
+                    if maml_losses.size == 0 or baseline_losses.size == 0:
                         continue
                     maml_losses = np.array(maml_losses)
                     baseline_losses = np.array(baseline_losses)
@@ -969,16 +969,16 @@ def generate_aggregated_figures(
 
                 for task_name in task_names:
                     tc = task_combo_lookups[task_name][combo_key]
-                    mt = tc.maml.fine_tune.train_losses or None
-                    mh = tc.maml.fine_tune.holdout_losses or None
-                    bt = tc.baseline.fine_tune.train_losses or None
-                    bh = tc.baseline.fine_tune.holdout_losses or None
+                    mt = tc.maml.fine_tune.train_losses
+                    mh = tc.maml.fine_tune.holdout_losses
+                    bt = tc.baseline.fine_tune.train_losses
+                    bh = tc.baseline.fine_tune.holdout_losses
 
                     if (
-                        mt is not None
-                        and mh is not None
-                        and bt is not None
-                        and bh is not None
+                        mt.size > 0
+                        and mh.size > 0
+                        and bt.size > 0
+                        and bh.size > 0
                     ):
                         maml_train_curves.append(mt)
                         maml_holdout_curves.append(mh)

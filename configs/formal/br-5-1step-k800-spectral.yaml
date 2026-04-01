@@ -55,23 +55,20 @@ evaluation:
   - 0.05
   - 0.1
   fine_tune_lr: 1.0e-05
-  max_steps: 1000
+  max_steps: 50
   deriv_threshold: 0.0005
   fixed_steps:
   - 0
   - 1
-  - 10
-  - 25
+  - 2
+  - 3
+  - 4
   - 50
-  - 100
-  - 250
-  - 500
-  - 1000
   holdout_size: 5000
   log_weights: false
 visualization:
   dpi: 300
-  only: scatter[0,1,10,25,50,100,250,500,1000],jacobian[0,1,10,50,100,500,1000],generalization,best-combo
+  only: scatter[0,1,2,3,4,1,50],jacobian[0,1,50],generalization,best-combo
   compare_experiments:
   - br-5-1step-k800-spectral
   - br-6-1step-k10-spectral
