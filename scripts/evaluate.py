@@ -37,7 +37,7 @@ import numpy as np
 from src.config import ExperimentConfig
 from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
-from src.training.maml import MeTALModule
+from src.training.maml import MeTALModule, LSLRSchedule
 from src.training.spectral_loss import compute_spectral_loss
 from src.evaluation.jacobian import analyze_jacobian, JacobianResults
 from src.evaluation.metrics import compress_step_ranges
@@ -100,6 +100,7 @@ def fine_tune(
     fixed_steps: Optional[List[int]] = None,
     on_step: Optional[Callable[[torch.nn.Module, int], None]] = None,
     metal: Optional[MeTALModule] = None,
+    lslr: Optional["LSLRSchedule"] = None,
     loss_type: str = "normalized_mse",
     coords: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     Lx: float = 0.0,
@@ -127,7 +128,24 @@ def fine_tune(
         Dict with 'train_losses' and 'holdout_losses'
     """
     model.train()
-    opt = torch.optim.SGD(model.parameters(), lr=lr)
+
+    # LSLR: per-param-group SGD with precomputed learned LR schedule
+    if lslr is not None:
+        param_names = [n for n, _ in model.named_parameters()]
+        opt = torch.optim.SGD(
+            [{"params": [p], "lr": lr} for p in model.parameters()]
+        )
+        lr_schedule = {
+            name: [
+                lslr.lr_dict[name.replace(".", "-")][s].item()
+                for s in range(lslr.n_steps)
+            ]
+            for name in param_names
+        }
+    else:
+        param_names = None
+        lr_schedule = None
+        opt = torch.optim.SGD(model.parameters(), lr=lr)
 
     if metal is not None:
         metal.eval()
@@ -189,9 +207,17 @@ def fine_tune(
         """Shared step logic: backward, optimize, holdout, callback."""
         opt.zero_grad()
         grad_loss.backward()
-        # Gradient clipping (Qin & Beatson 2022: max_norm=100.0)
         if max_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+
+        # Update per-param LRs from LSLR schedule (or fallback to fixed lr)
+        if lr_schedule is not None and param_names is not None:
+            if step_idx < lslr.n_steps:  # type: ignore[union-attr]
+                for pg, name in zip(opt.param_groups, param_names):
+                    pg["lr"] = lr_schedule[name][step_idx]
+            else:
+                for pg in opt.param_groups:
+                    pg["lr"] = lr
         opt.step()
 
         with torch.no_grad():
@@ -239,6 +265,7 @@ def evaluate_task(
     fixed_steps: List[int],
     holdout_size: int = 1000,
     metal: Optional[MeTALModule] = None,
+    lslr: Optional["LSLRSchedule"] = None,
     loss_type: str = "normalized_mse",
     spectral_mode_size: int = 0,
     max_grad_norm: float = 0.0,
@@ -371,6 +398,7 @@ def evaluate_task(
                         method_label="MAML",
                     ),
                     metal=metal,
+                    lslr=lslr,
                     loss_type=loss_type,
                     coords=support_coords,
                     Lx=task.Lx,
@@ -379,7 +407,7 @@ def evaluate_task(
                     max_grad_norm=max_grad_norm,
                 )
 
-                # Fine-tune from θ₀ (baseline) — same loss, no MeTAL
+                # Fine-tune from θ₀ (baseline) — same loss, no MeTAL, no LSLR
                 baseline_model = copy.deepcopy(theta_0)
                 baseline_result = fine_tune(
                     baseline_model,
@@ -556,6 +584,7 @@ def evaluate_task(
             fixed_steps=fixed_steps,
             on_step=_pred_on_step,
             metal=metal,
+            lslr=lslr,
             loss_type=loss_type,
             coords=s_coords,
             Lx=task.Lx,
@@ -738,6 +767,22 @@ def main():
 
         print(f"MeTAL module loaded from: {metal_state_path}")
 
+    # Load LSLR module if it exists (frozen for evaluation)
+    lslr_module: Optional[LSLRSchedule] = None
+
+    lslr_state_path = checkpoint_dir / "lslr_state.pt"
+    if lslr_state_path.exists():
+        lslr_module = LSLRSchedule(
+            named_params=list(theta_star.named_parameters()),
+            n_steps=cfg.training.inner_steps,
+            init_lr=cfg.training.inner_lr,
+        ).to(device)
+        lslr_module.load_state_dict(
+            torch.load(lslr_state_path, map_location=device, weights_only=True)
+        )
+        lslr_module.eval()
+        print(f"LSLR module loaded from: {lslr_state_path}")
+
     print()
 
     # =========================================================================
@@ -845,6 +890,7 @@ def main():
             holdout_size=holdout_size,
             fixed_steps=fixed_steps,
             metal=metal_module,
+            lslr=lslr_module,
             loss_type=loss_type,
             spectral_mode_size=spectral_mode_size,
             max_grad_norm=max_grad_norm,
