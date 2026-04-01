@@ -225,57 +225,6 @@ def load_results_with_samples(results_path: Path) -> EvaluationResults:
     return EvaluationResults.from_dir(results_path.parent)
 
 
-def _task_to_samples_dict(task: TaskResult) -> Dict[str, Any]:
-    """Compat bridge: build old-style samples dict from TaskResult.
-
-    Returns dict keyed by combo_key, each value is a flat dict with
-    maml_losses, baseline_losses, maml_{name}, etc. — the format
-    that figure generators currently expect.
-
-    TODO: Remove once figure generators are fully migrated to typed access.
-    """
-    samples: Dict[str, Any] = {}
-
-    for combo in task.combos:
-        ck = combo.combo_key
-        cd: Dict[str, Any] = {
-            "maml_losses": combo.maml.fine_tune.train_losses,
-            "baseline_losses": combo.baseline.fine_tune.train_losses,
-            "maml_holdout_losses": combo.maml.fine_tune.holdout_losses,
-            "baseline_holdout_losses": combo.baseline.fine_tune.holdout_losses,
-            "maml_pred_errors": combo.maml.pred_errors if combo.maml.pred_errors.size > 0 else None,
-            "baseline_pred_errors": combo.baseline.pred_errors if combo.baseline.pred_errors.size > 0 else None,
-        }
-        for name, arr in combo.maml.jacobian_estimates.items():
-            cd[f"maml_{name}"] = arr
-        for name, arr in combo.baseline.jacobian_estimates.items():
-            cd[f"baseline_{name}"] = arr
-        for name, arr in combo.maml.jacobian_true.items():
-            cd[f"maml_{name}_true"] = arr
-        for name, arr in combo.baseline.jacobian_true.items():
-            cd[f"baseline_{name}_true"] = arr
-
-        samples[ck] = cd
-
-    # Best combo data (flat keys)
-    bc = task.best_combo
-    if bc.combo_key:
-        if bc.predictions.size > 0:
-            samples["best_combo_predictions"] = bc.predictions
-        if bc.true_targets.size > 0:
-            samples["best_combo_true_targets"] = bc.true_targets
-        if bc.x_pts.size > 0:
-            samples["best_combo_x_pts"] = bc.x_pts
-        if bc.y_pts.size > 0:
-            samples["best_combo_y_pts"] = bc.y_pts
-        if bc.steps.size > 0:
-            samples["best_combo_steps"] = bc.steps
-        if bc.coeff_error.size > 0:
-            samples["best_combo_coeff_error"] = bc.coeff_error
-        samples["best_combo_key"] = bc.combo_key
-
-    return samples
-
 
 def compute_all_metrics(
     tasks: Dict[str, TaskResult],
@@ -330,20 +279,16 @@ def generate_per_task_figures(
     """Generate all per-task figures."""
 
     for task_name, task in tasks.items():
-        # Compat bridge: build old-style dicts from typed data
-        task_data = task.to_json_dict()
-        task_data["samples"] = _task_to_samples_dict(task)
-
         suffix = _task_dir_worse_suffix(task, fixed_steps.tolist())
 
         task_dir = output_dir / "per_task" / f"{task_name}{suffix}"
         task_dir.mkdir(parents=True, exist_ok=True)
 
         task_metrics = all_metrics.get(task_name, {})
-        task_samples = task_data["samples"]
+        combo_lookup = {c.combo_key: c for c in task.combos}
 
         # Build coefficient grouping from task-level specs
-        specs = task_data.get("coefficient_specs", [])
+        specs = task.coefficient_specs
         coeff_group: Dict[str, List[Dict[str, Any]]] = {}
         for s in specs:
             coeff_group.setdefault(s["coeff_name"], []).append(s)
@@ -358,27 +303,24 @@ def generate_per_task_figures(
             for k in k_values:
                 for noise in noise_levels:
                     combo_key = f"k_{k}_noise_{noise:.2f}"
-                    combo_data = task_samples.get(combo_key, {})
-                    combo_worse = task_data.get(f"worse_{combo_key}", {})
-                    combo_coeff_worse = combo_worse.get("coeff_steps", {})
+                    combo = combo_lookup[combo_key]
+                    combo_coeff_worse = combo.worse.coeff_steps
 
-                    combo_fixed_steps = (
-                        fixed_steps  # from function param (config-level)
-                    )
-                    maml_pe = combo_data.get("maml_pred_errors")
-                    baseline_pe = combo_data.get("baseline_pred_errors")
+                    combo_fixed_steps = fixed_steps
+                    maml_pe = combo.maml.pred_errors if combo.maml.pred_errors.size > 0 else None
+                    baseline_pe = combo.baseline.pred_errors if combo.baseline.pred_errors.size > 0 else None
 
                     for coeff_name, members in coeff_group.items():
                         member_names = [m["name"] for m in members]
                         output_indices = [m["output_index"] for m in members]
 
                         maml_ests_full = [
-                            combo_data.get(f"maml_{n}") for n in member_names
+                            combo.maml.jacobian_estimates.get(n) for n in member_names
                         ]
                         baseline_ests_full = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
+                            combo.baseline.jacobian_estimates.get(n) for n in member_names
                         ]
-                        true_arr = combo_data.get(f"maml_{member_names[0]}_true")
+                        true_arr = combo.maml.jacobian_true.get(member_names[0])
 
                         if true_arr is None or any(
                             x is None for x in maml_ests_full + baseline_ests_full
@@ -474,27 +416,20 @@ def generate_per_task_figures(
             for k in k_values:
                 for noise in noise_levels:
                     combo_key = f"k_{k}_noise_{noise:.2f}"
-                    combo_data = task_samples.get(combo_key, {})
+                    combo = combo_lookup[combo_key]
 
-                    maml_losses = combo_data.get("maml_losses")
-                    baseline_losses = combo_data.get("baseline_losses")
+                    maml_losses = combo.maml.fine_tune.train_losses
+                    baseline_losses = combo.baseline.fine_tune.train_losses
 
-                    if maml_losses is None or baseline_losses is None:
+                    if not maml_losses or not baseline_losses:
                         continue
-                    else:
-                        maml_losses = np.array(maml_losses)
-                        baseline_losses = np.array(baseline_losses)
+                    maml_losses = np.array(maml_losses)
+                    baseline_losses = np.array(baseline_losses)
 
-                    maml_holdout = np.array(combo_data.get("maml_holdout_losses"))
-                    baseline_holdout = np.array(
-                        combo_data.get("baseline_holdout_losses")
-                    )
-                    if maml_holdout is None or baseline_holdout is None:
-                        continue
+                    maml_holdout = np.array(combo.maml.fine_tune.holdout_losses)
+                    baseline_holdout = np.array(combo.baseline.fine_tune.holdout_losses)
 
-                    # Build LOSS-only worse suffix with step list
-                    combo_worse = task_data.get(f"worse_{combo_key}", {})
-                    combo_loss_steps = combo_worse.get("loss_steps", [])
+                    combo_loss_steps = combo.worse.loss_steps
                     loss_suffix = _loss_worse_suffix(
                         combo_loss_steps, fixed_steps.tolist()
                     )
@@ -622,15 +557,15 @@ def generate_per_task_figures(
                 for i, noise in enumerate(noise_levels):
                     for j, k in enumerate(k_values):
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo_data = task_samples.get(combo_key, {})
+                        combo = combo_lookup[combo_key]
 
                         maml_ests_raw = [
-                            combo_data.get(f"maml_{n}") for n in member_names
+                            combo.maml.jacobian_estimates.get(n) for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
+                            combo.baseline.jacobian_estimates.get(n) for n in member_names
                         ]
-                        coeff_true = combo_data.get(f"maml_{true_key}")
+                        coeff_true = combo.maml.jacobian_true.get(true_key)
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw
@@ -690,15 +625,15 @@ def generate_per_task_figures(
 
                     for k in k_values:
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo_data = task_samples.get(combo_key, {})
+                        combo = combo_lookup[combo_key]
 
                         maml_ests_raw = [
-                            combo_data.get(f"maml_{n}") for n in member_names
+                            combo.maml.jacobian_estimates.get(n) for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
+                            combo.baseline.jacobian_estimates.get(n) for n in member_names
                         ]
-                        coeff_true = combo_data.get(f"maml_{true_key}")
+                        coeff_true = combo.maml.jacobian_true.get(true_key)
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
@@ -755,15 +690,15 @@ def generate_per_task_figures(
 
                     for noise in noise_levels:
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo_data = task_samples.get(combo_key, {})
+                        combo = combo_lookup[combo_key]
 
                         maml_ests_raw = [
-                            combo_data.get(f"maml_{n}") for n in member_names
+                            combo.maml.jacobian_estimates.get(n) for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
+                            combo.baseline.jacobian_estimates.get(n) for n in member_names
                         ]
-                        coeff_true = combo_data.get(f"maml_{true_key}")
+                        coeff_true = combo.maml.jacobian_true.get(true_key)
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
@@ -810,21 +745,17 @@ def generate_per_task_figures(
         # ---------------------------------------------------------------------
         if not sel.enabled("best-combo"):
             continue
-        bc_predictions = task_samples.get("best_combo_predictions")
-        if bc_predictions is not None:
-            bc_true = task_samples.get("best_combo_true_targets")
-            bc_x = task_samples.get("best_combo_x_pts")
-            bc_y = task_samples.get("best_combo_y_pts")
-            bc_steps = task_samples.get("best_combo_steps")
-            bc_errors = task_samples.get("best_combo_coeff_error")
-            bc_key_arr = task_samples.get("best_combo_key")
+        bc = task.best_combo
+        if bc.combo_key and bc.predictions.size > 0:
+            bc_predictions = bc.predictions
+            bc_true = bc.true_targets
+            bc_x = bc.x_pts
+            bc_y = bc.y_pts
+            bc_steps = bc.steps
+            bc_errors = bc.coeff_error
 
-            if all(v is not None for v in [bc_true, bc_x, bc_y, bc_steps, bc_errors, bc_key_arr]):
-                assert bc_true is not None and bc_x is not None and bc_y is not None
-                assert bc_steps is not None and bc_errors is not None and bc_key_arr is not None
-
-                # Parse combo key for filename tags
-                bc_key_str = str(bc_key_arr)
+            if True:  # always true — data is complete when combo_key is set
+                bc_key_str = bc.combo_key
                 # bc_key_str is like "k_800_noise_0.00"
                 k_match = re.search(r"k_(\d+)", bc_key_str)
                 n_match = re.search(r"noise_([\d.]+)", bc_key_str)
@@ -872,16 +803,11 @@ def generate_aggregated_figures(
 ) -> None:
     """Generate aggregated figures (mean ± std across tasks)."""
 
-    # Build compat bridge: old-style dicts from typed data
-    results_tasks: Dict[str, dict] = {}
-    for tn, t in tasks.items():
-        td = t.to_json_dict()
-        td["samples"] = _task_to_samples_dict(t)
-        results_tasks[tn] = td
-
     # Build coefficient grouping from any task's specs (structure is PDE-constant)
-    any_task = next(iter(results_tasks.values()), {})
-    specs = any_task.get("coefficient_specs", [])
+    any_task = next(iter(tasks.values()), None)
+    specs = any_task.coefficient_specs if any_task else []
+    # For the patterns below, build per-task combo lookups
+    task_combo_lookups = {tn: {c.combo_key: c for c in t.combos} for tn, t in tasks.items()}
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for s in specs:
         grouped.setdefault(s["coeff_name"], []).append(s)
@@ -903,16 +829,16 @@ def generate_aggregated_figures(
     # Ratio-normalized: each task's estimates divided by that task's true value
     # -------------------------------------------------------------------------
     if sel.enabled("jacobian"):
-        # Determine step indices from first available combo
-        agg_fixed_steps = None
-        for task_name in task_names:
-            any_combo = next(
-                iter(results_tasks[task_name].get("samples", {}).values()), {}
-            )
-            fs = any_combo.get("fixed_steps")
-            if fs is not None:
-                agg_fixed_steps = fs
-                break
+        # Determine step indices — use function param fixed_steps,
+        # or discover from first combo's Jacobian data shape
+        agg_fixed_steps = fixed_steps.tolist() if fixed_steps is not None else None
+        if agg_fixed_steps is None:
+            for task_name in task_names:
+                t = tasks[task_name]
+                if t.combos and t.combos[0].maml.coefficient_recovery.error_pct:
+                    # Infer step count from recovery array length
+                    agg_fixed_steps = list(range(len(t.combos[0].maml.coefficient_recovery.error_pct)))
+                    break
 
         for k in k_values:
             for noise in noise_levels:
@@ -943,10 +869,8 @@ def generate_aggregated_figures(
                         has_data = False
 
                         for task_name in task_names:
-                            task_data = results_tasks[task_name]["samples"].get(
-                                combo_key, {}
-                            )
-                            true_arr = task_data.get(f"maml_{member_names[0]}_true")
+                            tc = task_combo_lookups[task_name][combo_key]
+                            true_arr = tc.maml.jacobian_true.get(member_names[0])
                             if true_arr is None:
                                 continue
                             true_val = float(true_arr[0])
@@ -954,8 +878,8 @@ def generate_aggregated_figures(
                                 continue
 
                             for i, name in enumerate(member_names):
-                                m = task_data.get(f"maml_{name}")
-                                b = task_data.get(f"baseline_{name}")
+                                m = tc.maml.jacobian_estimates.get(name)
+                                b = tc.baseline.jacobian_estimates.get(name)
                                 if m is not None:
                                     has_data = True
                                     m_step = m[si] if m.ndim == 2 else m
@@ -1044,13 +968,11 @@ def generate_aggregated_figures(
                 baseline_plateau_steps = []
 
                 for task_name in task_names:
-                    task_data = results_tasks[task_name]["samples"].get(
-                        combo_key, {}
-                    )
-                    mt = task_data.get("maml_losses")
-                    mh = task_data.get("maml_holdout_losses")
-                    bt = task_data.get("baseline_losses")
-                    bh = task_data.get("baseline_holdout_losses")
+                    tc = task_combo_lookups[task_name][combo_key]
+                    mt = tc.maml.fine_tune.train_losses or None
+                    mh = tc.maml.fine_tune.holdout_losses or None
+                    bt = tc.baseline.fine_tune.train_losses or None
+                    bh = tc.baseline.fine_tune.holdout_losses or None
 
                     if (
                         mt is not None
@@ -1210,7 +1132,7 @@ def generate_aggregated_figures(
             has_jacobian_data = False
 
             for task_name in task_names:
-                task_samples = results_tasks[task_name]["samples"]
+                tcl = task_combo_lookups[task_name]
                 maml_errors = np.full((len(noise_levels), len(k_values)), np.nan)
                 baseline_errors = np.full(
                     (len(noise_levels), len(k_values)), np.nan
@@ -1219,15 +1141,15 @@ def generate_aggregated_figures(
                 for i, noise in enumerate(noise_levels):
                     for j, k in enumerate(k_values):
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo_data = task_samples.get(combo_key, {})
+                        combo = tcl[combo_key]
 
                         maml_ests_raw = [
-                            combo_data.get(f"maml_{n}") for n in member_names
+                            combo.maml.jacobian_estimates.get(n) for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
+                            combo.baseline.jacobian_estimates.get(n) for n in member_names
                         ]
-                        coeff_true = combo_data.get(f"maml_{true_key}")
+                        coeff_true = combo.maml.jacobian_true.get(true_key)
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw
@@ -1293,21 +1215,21 @@ def generate_aggregated_figures(
                 baseline_per_task = []
 
                 for task_name in task_names:
-                    task_samples = results_tasks[task_name]["samples"]
+                    tcl = task_combo_lookups[task_name]
                     maml_row: list[float] = []
                     baseline_row: list[float] = []
 
                     for k in k_values:
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo_data = task_samples.get(combo_key, {})
+                        combo = tcl[combo_key]
 
                         maml_ests_raw = [
-                            combo_data.get(f"maml_{n}") for n in member_names
+                            combo.maml.jacobian_estimates.get(n) for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
+                            combo.baseline.jacobian_estimates.get(n) for n in member_names
                         ]
-                        coeff_true = combo_data.get(f"maml_{true_key}")
+                        coeff_true = combo.maml.jacobian_true.get(true_key)
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
@@ -1376,21 +1298,21 @@ def generate_aggregated_figures(
                 baseline_per_task = []
 
                 for task_name in task_names:
-                    task_samples = results_tasks[task_name]["samples"]
+                    tcl = task_combo_lookups[task_name]
                     maml_row = []
                     baseline_row = []
 
                     for noise in noise_levels:
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo_data = task_samples.get(combo_key, {})
+                        combo = tcl[combo_key]
 
                         maml_ests_raw = [
-                            combo_data.get(f"maml_{n}") for n in member_names
+                            combo.maml.jacobian_estimates.get(n) for n in member_names
                         ]
                         baseline_ests_raw = [
-                            combo_data.get(f"baseline_{n}") for n in member_names
+                            combo.baseline.jacobian_estimates.get(n) for n in member_names
                         ]
-                        coeff_true = combo_data.get(f"maml_{true_key}")
+                        coeff_true = combo.maml.jacobian_true.get(true_key)
 
                         if coeff_true is None or any(
                             x is None for x in maml_ests_raw + baseline_ests_raw
