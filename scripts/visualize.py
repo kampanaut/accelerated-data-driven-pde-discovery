@@ -10,7 +10,6 @@ Usage:
 """
 
 import dataclasses
-import json
 import re
 import sys
 import argparse
@@ -23,11 +22,7 @@ import yaml
 import numpy as np
 import matplotlib
 from src.config import ExperimentConfig, OutputSection
-from src.evaluation.results import (
-    EvaluationResults, EvalConfig, TaskResult, ComboResult,
-    MethodResult, FineTuneResult, SnapshotSummary, CoefficientSnapshot,
-    WorseFlags, BestComboData,
-)
+from src.evaluation.results import EvaluationResults, TaskResult
 
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
@@ -185,34 +180,6 @@ from src.evaluation.graphs import (
 )
 
 
-def load_config(config_path: Path) -> dict:
-    """Load experiment configuration."""
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
-
-
-def load_results(results_path: Path) -> dict:
-    """Load evaluation results (metadata only)."""
-    with open(results_path, "r") as f:
-        return json.load(f)
-
-
-def load_samples(samples_dir: Path, task_name: str) -> Dict[str, np.ndarray]:
-    """
-    Load per-combo arrays from NPZ file for a task.
-
-    Args:
-        samples_dir: Directory containing .npz sample files
-        task_name: Name of the task
-
-    Returns:
-        Dict mapping combo_key/array_name to ndarray, or empty dict if not found
-    """
-    npz_path = samples_dir / f"{task_name}.npz"
-    if not npz_path.exists():
-        return {}
-    return dict(np.load(npz_path))
-
 
 def _loss_worse_suffix(loss_worse_steps: list[int], all_fixed_steps: list[int]) -> str:
     """Build WORSE(LOSS[...]) suffix for loss-group figures."""
@@ -254,41 +221,8 @@ def _task_dir_worse_suffix(task: TaskResult, all_fixed_steps: list[int]) -> str:
 
 
 def load_results_with_samples(results_path: Path) -> EvaluationResults:
-    """
-    Load evaluation results with per-combo arrays from NPZ files.
-
-    Returns:
-        EvaluationResults with typed TaskResult objects.
-    """
-    raw_results = load_results(results_path)
-    samples_dir = results_path.parent / "samples"
-
-    if not samples_dir.exists():
-        raise ValueError("`samples_dir` directory path does not exist.")
-
-    config_dict = raw_results.get("config", {})
-    eval_config = EvalConfig(
-        k_values=config_dict.get("k_values", []),
-        noise_levels=config_dict.get("noise_levels", []),
-        fine_tune_lr=config_dict.get("fine_tune_lr", 0.01),
-        max_steps=config_dict.get("max_steps", 50),
-        threshold=config_dict.get("threshold", 0.0005),
-        fixed_steps=config_dict.get("fixed_steps", []),
-        holdout_size=config_dict.get("holdout_size", 5000),
-        pde_type=config_dict.get("pde_type", ""),
-    )
-
-    tasks: Dict[str, TaskResult] = {}
-    for task_name, task_dict in raw_results.get("tasks", {}).items():
-        raw_npz = load_samples(samples_dir, task_name)
-        tasks[task_name] = TaskResult.from_json_and_npz(task_dict, raw_npz)
-
-    return EvaluationResults(
-        experiment_name=raw_results.get("experiment_name", ""),
-        timestamp=raw_results.get("timestamp", ""),
-        config=eval_config,
-        tasks=tasks,
-    )
+    """Load evaluation results from the evaluation/ directory containing results_path."""
+    return EvaluationResults.from_dir(results_path.parent)
 
 
 def _task_to_samples_dict(task: TaskResult) -> Dict[str, Any]:
@@ -1860,19 +1794,9 @@ def main():
         if len(discovered) >= 1:
             experiment_results: list[Tuple[str, EvaluationResults]] = []
             for dir_name, rpath in discovered:
-                raw = load_results(rpath)
-                er = EvaluationResults(
-                    config=EvalConfig(
-                        k_values=raw.get("config", {}).get("k_values", []),
-                        noise_levels=raw.get("config", {}).get("noise_levels", []),
-                        fixed_steps=raw.get("config", {}).get("fixed_steps", []),
-                    ),
-                    tasks={
-                        tn: TaskResult.from_json_and_npz(td, {})
-                        for tn, td in raw.get("tasks", {}).items()
-                    },
+                experiment_results.append(
+                    (dir_name, EvaluationResults.from_dir(rpath.parent))
                 )
-                experiment_results.append((dir_name, er))
 
             models_root = Path("data/models")
             output_dirs = [
@@ -1993,19 +1917,9 @@ def main():
         if len(discovered) >= 1:
             config_experiment_results: list[Tuple[str, EvaluationResults]] = []
             for dir_name, rpath in discovered:
-                raw = load_results(rpath)
-                er = EvaluationResults(
-                    config=EvalConfig(
-                        k_values=raw.get("config", {}).get("k_values", []),
-                        noise_levels=raw.get("config", {}).get("noise_levels", []),
-                        fixed_steps=raw.get("config", {}).get("fixed_steps", []),
-                    ),
-                    tasks={
-                        tn: TaskResult.from_json_and_npz(td, {})
-                        for tn, td in raw.get("tasks", {}).items()
-                    },
+                config_experiment_results.append(
+                    (dir_name, EvaluationResults.from_dir(rpath.parent))
                 )
-                config_experiment_results.append((dir_name, er))
 
             generate_cross_experiment_scatter(
                 config_experiment_results, scatter_output_dirs, dpi, sel

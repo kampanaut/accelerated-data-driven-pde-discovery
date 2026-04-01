@@ -166,10 +166,10 @@ class ExperimentConfig:
         """Load from YAML file."""
         with open(path) as f:
             d = yaml.safe_load(f)
-        return cls.from_yaml_dict(d)
+        return cls.from_dict(d)
 
     @classmethod
-    def from_yaml_dict(cls, d: dict) -> "ExperimentConfig":
+    def from_dict(cls, d: dict) -> "ExperimentConfig":
         """Parse raw YAML dict into typed config."""
         experiment = ExperimentSection(**_filter_fields(ExperimentSection, d.get("experiment", {})))
         output = OutputSection(**_filter_fields(OutputSection, d.get("output", {})))

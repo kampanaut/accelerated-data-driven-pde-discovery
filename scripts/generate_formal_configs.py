@@ -466,7 +466,7 @@ def _build_config(
 
     # Round-trip validation
     yaml_dict = cfg.to_yaml_dict()
-    ExperimentConfig.from_yaml_dict(yaml_dict)
+    ExperimentConfig.from_dict(yaml_dict)
 
     return yaml_dict
 

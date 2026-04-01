@@ -65,6 +65,7 @@ results.json structure:
 """
 
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
@@ -181,12 +182,16 @@ class TaskResult:
         """
         coeff_names = [s["name"] for s in task_dict.get("coefficient_specs", [])]
 
-        # Discover combo keys from NPZ prefixes (skip best_combo)
+        # Discover combo keys from NPZ prefixes AND JSON keys
         combo_keys: set[str] = set()
         for key in raw_npz:
             prefix = key.rsplit("/")[0]
             if prefix != "best_combo":
                 combo_keys.add(prefix)
+        # Also from JSON coefficient_recovery_ keys (for when NPZ is absent)
+        for key in task_dict:
+            if key.startswith("coefficient_recovery_"):
+                combo_keys.add(key[len("coefficient_recovery_"):])
 
         combos: List[ComboResult] = []
         for ck in sorted(combo_keys):
@@ -367,6 +372,45 @@ class EvaluationResults:
     timestamp: str = ""
     config: EvalConfig = field(default_factory=EvalConfig)
     tasks: Dict[str, TaskResult] = field(default_factory=dict)
+
+    @classmethod
+    def from_dir(cls, eval_dir: Path) -> "EvaluationResults":
+        """Load evaluation results from an evaluation/ directory.
+
+        Reads eval_dir/results.json for metadata + coefficient recovery.
+        Reads eval_dir/samples/{task}.npz for raw arrays (if present).
+        """
+        import json
+
+        results_path = eval_dir / "results.json"
+        with open(results_path) as f:
+            raw = json.load(f)
+
+        config_dict = raw.get("config", {})
+        config = EvalConfig(
+            k_values=config_dict.get("k_values", []),
+            noise_levels=config_dict.get("noise_levels", []),
+            fine_tune_lr=config_dict.get("fine_tune_lr", 0.01),
+            max_steps=config_dict.get("max_steps", 50),
+            threshold=config_dict.get("threshold", 0.0005),
+            fixed_steps=config_dict.get("fixed_steps", []),
+            holdout_size=config_dict.get("holdout_size", 5000),
+            pde_type=config_dict.get("pde_type", ""),
+        )
+
+        samples_dir = eval_dir / "samples"
+        tasks: Dict[str, TaskResult] = {}
+        for task_name, task_dict in raw.get("tasks", {}).items():
+            npz_path = samples_dir / f"{task_name}.npz"
+            raw_npz = dict(np.load(npz_path)) if npz_path.exists() else {}
+            tasks[task_name] = TaskResult.from_json_and_npz(task_dict, raw_npz)
+
+        return cls(
+            experiment_name=raw.get("experiment_name", ""),
+            timestamp=raw.get("timestamp", ""),
+            config=config,
+            tasks=tasks,
+        )
 
     def to_json_dict(self) -> Dict[str, Any]:
         """Serialize to results.json format."""
