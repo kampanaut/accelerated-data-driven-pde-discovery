@@ -1,0 +1,349 @@
+"""Typed result structures for MAML evaluation.
+
+Dataclasses mirror the results.json + samples/*.npz output.
+Produced by evaluate.py, consumed by visualize.py.
+
+Serialization:
+- to_json_dict() → nested dict for results.json
+- to_npz_dict() → flat string-keyed dict for np.savez_compressed
+
+results.json structure:
+    EvaluationResults
+    ├── experiment_name: str
+    ├── timestamp: str
+    ├── config: EvalConfig
+    │   ├── k_values: List[int]
+    │   ├── noise_levels: List[float]
+    │   ├── fine_tune_lr: float
+    │   ├── max_steps: int
+    │   ├── threshold: float
+    │   ├── fixed_steps: List[int]
+    │   ├── holdout_size: int
+    │   └── pde_type: str
+    │
+    └── tasks: Dict[str, TaskResult]
+        └── {task_name}: TaskResult
+            ├── task_name: str
+            ├── coefficients: Dict[str, float]
+            ├── coefficient_specs: List[CoefficientSpec]
+            ├── ic_type: str
+            ├── n_samples: int
+            ├── loss_worse_steps: List[int]
+            ├── coeff_worse_steps: Dict[str, List[int]]
+            │
+            └── combos: List[ComboResult]
+                └── ComboResult
+                    ├── k: int
+                    ├── noise: float
+                    ├── error: Optional[str]
+                    ├── maml: MethodResult
+                    │   ├── fine_tune: FineTuneResult
+                    │   │   ├── train_losses: List[float]
+                    │   │   └── holdout_losses: List[float]
+                    │   └── coefficient_recovery: SnapshotSummary
+                    │       ├── error_pct: List[float]
+                    │       └── coefficients: Dict[str, CoefficientSnapshot]
+                    │           └── {name}: CoefficientSnapshot
+                    │               ├── true_value: float
+                    │               ├── recovered: List[float]
+                    │               ├── error_pct: List[float]
+                    │               ├── mean: List[float]
+                    │               └── std: List[float]
+                    ├── baseline: MethodResult (same shape)
+                    └── worse: WorseFlags
+                        ├── loss_steps: List[int]
+                        └── coeff_steps: Dict[str, List[int]]
+            │
+            └── best_combo: BestComboData
+                ├── combo_key: str
+                ├── predictions: ndarray (n_steps, holdout, n_outputs)
+                ├── true_targets: ndarray (holdout, n_outputs)
+                ├── x_pts: ndarray (holdout,)
+                ├── y_pts: ndarray (holdout,)
+                ├── steps: ndarray (n_steps,)
+                └── coeff_error: ndarray (n_steps,)
+"""
+
+from dataclasses import dataclass, field, asdict
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+
+
+# ── Leaf structures ──────────────────────────────────────────────────────
+
+
+@dataclass
+class FineTuneResult:
+    """Per-step train and holdout losses from fine-tuning."""
+    train_losses: List[float] = field(default_factory=list)
+    holdout_losses: List[float] = field(default_factory=list)
+
+
+@dataclass
+class CoefficientSnapshot:
+    """Per-coefficient recovery summary across fixed steps."""
+    true_value: float = 0.0
+    recovered: List[float] = field(default_factory=list)
+    error_pct: List[float] = field(default_factory=list)
+    mean: List[float] = field(default_factory=list)
+    std: List[float] = field(default_factory=list)
+
+
+@dataclass
+class SnapshotSummary:
+    """Coefficient recovery for one method (MAML or baseline) at one combo."""
+    coefficients: Dict[str, CoefficientSnapshot] = field(default_factory=dict)
+    error_pct: List[float] = field(default_factory=list)  # mean across all coeffs per step
+
+
+@dataclass
+class MethodResult:
+    """Fine-tuning + coefficient recovery for one method."""
+    fine_tune: FineTuneResult = field(default_factory=FineTuneResult)
+    coefficient_recovery: SnapshotSummary = field(default_factory=SnapshotSummary)
+    # Raw arrays for NPZ (not serialized to JSON)
+    jacobian_estimates: Dict[str, np.ndarray] = field(default_factory=dict)  # coeff_name → (n_steps, holdout)
+    jacobian_true: Dict[str, np.ndarray] = field(default_factory=dict)      # coeff_name → (1,)
+    pred_errors: Optional[np.ndarray] = None   # (n_steps, holdout, n_outputs)
+    weights: Optional[np.ndarray] = None       # (n_steps, n_params) if log_weights
+
+
+@dataclass
+class WorseFlags:
+    """MAML-worse-than-baseline flags at specific steps."""
+    loss_steps: List[int] = field(default_factory=list)
+    coeff_steps: Dict[str, List[int]] = field(default_factory=dict)
+
+
+# ── Combo level ──────────────────────────────────────────────────────────
+
+
+@dataclass
+class ComboResult:
+    """Result for one (k, noise) combination."""
+    k: int = 0
+    noise: float = 0.0
+    maml: Optional[MethodResult] = None
+    baseline: Optional[MethodResult] = None
+    worse: Optional[WorseFlags] = None
+    error: Optional[str] = None
+
+    @property
+    def combo_key(self) -> str:
+        return f"k_{self.k}_noise_{self.noise:.2f}"
+
+
+# ── Best combo prediction ────────────────────────────────────────────────
+
+
+@dataclass
+class BestComboData:
+    """Prediction snapshots from re-fine-tuning the best combo (for spatial viz)."""
+    combo_key: str = ""
+    predictions: Optional[np.ndarray] = None     # (n_steps, holdout, n_outputs)
+    true_targets: Optional[np.ndarray] = None    # (holdout, n_outputs)
+    x_pts: Optional[np.ndarray] = None           # (holdout,)
+    y_pts: Optional[np.ndarray] = None           # (holdout,)
+    steps: Optional[np.ndarray] = None           # (n_steps,)
+    coeff_error: Optional[np.ndarray] = None     # (n_steps,)
+
+
+# ── Task level ───────────────────────────────────────────────────────────
+
+
+@dataclass
+class TaskResult:
+    """Full evaluation result for one test task."""
+    task_name: str = ""
+    coefficients: Dict[str, float] = field(default_factory=dict)
+    coefficient_specs: list = field(default_factory=list)
+    ic_type: str = ""
+    n_samples: int = 0
+    loss_worse_steps: List[int] = field(default_factory=list)
+    coeff_worse_steps: Dict[str, List[int]] = field(default_factory=dict)
+    combos: List[ComboResult] = field(default_factory=list)
+    best_combo: BestComboData = field(default_factory=BestComboData)
+
+    def to_json_dict(self) -> Dict[str, Any]:
+        """Serialize to results.json format (backward compatible)."""
+        d: Dict[str, Any] = {
+            "task_name": self.task_name,
+            "coefficients": self.coefficients,
+            "coefficient_specs": self.coefficient_specs,
+            "ic_type": self.ic_type,
+            "n_samples": self.n_samples,
+            "loss_worse_steps": self.loss_worse_steps,
+            "coeff_worse_steps": self.coeff_worse_steps,
+        }
+
+        for combo in self.combos:
+            ck = combo.combo_key
+
+            if combo.error is not None:
+                d[f"error_{ck}"] = combo.error
+                continue
+
+            if combo.maml and combo.baseline:
+                # Coefficient recovery — flatten to old format
+                d[f"coefficient_recovery_{ck}"] = {
+                    "fixed_steps": None,  # filled by caller from EvalConfig
+                    "maml": _summary_to_flat(combo.maml.coefficient_recovery),
+                    "baseline": _summary_to_flat(combo.baseline.coefficient_recovery),
+                }
+
+            if combo.worse:
+                d[f"worse_{ck}"] = {
+                    "loss_steps": combo.worse.loss_steps,
+                    "coeff_steps": combo.worse.coeff_steps,
+                }
+
+        return d
+
+    def to_npz_dict(self) -> Dict[str, Any]:
+        """Serialize to flat NPZ key→array dict."""
+        npz: Dict[str, Any] = {}
+
+        for combo in self.combos:
+            if combo.error is not None:
+                continue
+
+            ck = combo.combo_key
+
+            for label, method in [("maml", combo.maml), ("baseline", combo.baseline)]:
+                if method is None:
+                    continue
+
+                npz[f"{ck}/{label}_train_losses"] = np.array(method.fine_tune.train_losses)
+                npz[f"{ck}/{label}_holdout_losses"] = np.array(method.fine_tune.holdout_losses)
+
+                for coeff_name, arr in method.jacobian_estimates.items():
+                    npz[f"{ck}/{label}/{coeff_name}"] = arr
+                for coeff_name, arr in method.jacobian_true.items():
+                    npz[f"{ck}/{label}/{coeff_name}_true"] = arr
+
+                if method.pred_errors is not None:
+                    npz[f"{ck}/{label}/pred_errors"] = method.pred_errors
+                if method.weights is not None:
+                    npz[f"{ck}/{label}/weights"] = method.weights
+
+        # Best combo prediction data
+        if self.best_combo.combo_key:
+            bc = self.best_combo
+            npz["best_combo/key"] = np.array(bc.combo_key)
+            if bc.predictions is not None:
+                npz["best_combo/predictions"] = bc.predictions
+            if bc.true_targets is not None:
+                npz["best_combo/true_targets"] = bc.true_targets
+            if bc.x_pts is not None:
+                npz["best_combo/x_pts"] = bc.x_pts
+            if bc.y_pts is not None:
+                npz["best_combo/y_pts"] = bc.y_pts
+            if bc.steps is not None:
+                npz["best_combo/steps"] = bc.steps
+            if bc.coeff_error is not None:
+                npz["best_combo/coeff_error"] = bc.coeff_error
+
+        return npz
+
+
+# ── Top level ────────────────────────────────────────────────────────────
+
+
+@dataclass
+class EvalConfig:
+    """Snapshot of evaluation parameters."""
+    k_values: List[int] = field(default_factory=list)
+    noise_levels: List[float] = field(default_factory=list)
+    fine_tune_lr: float = 0.01
+    max_steps: int = 50
+    threshold: float = 0.0005
+    fixed_steps: List[int] = field(default_factory=list)
+    holdout_size: int = 5000
+    pde_type: str = ""
+
+
+@dataclass
+class EvaluationResults:
+    """Top-level evaluation output — serializes to results.json."""
+    experiment_name: str = ""
+    timestamp: str = ""
+    config: EvalConfig = field(default_factory=EvalConfig)
+    tasks: Dict[str, TaskResult] = field(default_factory=dict)
+
+    def to_json_dict(self) -> Dict[str, Any]:
+        """Serialize to results.json format."""
+        tasks_dict: Dict[str, Any] = {}
+        for task_name, task_result in self.tasks.items():
+            td = task_result.to_json_dict()
+            # Fill in fixed_steps from config into each combo's coefficient_recovery
+            for key in list(td.keys()):
+                if key.startswith("coefficient_recovery_") and isinstance(td[key], dict):
+                    td[key]["fixed_steps"] = self.config.fixed_steps
+            tasks_dict[task_name] = td
+
+        return {
+            "experiment_name": self.experiment_name,
+            "timestamp": self.timestamp,
+            "config": asdict(self.config),
+            "tasks": tasks_dict,
+        }
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+
+def build_method_result(
+    fine_tune_result: FineTuneResult,
+    jac_snapshots: list,
+    pred_snapshots: list,
+    weight_snapshots: Optional[list] = None,
+) -> MethodResult:
+    """Build MethodResult from raw fine-tune output and Jacobian snapshots."""
+    # Coefficient recovery summary
+    coefficients: Dict[str, CoefficientSnapshot] = {}
+    for name in jac_snapshots[0].estimates:
+        coefficients[name] = CoefficientSnapshot(
+            true_value=jac_snapshots[0].true_values[name],
+            recovered=[jac.recovered(name) for jac in jac_snapshots],
+            error_pct=[jac.coeff_error_pct(name) for jac in jac_snapshots],
+            mean=[float(np.mean(jac.estimates[name])) for jac in jac_snapshots],
+            std=[float(np.std(jac.estimates[name])) for jac in jac_snapshots],
+        )
+
+    summary = SnapshotSummary(
+        coefficients=coefficients,
+        error_pct=[
+            float(np.mean([jac.coeff_error_pct(n) for n in jac.true_values]))
+            for jac in jac_snapshots
+        ],
+    )
+
+    # Raw arrays for NPZ
+    jac_estimates: Dict[str, np.ndarray] = {}
+    jac_true: Dict[str, np.ndarray] = {}
+    for name in jac_snapshots[0].estimates:
+        jac_estimates[name] = np.stack([jac.estimates[name] for jac in jac_snapshots])
+        jac_true[name] = np.array([jac_snapshots[0].true_values[name]])
+
+    return MethodResult(
+        fine_tune=fine_tune_result,
+        coefficient_recovery=summary,
+        jacobian_estimates=jac_estimates,
+        jacobian_true=jac_true,
+        pred_errors=np.stack(pred_snapshots) if pred_snapshots else None,
+        weights=np.stack(weight_snapshots) if weight_snapshots else None,
+    )
+
+
+def _summary_to_flat(summary: SnapshotSummary) -> Dict[str, Any]:
+    """Convert SnapshotSummary to flat {name}_true, {name}_recovered, ... format."""
+    d: Dict[str, Any] = {}
+    for name, snap in summary.coefficients.items():
+        d[f"{name}_true"] = snap.true_value
+        d[f"{name}_recovered"] = snap.recovered
+        d[f"{name}_error_pct"] = snap.error_pct
+        d[f"{name}_mean"] = snap.mean
+        d[f"{name}_std"] = snap.std
+    d["error_pct"] = summary.error_pct
+    return d

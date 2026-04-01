@@ -41,6 +41,10 @@ from src.training.maml import MeTALModule
 from src.training.spectral_loss import compute_spectral_loss
 from src.evaluation.jacobian import analyze_jacobian, JacobianResults
 from src.evaluation.metrics import compress_step_ranges
+from src.evaluation.results import (
+    FineTuneResult, MethodResult, ComboResult, TaskResult,
+    WorseFlags, BestComboData, build_method_result,
+)
 
 
 class _TeeStream:
@@ -102,7 +106,7 @@ def fine_tune(
     Ly: float = 0.0,
     spectral_mode_size: int = 0,
     max_grad_norm: float = 0.0,
-) -> Dict[str, List[float]]:
+) -> FineTuneResult:
     """
     Fine-tune model and return train/holdout loss at each step.
 
@@ -219,23 +223,7 @@ def fine_tune(
         grad_loss = cost_fn(pred, y)
         _step(i, grad_loss)
 
-    return {"train_losses": train_losses, "holdout_losses": holdout_losses}
-
-
-def _snapshots_to_dict(snapshots: List[JacobianResults]) -> Dict[str, Any]:
-    """Convert list of per-step JacobianResults to array-indexed dict for JSON."""
-    d: Dict[str, Any] = {}
-    for name in snapshots[0].estimates:
-        d[f"{name}_true"] = snapshots[0].true_values[name]
-        d[f"{name}_recovered"] = [jac.recovered(name) for jac in snapshots]
-        d[f"{name}_error_pct"] = [jac.coeff_error_pct(name) for jac in snapshots]
-        d[f"{name}_mean"] = [float(np.mean(jac.estimates[name])) for jac in snapshots]
-        d[f"{name}_std"] = [float(np.std(jac.estimates[name])) for jac in snapshots]
-    d["error_pct"] = [
-        float(np.mean([jac.coeff_error_pct(n) for n in jac.true_values]))
-        for jac in snapshots
-    ]
-    return d
+    return FineTuneResult(train_losses=train_losses, holdout_losses=holdout_losses)
 
 
 def evaluate_task(
@@ -256,45 +244,24 @@ def evaluate_task(
     max_grad_norm: float = 0.0,
     log_weights: bool = False,
     zero_non_rhs_features: bool = False,
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+) -> TaskResult:
     """
     Evaluate one task across all (K, noise) combinations.
 
     Extracts Jacobian and pred_errors at every fixed_step during fine-tuning.
 
-    Args:
-        task: The task to evaluate
-        theta_star: Meta-learned model (θ*)
-        theta_0: Initial model (θ₀)
-        k_values: List of K values to test
-        noise_levels: List of noise levels to test
-        fine_tune_lr: Learning rate for fine-tuning
-        max_steps: Number of fine-tuning steps
-        device: Device to run on
-        seed: Base random seed
-        holdout_size: Number of samples for holdout evaluation (disjoint from support)
-        fixed_steps: Steps at which to extract Jacobian + pred_errors
-
     Returns:
-        Dict with task metadata and samples dict for NPZ storage
+        TaskResult with all combo results, NPZ data, and best-combo predictions.
     """
     specs = task.coefficient_specs
 
-    task_result: Dict[str, Any] = {
-        "task_name": task.task_name,
-        "coefficients": task.diffusion_coeffs,
-        "coefficient_specs": [asdict(s) for s in specs],
-        "ic_type": task.ic_config.get("type", "unknown"),
-        "n_samples": task.n_samples,
-        "loss_worse_steps": [],
-        "coeff_worse_steps": {},
-    }
-
-    # Per-combo arrays stored separately in NPZ
-    samples: Dict[str, Any] = {}
-
-    # Track combo metadata for best-combo selection after the loop
-    combo_tracker: List[Dict[str, Any]] = []
+    task_result = TaskResult(
+        task_name=task.task_name,
+        coefficients=task.diffusion_coeffs,
+        coefficient_specs=[asdict(s) for s in specs],
+        ic_type=task.ic_config.get("type", "unknown"),
+        n_samples=task.n_samples,
+    )
 
     for k_idx, k in enumerate(k_values):
         # Evaluate Fourier ONCE per (task, K) — same collocation points for all noise levels
@@ -310,8 +277,6 @@ def evaluate_task(
         )
 
         for noise_idx, noise in enumerate(noise_levels):
-            combo_key = f"k_{k}_noise_{noise:.2f}"
-
             print(f"    K={k:4d}, noise={noise:.0%}...", end=" ", flush=True)
 
             try:
@@ -441,53 +406,15 @@ def evaluate_task(
                     max_grad_norm=max_grad_norm,
                 )
 
-                # Store curves for NPZ
-                samples[f"{combo_key}/maml_train_losses"] = np.array(
-                    maml_result["train_losses"]
+                # Build MethodResult for each method
+                maml_method = build_method_result(
+                    maml_result, maml_jac_snapshots, maml_pred_snapshots,
+                    maml_weight_snapshots if log_weights else None,
                 )
-                samples[f"{combo_key}/maml_holdout_losses"] = np.array(
-                    maml_result["holdout_losses"]
+                baseline_method = build_method_result(
+                    baseline_result, baseline_jac_snapshots, baseline_pred_snapshots,
+                    baseline_weight_snapshots if log_weights else None,
                 )
-                samples[f"{combo_key}/baseline_train_losses"] = np.array(
-                    baseline_result["train_losses"]
-                )
-                samples[f"{combo_key}/baseline_holdout_losses"] = np.array(
-                    baseline_result["holdout_losses"]
-                )
-
-                # Stack per-step Jacobian distributions into NPZ
-                # Shape: (n_fixed_steps, holdout_size)
-                for label, jac_snaps, pred_snaps, w_snaps in [
-                    ("maml", maml_jac_snapshots, maml_pred_snapshots, maml_weight_snapshots),
-                    ("baseline", baseline_jac_snapshots, baseline_pred_snapshots, baseline_weight_snapshots),
-                ]:
-                    for coeff_name in jac_snaps[0].estimates.keys():
-                        stacked = np.stack(
-                            [jac.estimates[coeff_name] for jac in jac_snaps]
-                        )
-                        samples[f"{combo_key}/{label}/{coeff_name}"] = stacked
-                        samples[f"{combo_key}/{label}/{coeff_name}_true"] = np.array(
-                            [jac_snaps[0].true_values[coeff_name]]  # We just get 1
-                            # arbitrary snapshot, since all true_values are the same
-                        )
-                    # pred_errors: (n_fixed_steps, holdout_size, 2)
-                    samples[f"{combo_key}/{label}/pred_errors"] = np.stack(pred_snaps)
-                    # weights: (n_fixed_steps, n_params) — only if log_weights enabled
-                    if w_snaps:
-                        samples[f"{combo_key}/{label}/weights"] = np.stack(w_snaps)
-
-                # Store coefficient recovery summary in task_result (arrays)
-                coeff_key = f"coefficient_recovery_{combo_key}"
-                task_result[coeff_key] = {
-                    "fixed_steps": fixed_steps,
-                    "maml": _snapshots_to_dict(maml_jac_snapshots),
-                    "baseline": _snapshots_to_dict(baseline_jac_snapshots),
-                }
-
-                maml_train_final = maml_result["train_losses"][-1]
-                maml_holdout_final = maml_result["holdout_losses"][-1]
-                baseline_train_final = baseline_result["train_losses"][-1]
-                baseline_holdout_final = baseline_result["holdout_losses"][-1]
 
                 # Per-step worse comparison
                 loss_worse_steps: List[int] = []
@@ -496,37 +423,46 @@ def evaluate_task(
                 }
 
                 for si, step in enumerate(fixed_steps):
-                    # Loss: compare holdout at this step
-                    maml_h = maml_result["holdout_losses"][step]
-                    baseline_h = baseline_result["holdout_losses"][step]
+                    maml_h = maml_result.holdout_losses[step]
+                    baseline_h = baseline_result.holdout_losses[step]
                     if maml_h > baseline_h:
                         loss_worse_steps.append(step)
 
-                    # Coefficients: compare error at this step
                     for n in maml_jac_snapshots[si].true_values:
                         if maml_jac_snapshots[si].coeff_error_pct(
                             n
                         ) > baseline_jac_snapshots[si].coeff_error_pct(n):
                             coeff_worse_steps[n].append(step)
 
-                # Store per-combo flags (step-granular)
-                task_result[f"worse_{combo_key}"] = {
-                    "loss_steps": loss_worse_steps,
-                    "coeff_steps": coeff_worse_steps,
-                }
+                combo = ComboResult(
+                    k=k,
+                    noise=noise,
+                    maml=maml_method,
+                    baseline=baseline_method,
+                    worse=WorseFlags(
+                        loss_steps=loss_worse_steps,
+                        coeff_steps=coeff_worse_steps,
+                    ),
+                )
+                task_result.combos.append(combo)
 
                 # Accumulate task-level flags (union across combos)
                 for step in loss_worse_steps:
-                    if step not in task_result["loss_worse_steps"]:
-                        task_result["loss_worse_steps"].append(step)
+                    if step not in task_result.loss_worse_steps:
+                        task_result.loss_worse_steps.append(step)
                 for n, steps in coeff_worse_steps.items():
-                    if n not in task_result["coeff_worse_steps"]:
-                        task_result["coeff_worse_steps"][n] = []
+                    if n not in task_result.coeff_worse_steps:
+                        task_result.coeff_worse_steps[n] = []
                     for step in steps:
-                        if step not in task_result["coeff_worse_steps"][n]:
-                            task_result["coeff_worse_steps"][n].append(step)
+                        if step not in task_result.coeff_worse_steps[n]:
+                            task_result.coeff_worse_steps[n].append(step)
 
                 # Print summary
+                maml_train_final = maml_result.train_losses[-1]
+                maml_holdout_final = maml_result.holdout_losses[-1]
+                baseline_train_final = baseline_result.train_losses[-1]
+                baseline_holdout_final = baseline_result.holdout_losses[-1]
+
                 flags = []
                 if loss_worse_steps:
                     flags.append(
@@ -547,41 +483,28 @@ def evaluate_task(
                     f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag_str}"
                 )
 
-                # Track for best-combo selection
-                coeff_recovery = task_result[f"coefficient_recovery_{combo_key}"]
-                combo_tracker.append({
-                    "combo_key": combo_key,
-                    "k": k,
-                    "k_idx": k_idx,
-                    "noise": noise,
-                    "noise_idx": noise_idx,
-                    "error_pct_array": coeff_recovery["maml"]["error_pct"],
-                })
-
             except FileNotFoundError as e:
-                # Noisy file doesn't exist for this task
                 print(f"SKIPPED ({e})")
-                # Store error info in metadata (no samples)
-                task_result[f"error_{combo_key}"] = str(e)
+                task_result.combos.append(ComboResult(k=k, noise=noise, error=str(e)))
 
             except Exception as e:
                 print(f"ERROR ({e})")
-                task_result[f"error_{combo_key}"] = str(e)
+                task_result.combos.append(ComboResult(k=k, noise=noise, error=str(e)))
 
     # ─── Best-combo prediction capture ─────────────────────────────────────
     # Re-fine-tune the best combo and record model predictions at each step
     # for spatial visualization of how the model adapts.
-    if combo_tracker:
+    successful_combos = [c for c in task_result.combos if c.error is None and c.maml is not None]
+    if successful_combos:
         # Pick combo whose best snapshot has lowest mean coefficient error
-        best = min(combo_tracker, key=lambda c: min(c["error_pct_array"]))
-        best_k = best["k"]
-        best_k_idx = best["k_idx"]
-        best_noise = best["noise"]
-        best_noise_idx = best["noise_idx"]
-        best_combo_key = best["combo_key"]
+        best = min(successful_combos, key=lambda c: min(c.maml.coefficient_recovery.error_pct))  # type: ignore[union-attr]
+        best_k = best.k
+        best_k_idx = k_values.index(best_k)
+        best_noise = best.noise
+        best_noise_idx = noise_levels.index(best_noise)
         best_k_seed = seed + best_k_idx * 100
 
-        print(f"    Best combo: {best_combo_key} (min error={min(best['error_pct_array']):.1f}%)")
+        print(f"    Best combo: {best.combo_key} (min error={min(best.maml.coefficient_recovery.error_pct):.1f}%)")  # type: ignore[union-attr]
 
         # Re-create the same split (deterministic seed)
         available_for_holdout = task.n_samples - best_k
@@ -612,16 +535,13 @@ def evaluate_task(
             bc_features = task.zero_non_rhs_features(bc_features)
             bc_h_features = task.zero_non_rhs_features(bc_h_features)
 
-        # Step-0 prediction (θ* before any fine-tuning)
         bc_model = copy.deepcopy(theta_star)
         pred_snapshots: List[NDArray[np.floating[Any]]] = []
 
-        # Prediction callback for fixed_steps
         def _pred_on_step(model: torch.nn.Module, _: int) -> None:
             with torch.no_grad():
                 pred_snapshots.append(model(bc_h_features).cpu().numpy())
 
-        # Re-fine-tune (MAML model only — baseline not needed for this plot)
         fine_tune(
             bc_model,
             bc_features,
@@ -641,20 +561,19 @@ def evaluate_task(
             max_grad_norm=max_grad_norm,
         )
 
-        # Retrieve per-step coeff errors from already-computed results
-        coeff_recovery = task_result[f"coefficient_recovery_{best_combo_key}"]
-        step_errors = coeff_recovery["maml"]["error_pct"]
+        step_errors = best.maml.coefficient_recovery.error_pct  # type: ignore[union-attr]
 
-        # Save to NPZ
-        samples["best_combo/key"] = np.array(best_combo_key)
-        samples["best_combo/predictions"] = np.stack(pred_snapshots)
-        samples["best_combo/true_targets"] = bc_h_targets.cpu().numpy()
-        samples["best_combo/x_pts"] = h_coords[0].cpu().numpy()
-        samples["best_combo/y_pts"] = h_coords[1].cpu().numpy()
-        samples["best_combo/steps"] = np.array(fixed_steps)
-        samples["best_combo/coeff_error"] = np.array(step_errors)
+        task_result.best_combo = BestComboData(
+            combo_key=best.combo_key,
+            predictions=np.stack(pred_snapshots),
+            true_targets=bc_h_targets.cpu().numpy(),
+            x_pts=h_coords[0].cpu().numpy(),
+            y_pts=h_coords[1].cpu().numpy(),
+            steps=np.array(fixed_steps),
+            coeff_error=np.array(step_errors),
+        )
 
-    return task_result, samples
+    return task_result
 
 
 def main():
@@ -910,7 +829,7 @@ def main():
     for task_idx, task in enumerate(test_loader.tasks):
         print(f"[{task_idx + 1}/{len(test_loader)}] Task: {task.task_name}")
 
-        task_result, task_samples = evaluate_task(
+        task_result = evaluate_task(
             task=task,
             theta_star=theta_star,
             theta_0=theta_0,
@@ -930,10 +849,13 @@ def main():
             zero_non_rhs_features=zero_non_rhs,
         )
 
+        # Serialize to NPZ
+        task_npz = task_result.to_npz_dict()
+
         # NaN guard: check all arrays from this task before saving
         nan_keys = [
-            k for k, v in task_samples.items()
-            if isinstance(v, np.ndarray) and v.dtype.kind == "f"  and np.isnan(v).any()
+            k for k, v in task_npz.items()
+            if isinstance(v, np.ndarray) and v.dtype.kind == "f" and np.isnan(v).any()
         ]
         if nan_keys:
             print(f"\nFATAL: NaN detected in {len(nan_keys)} arrays for {task.task_name}:")
@@ -948,56 +870,45 @@ def main():
             sys.exit(1)
 
         # Save task metadata to results dict
-        results["tasks"][task.task_name] = task_result
+        results["tasks"][task.task_name] = task_result.to_json_dict()
 
         # Save samples to NPZ
-        if task_samples:
+        if task_npz:
             samples_path = samples_dir / f"{task.task_name}.npz"
-            np.savez_compressed(samples_path, **task_samples)
+            np.savez_compressed(samples_path, **task_npz)
 
         # Collect per-combo stats by IC type (loss + coefficient recovery)
-        ic_type = task_result.get("ic_type", "unknown")
+        ic_type = task_result.ic_type
         if ic_type not in combo_stats_by_ic:
             combo_stats_by_ic[ic_type] = []
 
-        for k in k_values:
-            for noise in noise_levels:
-                combo_key = f"k_{k}_noise_{noise:.2f}"
+        for combo in task_result.combos:
+            if combo.error is not None or combo.maml is None or combo.baseline is None:
+                continue
 
-                maml_holdout = task_samples.get(f"{combo_key}/maml_holdout_losses")
-                baseline_holdout = task_samples.get(
-                    f"{combo_key}/baseline_holdout_losses"
-                )
-                if maml_holdout is None or baseline_holdout is None:
-                    continue
+            loss_worse_any = combo.worse is not None and len(combo.worse.loss_steps) > 0
+            coeff_worse_any = combo.worse is not None and any(
+                len(s) > 0 for s in combo.worse.coeff_steps.values()
+            )
 
-                worse = task_result.get(f"worse_{combo_key}", {})
-                coeff_recovery = task_result.get(
-                    f"coefficient_recovery_{combo_key}", {}
-                )
+            entry: Dict[str, Any] = {
+                "task": task.task_name,
+                "k": combo.k,
+                "noise": combo.noise,
+                "maml_loss": float(combo.maml.fine_tune.holdout_losses[-1]),
+                "baseline_loss": float(combo.baseline.fine_tune.holdout_losses[-1]),
+                "loss_worse": loss_worse_any,
+                "coeff_worse": coeff_worse_any,
+            }
 
-                loss_worse_any = len(worse.get("loss_steps", [])) > 0
-                coeff_worse_any = any(
-                    len(s) > 0 for s in worse.get("coeff_steps", {}).values()
-                )
-                entry: Dict[str, Any] = {
-                    "task": task.task_name,
-                    "k": k,
-                    "noise": noise,
-                    "maml_loss": float(maml_holdout[-1]),
-                    "baseline_loss": float(baseline_holdout[-1]),
-                    "loss_worse": loss_worse_any,
-                    "coeff_worse": coeff_worse_any,
-                }
+            maml_err = combo.maml.coefficient_recovery.error_pct
+            baseline_err = combo.baseline.coefficient_recovery.error_pct
+            if maml_err:
+                entry["maml_coeff_error"] = maml_err[-1]
+            if baseline_err:
+                entry["baseline_coeff_error"] = baseline_err[-1]
 
-                maml_coeff = coeff_recovery.get("maml")
-                baseline_coeff = coeff_recovery.get("baseline")
-                if maml_coeff is not None:
-                    entry["maml_coeff_error"] = maml_coeff["error_pct"][-1]
-                if baseline_coeff is not None:
-                    entry["baseline_coeff_error"] = baseline_coeff["error_pct"][-1]
-
-                combo_stats_by_ic[ic_type].append(entry)
+            combo_stats_by_ic[ic_type].append(entry)
 
         print()
 
