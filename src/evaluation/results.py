@@ -163,6 +163,13 @@ class TaskResult:
     combos: List[ComboResult] = field(default_factory=list)
     best_combo: BestComboData = field(default_factory=BestComboData)
 
+    def combo_by_key(self, combo_key: str) -> ComboResult:
+        """Look up a combo by its string key (e.g. 'k_800_noise_0.00')."""
+        for c in self.combos:
+            if c.combo_key == combo_key:
+                return c
+        raise KeyError(f"No combo with key {combo_key}")
+
     @classmethod
     def from_json_and_npz(
         cls, task_dict: Dict[str, Any], raw_npz: Dict[str, Any]

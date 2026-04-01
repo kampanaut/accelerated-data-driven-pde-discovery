@@ -23,6 +23,11 @@ import yaml
 import numpy as np
 import matplotlib
 from src.config import ExperimentConfig, OutputSection
+from src.evaluation.results import (
+    EvaluationResults, EvalConfig, TaskResult, ComboResult,
+    MethodResult, FineTuneResult, SnapshotSummary, CoefficientSnapshot,
+    WorseFlags, BestComboData,
+)
 
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
@@ -230,17 +235,15 @@ def _coeff_worse_suffix_at_step(
     return ""
 
 
-def _task_dir_worse_suffix(task_data: dict, all_fixed_steps: list[int]) -> str:
+def _task_dir_worse_suffix(task: TaskResult, all_fixed_steps: list[int]) -> str:
     """Build task-level directory WORSE suffix with step ranges."""
     flags = []
 
-    loss_steps = task_data.get("loss_worse_steps", [])
-    if loss_steps:
-        compressed = compress_step_ranges(loss_steps, all_fixed_steps)
+    if task.worse.loss_steps:
+        compressed = compress_step_ranges(task.worse.loss_steps, all_fixed_steps)
         flags.append(f"LOSS[{compressed}]")
 
-    coeff_steps = task_data.get("coeff_worse_steps", {})
-    for name, steps in coeff_steps.items():
+    for name, steps in task.worse.coeff_steps.items():
         if steps:
             compressed = compress_step_ranges(steps, all_fixed_steps)
             flags.append(f"COEFF:{name}[{compressed}]")
@@ -250,133 +253,134 @@ def _task_dir_worse_suffix(task_data: dict, all_fixed_steps: list[int]) -> str:
     return ""
 
 
-def load_results_with_samples(results_path: Path) -> dict:
+def load_results_with_samples(results_path: Path) -> EvaluationResults:
     """
     Load evaluation results with per-combo arrays from NPZ files.
 
-    Args:
-        results_path: Path to results.json
-
     Returns:
-        Results dict with task_data['samples'][combo_key] populated from NPZ
+        EvaluationResults with typed TaskResult objects.
     """
-    results = load_results(results_path)
-
+    raw_results = load_results(results_path)
     samples_dir = results_path.parent / "samples"
 
     if not samples_dir.exists():
         raise ValueError("`samples_dir` directory path does not exist.")
 
-    # Each .npz file about to be loaded by `load_samples()` is a task. A task
-    # contains combos (K × noise level), ranging from few-shot clean data to
-    # large-sample noisy data.
-    for task_name, task_data in results["tasks"].items():
-        raw = load_samples(samples_dir, task_name)
-        if not raw:
-            continue
+    config_dict = raw_results.get("config", {})
+    eval_config = EvalConfig(
+        k_values=config_dict.get("k_values", []),
+        noise_levels=config_dict.get("noise_levels", []),
+        fine_tune_lr=config_dict.get("fine_tune_lr", 0.01),
+        max_steps=config_dict.get("max_steps", 50),
+        threshold=config_dict.get("threshold", 0.0005),
+        fixed_steps=config_dict.get("fixed_steps", []),
+        holdout_size=config_dict.get("holdout_size", 5000),
+        pde_type=config_dict.get("pde_type", ""),
+    )
 
-        task_data["samples"] = {}
+    tasks: Dict[str, TaskResult] = {}
+    for task_name, task_dict in raw_results.get("tasks", {}).items():
+        raw_npz = load_samples(samples_dir, task_name)
+        tasks[task_name] = TaskResult.from_json_and_npz(task_dict, raw_npz)
 
-        # Discover combo_keys from NPZ key prefixes (skip best_combo prefix)
-        combo_keys = set()
-        for key in raw.keys():
-            prefix = key.rsplit("/")[0]
-            if prefix != "best_combo":
-                combo_keys.add(prefix)
+    return EvaluationResults(
+        experiment_name=raw_results.get("experiment_name", ""),
+        timestamp=raw_results.get("timestamp", ""),
+        config=eval_config,
+        tasks=tasks,
+    )
 
-        # Extract coefficient names from task-level specs
-        coeff_names = [s["name"] for s in task_data.get("coefficient_specs", [])]
 
-        for combo_key in combo_keys:
-            combo_data: Dict[str, Any] = {
-                "maml_losses": raw.get(f"{combo_key}/maml_train_losses"),
-                "baseline_losses": raw.get(f"{combo_key}/baseline_train_losses"),
-                "maml_holdout_losses": raw.get(f"{combo_key}/maml_holdout_losses"),
-                "baseline_holdout_losses": raw.get(
-                    f"{combo_key}/baseline_holdout_losses"
-                ),
-                "maml_pred_errors": raw.get(f"{combo_key}/maml/pred_errors"),
-                "baseline_pred_errors": raw.get(f"{combo_key}/baseline/pred_errors"),
-            }
-            for name in coeff_names:
-                combo_data[f"maml_{name}"] = raw.get(f"{combo_key}/maml/{name}")
-                combo_data[f"baseline_{name}"] = raw.get(f"{combo_key}/baseline/{name}")
-                combo_data[f"maml_{name}_true"] = raw.get(
-                    f"{combo_key}/maml/{name}_true"
-                )
-                combo_data[f"baseline_{name}_true"] = raw.get(
-                    f"{combo_key}/baseline/{name}_true"
-                )
+def _task_to_samples_dict(task: TaskResult) -> Dict[str, Any]:
+    """Compat bridge: build old-style samples dict from TaskResult.
 
-            task_data["samples"][combo_key] = combo_data
+    Returns dict keyed by combo_key, each value is a flat dict with
+    maml_losses, baseline_losses, maml_{name}, etc. — the format
+    that figure generators currently expect.
 
-            # Loss arrays to lists (metrics code expects lists)
-            for k, v in combo_data.items():
-                if "_losses" in k and v is not None:
-                    combo_data[k] = v.tolist()
+    TODO: Remove once figure generators are fully migrated to typed access.
+    """
+    samples: Dict[str, Any] = {}
 
-        # Extract best_combo data (stored with best_combo/ prefix in NPZ)
-        bc_preds = raw.get("best_combo/predictions")
-        if bc_preds is not None:
-            for bc_key in raw:
-                if bc_key.startswith("best_combo/"):
-                    flat_key = bc_key.replace("/", "_")
-                    task_data["samples"][flat_key] = raw[bc_key]
+    for combo in task.combos:
+        ck = combo.combo_key
+        cd: Dict[str, Any] = {
+            "maml_losses": combo.maml.fine_tune.train_losses,
+            "baseline_losses": combo.baseline.fine_tune.train_losses,
+            "maml_holdout_losses": combo.maml.fine_tune.holdout_losses,
+            "baseline_holdout_losses": combo.baseline.fine_tune.holdout_losses,
+            "maml_pred_errors": combo.maml.pred_errors if combo.maml.pred_errors.size > 0 else None,
+            "baseline_pred_errors": combo.baseline.pred_errors if combo.baseline.pred_errors.size > 0 else None,
+        }
+        for name, arr in combo.maml.jacobian_estimates.items():
+            cd[f"maml_{name}"] = arr
+        for name, arr in combo.baseline.jacobian_estimates.items():
+            cd[f"baseline_{name}"] = arr
+        for name, arr in combo.maml.jacobian_true.items():
+            cd[f"maml_{name}_true"] = arr
+        for name, arr in combo.baseline.jacobian_true.items():
+            cd[f"baseline_{name}_true"] = arr
 
-    return results
+        samples[ck] = cd
+
+    # Best combo data (flat keys)
+    bc = task.best_combo
+    if bc.combo_key:
+        if bc.predictions.size > 0:
+            samples["best_combo_predictions"] = bc.predictions
+        if bc.true_targets.size > 0:
+            samples["best_combo_true_targets"] = bc.true_targets
+        if bc.x_pts.size > 0:
+            samples["best_combo_x_pts"] = bc.x_pts
+        if bc.y_pts.size > 0:
+            samples["best_combo_y_pts"] = bc.y_pts
+        if bc.steps.size > 0:
+            samples["best_combo_steps"] = bc.steps
+        if bc.coeff_error.size > 0:
+            samples["best_combo_coeff_error"] = bc.coeff_error
+        samples["best_combo_key"] = bc.combo_key
+
+    return samples
 
 
 def compute_all_metrics(
-    results: dict,
+    tasks: Dict[str, TaskResult],
     fixed_steps: NDArray[np.integer[Any]],
     deriv_threshold: float = 1e-7,
 ) -> Dict[str, Dict[str, ComparisonMetrics]]:
     """
     Compute metrics for all (task, K, noise) combinations.
 
-    Args:
-        results: Loaded results data (with samples)
-        threshold: L* threshold for legacy convergence detection
-        fixed_steps: Steps at which to record loss values
-        deriv_threshold: Maximum |derivative| for plateau detection
-
     Returns:
         Dict mapping task_name -> combo_key -> ComparisonMetrics
     """
-    all_metrics = {}
+    all_metrics: Dict[str, Dict[str, ComparisonMetrics]] = {}
 
-    for task_name, task_data in results["tasks"].items():
+    for task_name, task in tasks.items():
         all_metrics[task_name] = {}
 
-        if "samples" not in task_data:
-            continue
+        for combo in task.combos:
+            maml_losses = combo.maml.fine_tune.train_losses
+            baseline_losses = combo.baseline.fine_tune.train_losses
 
-        for combo_key, combo_data in task_data["samples"].items():
-            maml_losses = combo_data.get("maml_losses")
-            baseline_losses = combo_data.get("baseline_losses")
-
-            if maml_losses is None or baseline_losses is None:
+            if not maml_losses or not baseline_losses:
                 continue
-
-            # Get holdout losses if available
-            maml_holdout = combo_data.get("maml_holdout_losses")
-            baseline_holdout = combo_data.get("baseline_holdout_losses")
 
             metrics = compute_comparison_metrics(
                 maml_losses=maml_losses,
                 baseline_losses=baseline_losses,
                 fixed_steps=fixed_steps,
                 deriv_threshold=deriv_threshold,
-                maml_holdout_losses=maml_holdout,
-                baseline_holdout_losses=baseline_holdout,
+                maml_holdout_losses=combo.maml.fine_tune.holdout_losses,
+                baseline_holdout_losses=combo.baseline.fine_tune.holdout_losses,
             )
-            all_metrics[task_name][combo_key] = metrics
+            all_metrics[task_name][combo.combo_key] = metrics
 
     return all_metrics
 
 
 def generate_per_task_figures(
-    results: dict,
+    tasks: Dict[str, TaskResult],
     all_metrics: Dict[str, Dict[str, ComparisonMetrics]],
     k_values: NDArray[np.integer[Any]],
     fixed_steps: NDArray[np.integer[Any]],
@@ -391,8 +395,12 @@ def generate_per_task_figures(
 ) -> None:
     """Generate all per-task figures."""
 
-    for task_name, task_data in results["tasks"].items():
-        suffix = _task_dir_worse_suffix(task_data, fixed_steps.tolist())
+    for task_name, task in tasks.items():
+        # Compat bridge: build old-style dicts from typed data
+        task_data = task.to_json_dict()
+        task_data["samples"] = _task_to_samples_dict(task)
+
+        suffix = _task_dir_worse_suffix(task, fixed_steps.tolist())
 
         task_dir = output_dir / "per_task" / f"{task_name}{suffix}"
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -915,7 +923,7 @@ def generate_per_task_figures(
 
 
 def generate_aggregated_figures(
-    results: dict,
+    tasks: Dict[str, TaskResult],
     all_metrics: Dict[str, Dict[str, ComparisonMetrics]],
     k_values: NDArray[np.integer[Any]],
     fixed_steps: NDArray[np.integer[Any]],
@@ -930,8 +938,15 @@ def generate_aggregated_figures(
 ) -> None:
     """Generate aggregated figures (mean ± std across tasks)."""
 
+    # Build compat bridge: old-style dicts from typed data
+    results_tasks: Dict[str, dict] = {}
+    for tn, t in tasks.items():
+        td = t.to_json_dict()
+        td["samples"] = _task_to_samples_dict(t)
+        results_tasks[tn] = td
+
     # Build coefficient grouping from any task's specs (structure is PDE-constant)
-    any_task = next(iter(results["tasks"].values()), {})
+    any_task = next(iter(results_tasks.values()), {})
     specs = any_task.get("coefficient_specs", [])
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for s in specs:
@@ -958,7 +973,7 @@ def generate_aggregated_figures(
         agg_fixed_steps = None
         for task_name in task_names:
             any_combo = next(
-                iter(results["tasks"][task_name].get("samples", {}).values()), {}
+                iter(results_tasks[task_name].get("samples", {}).values()), {}
             )
             fs = any_combo.get("fixed_steps")
             if fs is not None:
@@ -994,7 +1009,7 @@ def generate_aggregated_figures(
                         has_data = False
 
                         for task_name in task_names:
-                            task_data = results["tasks"][task_name]["samples"].get(
+                            task_data = results_tasks[task_name]["samples"].get(
                                 combo_key, {}
                             )
                             true_arr = task_data.get(f"maml_{member_names[0]}_true")
@@ -1095,7 +1110,7 @@ def generate_aggregated_figures(
                 baseline_plateau_steps = []
 
                 for task_name in task_names:
-                    task_data = results["tasks"][task_name]["samples"].get(
+                    task_data = results_tasks[task_name]["samples"].get(
                         combo_key, {}
                     )
                     mt = task_data.get("maml_losses")
@@ -1261,7 +1276,7 @@ def generate_aggregated_figures(
             has_jacobian_data = False
 
             for task_name in task_names:
-                task_samples = results["tasks"][task_name]["samples"]
+                task_samples = results_tasks[task_name]["samples"]
                 maml_errors = np.full((len(noise_levels), len(k_values)), np.nan)
                 baseline_errors = np.full(
                     (len(noise_levels), len(k_values)), np.nan
@@ -1344,7 +1359,7 @@ def generate_aggregated_figures(
                 baseline_per_task = []
 
                 for task_name in task_names:
-                    task_samples = results["tasks"][task_name]["samples"]
+                    task_samples = results_tasks[task_name]["samples"]
                     maml_row: list[float] = []
                     baseline_row: list[float] = []
 
@@ -1427,7 +1442,7 @@ def generate_aggregated_figures(
                 baseline_per_task = []
 
                 for task_name in task_names:
-                    task_samples = results["tasks"][task_name]["samples"]
+                    task_samples = results_tasks[task_name]["samples"]
                     maml_row = []
                     baseline_row = []
 
@@ -1934,31 +1949,24 @@ def main():
 
     results = load_results_with_samples(results_path)
     print(f"Loaded from: {results_path}")
-    print(f"Tasks: {len(results['tasks'])}")
+    print(f"Tasks: {len(results.tasks)}")
     print()
 
-    # Get parameters
+    # Get parameters — prefer results.json config (what evaluation actually used)
+    rc = results.config
     ev = cfg.evaluation
-    k_values: NDArray[np.integer[Any]] = np.array(
-        results["config"].get("k_values", ev.k_values)
-    )
-    noise_levels: NDArray[np.floating[Any]] = np.array(
-        results["config"].get("noise_levels", ev.noise_levels)
-    )
-    fixed_steps: NDArray[np.integer[Any]] = np.array(
-        results["config"].get("fixed_steps", ev.fixed_steps)
-    )
+    k_values: NDArray[np.integer[Any]] = np.array(rc.k_values or ev.k_values)
+    noise_levels: NDArray[np.floating[Any]] = np.array(rc.noise_levels or ev.noise_levels)
+    fixed_steps: NDArray[np.integer[Any]] = np.array(rc.fixed_steps or ev.fixed_steps)
     deriv_threshold = float(ev.deriv_threshold)
-    holdout_size = int(
-        results["config"].get("holdout_size", ev.holdout_size)
-    )
+    holdout_size = int(rc.holdout_size or ev.holdout_size)
     # Compute metrics only when needed (generalization, loss-ratio, noise/sample)
     if sel.needs_metrics():
         print("-" * 60)
         print("Computing metrics...")
         print("-" * 60)
 
-        all_metrics = compute_all_metrics(results, fixed_steps, deriv_threshold)
+        all_metrics = compute_all_metrics(results.tasks, fixed_steps, deriv_threshold)
         print(f"Computed metrics for {len(all_metrics)} tasks")
         print()
     else:
@@ -2005,7 +2013,7 @@ def main():
     print("Generating per-task figures...")
     print("-" * 60)
     generate_per_task_figures(
-        results=results,
+        tasks=results.tasks,
         all_metrics=all_metrics,
         k_values=k_values,
         noise_levels=noise_levels,
@@ -2023,7 +2031,7 @@ def main():
     print("Generating aggregated figures...")
     print("-" * 60)
     generate_aggregated_figures(
-        results=results,
+        tasks=results.tasks,
         all_metrics=all_metrics,
         k_values=k_values,
         noise_levels=noise_levels,
