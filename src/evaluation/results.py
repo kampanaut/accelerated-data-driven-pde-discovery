@@ -65,7 +65,7 @@ results.json structure:
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 
@@ -105,8 +105,8 @@ class MethodResult:
     # Raw arrays for NPZ (not serialized to JSON)
     jacobian_estimates: Dict[str, np.ndarray] = field(default_factory=dict)  # coeff_name → (n_steps, holdout)
     jacobian_true: Dict[str, np.ndarray] = field(default_factory=dict)      # coeff_name → (1,)
-    pred_errors: Optional[np.ndarray] = None   # (n_steps, holdout, n_outputs)
-    weights: Optional[np.ndarray] = None       # (n_steps, n_params) if log_weights
+    pred_errors: np.ndarray = field(default_factory=lambda: np.array([]))    # (n_steps, holdout, n_outputs)
+    weights: np.ndarray = field(default_factory=lambda: np.array([]))        # (n_steps, n_params) if log_weights
 
 
 @dataclass
@@ -121,13 +121,12 @@ class WorseFlags:
 
 @dataclass
 class ComboResult:
-    """Result for one (k, noise) combination."""
+    """Result for one (k, noise) combination. Always complete — errors exit early."""
     k: int = 0
     noise: float = 0.0
-    maml: Optional[MethodResult] = None
-    baseline: Optional[MethodResult] = None
-    worse: Optional[WorseFlags] = None
-    error: Optional[str] = None
+    maml: MethodResult = field(default_factory=MethodResult)
+    baseline: MethodResult = field(default_factory=MethodResult)
+    worse: WorseFlags = field(default_factory=WorseFlags)
 
     @property
     def combo_key(self) -> str:
@@ -141,12 +140,12 @@ class ComboResult:
 class BestComboData:
     """Prediction snapshots from re-fine-tuning the best combo (for spatial viz)."""
     combo_key: str = ""
-    predictions: Optional[np.ndarray] = None     # (n_steps, holdout, n_outputs)
-    true_targets: Optional[np.ndarray] = None    # (holdout, n_outputs)
-    x_pts: Optional[np.ndarray] = None           # (holdout,)
-    y_pts: Optional[np.ndarray] = None           # (holdout,)
-    steps: Optional[np.ndarray] = None           # (n_steps,)
-    coeff_error: Optional[np.ndarray] = None     # (n_steps,)
+    predictions: np.ndarray = field(default_factory=lambda: np.array([]))   # (n_steps, holdout, n_outputs)
+    true_targets: np.ndarray = field(default_factory=lambda: np.array([]))  # (holdout, n_outputs)
+    x_pts: np.ndarray = field(default_factory=lambda: np.array([]))         # (holdout,)
+    y_pts: np.ndarray = field(default_factory=lambda: np.array([]))         # (holdout,)
+    steps: np.ndarray = field(default_factory=lambda: np.array([]))         # (n_steps,)
+    coeff_error: np.ndarray = field(default_factory=lambda: np.array([]))   # (n_steps,)
 
 
 # ── Task level ───────────────────────────────────────────────────────────
@@ -160,8 +159,7 @@ class TaskResult:
     coefficient_specs: list = field(default_factory=list)
     ic_type: str = ""
     n_samples: int = 0
-    loss_worse_steps: List[int] = field(default_factory=list)
-    coeff_worse_steps: Dict[str, List[int]] = field(default_factory=dict)
+    worse: WorseFlags = field(default_factory=WorseFlags)  # union across all combos
     combos: List[ComboResult] = field(default_factory=list)
     best_combo: BestComboData = field(default_factory=BestComboData)
 
@@ -173,30 +171,23 @@ class TaskResult:
             "coefficient_specs": self.coefficient_specs,
             "ic_type": self.ic_type,
             "n_samples": self.n_samples,
-            "loss_worse_steps": self.loss_worse_steps,
-            "coeff_worse_steps": self.coeff_worse_steps,
+            "loss_worse_steps": self.worse.loss_steps,
+            "coeff_worse_steps": self.worse.coeff_steps,
         }
 
         for combo in self.combos:
             ck = combo.combo_key
 
-            if combo.error is not None:
-                d[f"error_{ck}"] = combo.error
-                continue
+            d[f"coefficient_recovery_{ck}"] = {
+                "fixed_steps": None,  # filled by caller from EvalConfig
+                "maml": _summary_to_flat(combo.maml.coefficient_recovery),
+                "baseline": _summary_to_flat(combo.baseline.coefficient_recovery),
+            }
 
-            if combo.maml and combo.baseline:
-                # Coefficient recovery — flatten to old format
-                d[f"coefficient_recovery_{ck}"] = {
-                    "fixed_steps": None,  # filled by caller from EvalConfig
-                    "maml": _summary_to_flat(combo.maml.coefficient_recovery),
-                    "baseline": _summary_to_flat(combo.baseline.coefficient_recovery),
-                }
-
-            if combo.worse:
-                d[f"worse_{ck}"] = {
-                    "loss_steps": combo.worse.loss_steps,
-                    "coeff_steps": combo.worse.coeff_steps,
-                }
+            d[f"worse_{ck}"] = {
+                "loss_steps": combo.worse.loss_steps,
+                "coeff_steps": combo.worse.coeff_steps,
+            }
 
         return d
 
@@ -205,15 +196,9 @@ class TaskResult:
         npz: Dict[str, Any] = {}
 
         for combo in self.combos:
-            if combo.error is not None:
-                continue
-
             ck = combo.combo_key
 
             for label, method in [("maml", combo.maml), ("baseline", combo.baseline)]:
-                if method is None:
-                    continue
-
                 npz[f"{ck}/{label}_train_losses"] = np.array(method.fine_tune.train_losses)
                 npz[f"{ck}/{label}_holdout_losses"] = np.array(method.fine_tune.holdout_losses)
 
@@ -222,26 +207,26 @@ class TaskResult:
                 for coeff_name, arr in method.jacobian_true.items():
                     npz[f"{ck}/{label}/{coeff_name}_true"] = arr
 
-                if method.pred_errors is not None:
+                if method.pred_errors.size > 0:
                     npz[f"{ck}/{label}/pred_errors"] = method.pred_errors
-                if method.weights is not None:
+                if method.weights.size > 0:
                     npz[f"{ck}/{label}/weights"] = method.weights
 
         # Best combo prediction data
         if self.best_combo.combo_key:
             bc = self.best_combo
             npz["best_combo/key"] = np.array(bc.combo_key)
-            if bc.predictions is not None:
+            if bc.predictions.size > 0:
                 npz["best_combo/predictions"] = bc.predictions
-            if bc.true_targets is not None:
+            if bc.true_targets.size > 0:
                 npz["best_combo/true_targets"] = bc.true_targets
-            if bc.x_pts is not None:
+            if bc.x_pts.size > 0:
                 npz["best_combo/x_pts"] = bc.x_pts
-            if bc.y_pts is not None:
+            if bc.y_pts.size > 0:
                 npz["best_combo/y_pts"] = bc.y_pts
-            if bc.steps is not None:
+            if bc.steps.size > 0:
                 npz["best_combo/steps"] = bc.steps
-            if bc.coeff_error is not None:
+            if bc.coeff_error.size > 0:
                 npz["best_combo/coeff_error"] = bc.coeff_error
 
         return npz
@@ -297,7 +282,7 @@ def build_method_result(
     fine_tune_result: FineTuneResult,
     jac_snapshots: list,
     pred_snapshots: list,
-    weight_snapshots: Optional[list] = None,
+    weight_snapshots: list | None = None,
 ) -> MethodResult:
     """Build MethodResult from raw fine-tune output and Jacobian snapshots."""
     # Coefficient recovery summary
@@ -331,8 +316,8 @@ def build_method_result(
         coefficient_recovery=summary,
         jacobian_estimates=jac_estimates,
         jacobian_true=jac_true,
-        pred_errors=np.stack(pred_snapshots) if pred_snapshots else None,
-        weights=np.stack(weight_snapshots) if weight_snapshots else None,
+        pred_errors=np.stack(pred_snapshots) if pred_snapshots else np.array([]),
+        weights=np.stack(weight_snapshots) if weight_snapshots else np.array([]),
     )
 
 

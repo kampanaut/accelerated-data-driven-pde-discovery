@@ -444,18 +444,17 @@ def evaluate_task(
                         coeff_steps=coeff_worse_steps,
                     ),
                 )
-                task_result.combos.append(combo)
 
                 # Accumulate task-level flags (union across combos)
                 for step in loss_worse_steps:
-                    if step not in task_result.loss_worse_steps:
-                        task_result.loss_worse_steps.append(step)
+                    if step not in task_result.worse.loss_steps:
+                        task_result.worse.loss_steps.append(step)
                 for n, steps in coeff_worse_steps.items():
-                    if n not in task_result.coeff_worse_steps:
-                        task_result.coeff_worse_steps[n] = []
+                    if n not in task_result.worse.coeff_steps:
+                        task_result.worse.coeff_steps[n] = []
                     for step in steps:
-                        if step not in task_result.coeff_worse_steps[n]:
-                            task_result.coeff_worse_steps[n].append(step)
+                        if step not in task_result.worse.coeff_steps[n]:
+                            task_result.worse.coeff_steps[n].append(step)
 
                 # Print summary
                 maml_train_final = maml_result.train_losses[-1]
@@ -483,13 +482,17 @@ def evaluate_task(
                     f"BL(train={baseline_train_final:.2e}, holdout={baseline_holdout_final:.2e}){flag_str}"
                 )
 
-            except FileNotFoundError as e:
-                print(f"SKIPPED ({e})")
-                task_result.combos.append(ComboResult(k=k, noise=noise, error=str(e)))
+                task_result.combos.append(combo)
 
             except Exception as e:
-                print(f"ERROR ({e})")
-                task_result.combos.append(ComboResult(k=k, noise=noise, error=str(e)))
+                import traceback
+                print(f"\n{'=' * 60}")
+                print(f"FATAL: {type(e).__name__} during combo K={k}, noise={noise:.0%}:")
+                print(f"{'=' * 60}")
+                traceback.print_exc()
+                print(f"{'=' * 60}")
+                print("Fix the issue before running evaluation again.")
+                sys.exit(1)
 
     # ─── Best-combo prediction capture ─────────────────────────────────────
     # Re-fine-tune the best combo and record model predictions at each step
@@ -883,11 +886,8 @@ def main():
             combo_stats_by_ic[ic_type] = []
 
         for combo in task_result.combos:
-            if combo.error is not None or combo.maml is None or combo.baseline is None:
-                continue
-
-            loss_worse_any = combo.worse is not None and len(combo.worse.loss_steps) > 0
-            coeff_worse_any = combo.worse is not None and any(
+            loss_worse_any = len(combo.worse.loss_steps) > 0
+            coeff_worse_any = any(
                 len(s) > 0 for s in combo.worse.coeff_steps.values()
             )
 
