@@ -44,6 +44,7 @@ class _TeeStream:
 
 
 import torch
+import torch.nn as nn
 torch.set_num_threads(9)
 torch.set_num_interop_threads(4)
 
@@ -226,6 +227,14 @@ def main():
         coeff_str = ", ".join(f"{k}={v:.4f}" for k, v in coeff_means.items())
         print(f"Weight init: expected ({coeff_str})")
         print(f"  Weights: {weight_vec.tolist()}")
+
+    # Xavier init (Raissi 2018 — DeepHPM uses Xavier with sin activation)
+    if weight_init is None:
+        with torch.no_grad():
+            for p in model.parameters():
+                if p.dim() >= 2:
+                    nn.init.xavier_uniform_(p)
+        print("Weight init: xavier_uniform (Raissi 2018)")
 
     print(model)
     print()
