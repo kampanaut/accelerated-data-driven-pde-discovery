@@ -118,33 +118,24 @@ class MeTALModule(nn.Module):
         super().__init__()
         self.n_steps = n_steps
 
-        # Dimensions
-        support_adapter_dim = 1 + n_base_params
-        support_loss_dim = support_adapter_dim + (2 * output_dim)
-        query_per_sample_dim = n_base_params + output_dim + 1
+        # Dimensions: 1 + L + N (Baik et al. 2021, Supplementary §F)
+        # 1 = loss scalar, L = n_base_params (layer-wise means), N = output_dim
+        tau_dim = 1 + n_base_params + output_dim
         n_loss_params = 4  # W1, b1, W2, b2 per StepLossNetwork
 
         # Per-step networks (stored as typed lists, registered via add_module)
         self._support_loss: List[StepLossNetwork] = []
         self._support_affine: List[StepAffineAdapter] = []
-        self._query_loss: List[StepLossNetwork] = []
-        self._query_affine: List[StepAffineAdapter] = []
 
         for i in range(n_steps):
-            sl = StepLossNetwork(support_loss_dim, hidden_dim)
-            sa = StepAffineAdapter(support_adapter_dim, n_loss_params, hidden_dim)
-            ql = StepLossNetwork(query_per_sample_dim, hidden_dim)
-            qa = StepAffineAdapter(query_per_sample_dim, n_loss_params, hidden_dim)
+            sl = StepLossNetwork(tau_dim, hidden_dim)
+            sa = StepAffineAdapter(tau_dim, n_loss_params, hidden_dim)
 
             self.add_module(f"support_loss_{i}", sl)
             self.add_module(f"support_affine_{i}", sa)
-            self.add_module(f"query_loss_{i}", ql)
-            self.add_module(f"query_affine_{i}", qa)
 
             self._support_loss.append(sl)
             self._support_affine.append(sa)
-            self._query_loss.append(ql)
-            self._query_affine.append(qa)
 
     def support_step(
         self,
@@ -157,32 +148,35 @@ class MeTALModule(nn.Module):
         """
         Compute meta support loss for one inner step.
 
-        Aggregate τ → normalize → adapter → transform loss params
-        → per-sample τ (unnormalized agg expanded + preds + targets) → normalize → loss net → mean
+        τ = [L, θ_means, f(x)] (Baik et al. 2021, Algorithm 2 line 5, Supplementary §F)
+        Adapter: batch-wise mean of input → one set of affine params for the task
+        Loss network: per-sample τ → scalar per sample → batch-wise mean of output
         """
-        # Aggregate task state
-        loss = cost_function(support_pred, support_y)  # you get the loss
+        # Task state components
+        loss = cost_function(support_pred, support_y)
         param_means = torch.stack([p.mean() for p in fmodel.parameters()])
-        tau_agg = torch.cat(
-            [loss.unsqueeze(0), param_means], dim=0
-        )  # you build a loss with auxilliary task information
+        pred_mean = support_pred.mean(dim=0)  # batch-wise mean of predictions
 
-        # Adapter operates on normalized aggregate
+        # Adapter: aggregate τ = [loss, param_means, mean(predictions)]  shape: (1+L+N,)
+        tau_aggregate = torch.cat(
+            [loss.unsqueeze(0), param_means, pred_mean], dim=0
+        )
         adapted_params = self._support_affine[step_idx](
-            _z_normalize(tau_agg),
+            _z_normalize(tau_aggregate),
             list(self._support_loss[step_idx].parameters()),
         )
 
-        # Loss network operates on normalized per-sample state
+        # Loss network: per-sample τ = [loss, param_means, predictions]  shape: (K, 1+L+N)
         tau_per_sample = torch.cat(
             [
-                tau_agg.unsqueeze(0).expand(support_pred.size(0), -1),
+                loss.unsqueeze(0).unsqueeze(0).expand(support_pred.size(0), -1),
+                param_means.unsqueeze(0).expand(support_pred.size(0), -1),
                 support_pred,
-                support_y,
             ],
             dim=-1,
         )
 
+        # Batch-wise mean of output (Supplementary §F)
         return (
             self._support_loss[step_idx]
             .functional_forward(_z_normalize(tau_per_sample), adapted_params)
@@ -232,14 +226,12 @@ class MeTALModule(nn.Module):
         fmodel: nn.Module,
         support_pred: torch.Tensor,
         support_y: torch.Tensor,
-        query_pred: torch.Tensor,
         cost_function: Callable,
     ) -> float:
-        """Compute combined meta loss for logging (no grad)."""
+        """Compute meta support loss for logging (no grad)."""
         step_idx = min(step_idx, self.n_steps - 1)
         ms = self.support_step(step_idx, fmodel, support_pred, support_y, cost_function)
-        mq = self.query_step(step_idx, fmodel, query_pred)
-        return (ms + mq).item()
+        return ms.item()
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +579,7 @@ class MAMLTrainer:
         step_idx: int,
         lr_override: Optional[Dict] = None,
     ) -> None:
-        """MeTAL inner step: support_loss + meta_support_loss + meta_query_loss."""
+        """MeTAL inner step: support_loss + meta_support_loss."""
         assert self.metal is not None
 
         support_pred = fmodel(support_x)
@@ -596,10 +588,7 @@ class MAMLTrainer:
             step_idx, fmodel, support_pred, support_y, self._pointwise_loss
         )
 
-        query_pred = fmodel(query_x)
-        meta_query = self.metal.query_step(step_idx, fmodel, query_pred)
-
-        diffopt.step(support_loss + meta_support + meta_query, override=lr_override, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
+        diffopt.step(support_loss + meta_support, override=lr_override, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Core MAML
@@ -663,9 +652,8 @@ class MAMLTrainer:
                 pre_loss = self.cost_function(pre_pred, support_y, support_coords)
                 pre_metal = ""
                 if self.metal is not None:
-                    pre_query = fmodel(query_x)
                     ml = self.metal.log_loss(
-                        0, fmodel, pre_pred, support_y, pre_query, self._pointwise_loss
+                        0, fmodel, pre_pred, support_y, self._pointwise_loss
                     )
                     pre_metal = f", metal_loss={ml:.6f}"
                 print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
@@ -683,10 +671,9 @@ class MAMLTrainer:
                 post_loss = self.cost_function(post_pred, support_y, support_coords)
                 post_metal = ""
                 if self.metal is not None:
-                    post_query = fmodel(query_x)
                     ml = self.metal.log_loss(
                         self.config.inner_steps - 1,
-                        fmodel, post_pred, support_y, post_query, self._pointwise_loss,
+                        fmodel, post_pred, support_y, self._pointwise_loss,
                     )
                     post_metal = f", metal_loss={ml:.6f}"
                 print(
@@ -749,9 +736,8 @@ class MAMLTrainer:
                 pre_loss = self.cost_function(pre_pred, support_y, support_coords)
                 pre_metal = ""
                 if self.metal is not None:
-                    pre_query = fmodel(query_x)
                     ml = self.metal.log_loss(
-                        0, fmodel, pre_pred, support_y, pre_query, self._pointwise_loss
+                        0, fmodel, pre_pred, support_y, self._pointwise_loss
                     )
                     pre_metal = f", metal_loss={ml:.6f}"
                 print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
@@ -776,10 +762,9 @@ class MAMLTrainer:
                 post_loss = self.cost_function(post_pred, support_y, support_coords)
                 post_metal = ""
                 if self.metal is not None:
-                    post_query = fmodel(query_x)
                     ml = self.metal.log_loss(
                         self.config.inner_steps - 1,
-                        fmodel, post_pred, support_y, post_query, self._pointwise_loss,
+                        fmodel, post_pred, support_y, self._pointwise_loss,
                     )
                     post_metal = f", metal_loss={ml:.6f}"
                 print(
