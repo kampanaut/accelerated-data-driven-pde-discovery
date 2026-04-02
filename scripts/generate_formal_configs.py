@@ -90,12 +90,12 @@ GRID2_LOSS_PRESETS = Preset([
     }),
     ("mamlpp", {
         "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
-        "warmup_iterations": 0, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
+        "use_scheduler": True, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
     }),
     ("mamlpp+metal", {
         "metal": {"enabled": True, "hidden_dim": 64},
         "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
-        "warmup_iterations": 0, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
+        "use_scheduler": True, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
     }),
 ])
 
@@ -125,9 +125,9 @@ DEFAULT = {
     "checkpoint_interval": 100,
     "log_interval": 1,
     "first_order": False,
-    "warmup_iterations": 100,
-    "use_scheduler": True,
-    "scheduler_type": "warm_restarts",
+    "warmup_iterations": 0,
+    "use_scheduler": False,
+    "scheduler_type": "cosine",
     "T_0": 200,
     "T_mult": 2,
     "min_lr": 0.00001,
