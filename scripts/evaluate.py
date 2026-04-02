@@ -239,8 +239,7 @@ def fine_tune(
 
         grad_loss = cost_fn(pred, y)
         meta_support = metal.support_step(i, model, pred, y, cost_fn)  # type: ignore[union-attr]
-        meta_query = metal.query_step(i, model, pred)  # type: ignore[union-attr]
-        _step(i, grad_loss + meta_support + meta_query)
+        _step(i, grad_loss + meta_support)
 
     # Phase 2: Standard loss for remaining steps
     for i in range(metal_steps, max_steps):
