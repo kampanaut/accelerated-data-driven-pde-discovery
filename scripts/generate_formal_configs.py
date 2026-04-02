@@ -86,14 +86,14 @@ def _cheat_layers(input_dim: int, output_dim: int) -> list[dict]:
 GRID2_LOSS_PRESETS = Preset([
     ("baseline", {}),
     ("metal", {
-        "metal": {"enabled": True, "hidden_dim": 64},
+        "metal": {"enabled": True, "hidden_dim": 0},
     }),
     ("mamlpp", {
         "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
         "use_scheduler": True, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
     }),
     ("mamlpp+metal", {
-        "metal": {"enabled": True, "hidden_dim": 64},
+        "metal": {"enabled": True, "hidden_dim": 0},
         "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
         "use_scheduler": True, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
     }),
@@ -163,10 +163,10 @@ DEFAULT = {
 
 OLD_LOSS_PRESETS = Preset([
     ("baseline", {}),
-    ("metal", {"metal": {"enabled": True, "hidden_dim": 64}}),
+    ("metal", {"metal": {"enabled": True, "hidden_dim": 0}}),
     ("spectral", {"spectral_loss": {"enabled": True, "mode_size": 32}}),
     ("metal-spectral", {
-        "metal": {"enabled": True, "hidden_dim": 64},
+        "metal": {"enabled": True, "hidden_dim": 0},
         "spectral_loss": {"enabled": True, "mode_size": 32},
     }),
 ])

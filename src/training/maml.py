@@ -48,10 +48,11 @@ class StepLossNetwork(nn.Module):
     version is used via functional_forward().
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int = 64):
+    def __init__(self, input_dim: int, hidden_dim: int = 0):
         super().__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 1)
+        h = hidden_dim if hidden_dim > 0 else input_dim
+        self.fc1 = nn.Linear(input_dim, h)
+        self.fc2 = nn.Linear(h, 1)
 
     def functional_forward(
         self, x: torch.Tensor, params: List[torch.Tensor]
@@ -70,10 +71,11 @@ class StepAffineAdapter(nn.Module):
     Identity at initialization (multiplier_bias, offset_bias = 0).
     """
 
-    def __init__(self, tau_dim: int, n_loss_params: int, hidden_dim: int = 64):
+    def __init__(self, tau_dim: int, n_loss_params: int, hidden_dim: int = 0):
         super().__init__()
-        self.fc1 = nn.Linear(tau_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, n_loss_params * 2)
+        h = hidden_dim if hidden_dim > 0 else tau_dim
+        self.fc1 = nn.Linear(tau_dim, h)
+        self.fc2 = nn.Linear(h, n_loss_params * 2)
         self.multiplier_bias = nn.Parameter(torch.zeros(n_loss_params))
         self.offset_bias = nn.Parameter(torch.zeros(n_loss_params))
 

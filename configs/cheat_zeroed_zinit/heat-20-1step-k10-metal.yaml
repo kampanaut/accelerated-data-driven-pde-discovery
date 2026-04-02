@@ -44,7 +44,7 @@ training:
   weight_init: zeros
   metal:
     enabled: true
-    hidden_dim: 64
+    hidden_dim: 0
 evaluation:
   k_values:
   - 10
