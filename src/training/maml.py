@@ -161,6 +161,9 @@ class MeTALModule(nn.Module):
         tau_aggregate = torch.cat(
             [loss.unsqueeze(0), param_means, pred_mean], dim=0
         )
+        # backpropagation trace, from support_loss[step_idx].functional_forward(), updates
+        # support_affine[step_idx] in terms of the loss network output
+        # support_loss[step_idx].functional_forward()
         adapted_params = self._support_affine[step_idx](
             _z_normalize(tau_aggregate),
             list(self._support_loss[step_idx].parameters()),
@@ -588,6 +591,20 @@ class MAMLTrainer:
             step_idx, fmodel, support_pred, support_y, self._pointwise_loss
         )
 
+        # θ_{i,j+1} = θ_{i,j} - α ∇_{θ_{i,j}} (support_loss + L_{φ'_{i,j}}(τ_{i,j}))
+        # Only fmodel (θ) is updated. MeTAL weights (φ, ψ) are constants here —
+        # they only get gradients from the outer loop via query_loss.backward().
+        # The gradient is taken on a composite landscape: support_loss (standard MSE)
+        # + meta_support (learned surface from _support_loss[step_idx]). Each step
+        # has a different loss network with different weights, so the learned landscape
+        # changes at every step — the sequence of landscapes is the adaptation strategy.
+        #
+        # Distinction: "learned landscape" vs "provided landscape via reaction".
+        # - Learned landscape: the learned distribution of all possible ways to react —
+        #   encoded in the MeTAL network weights (φ, ψ) from meta-training.
+        # - Provided landscape via reaction: at inference, applying what was learned to
+        #   the current task state (τ) and outputting a concrete loss landscape, which
+        #   dictates the gradient update of each parameter of the step_idx model.
         diffopt.step(support_loss + meta_support, override=lr_override, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
