@@ -77,7 +77,7 @@ class TrainingSection:
     max_iterations: int = 15000
     patience: int = 50
     checkpoint_interval: int = 0
-    log_interval: int = 10
+    log_interval: int = 20
 
     # Network architecture — between log_interval and first_order to match old YAML order
     # (XOR: layers OR hidden_dims+activation+input_dim+output_dim)

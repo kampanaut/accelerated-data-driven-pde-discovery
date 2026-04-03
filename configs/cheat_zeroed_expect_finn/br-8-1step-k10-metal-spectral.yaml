@@ -22,7 +22,7 @@ training:
   max_iterations: 500
   patience: 300
   checkpoint_interval: 0
-  log_interval: 1
+  log_interval: 20
   layers:
   - input: 10
   - output: 2

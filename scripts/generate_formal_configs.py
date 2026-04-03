@@ -123,7 +123,7 @@ DEFAULT = {
     "max_iterations": 15000,
     "patience": 0,
     "checkpoint_interval": 100,
-    "log_interval": 1,
+    "log_interval": 20,
     "first_order": False,
     "warmup_iterations": 0,
     "use_scheduler": False,
