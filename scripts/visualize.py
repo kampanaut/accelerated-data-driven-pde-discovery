@@ -15,7 +15,7 @@ import sys
 import argparse
 import shutil
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 
 from numpy.typing import NDArray
 import yaml
@@ -1516,6 +1516,7 @@ def generate_cross_experiment_scatter(
     sel: GraphSelection = GraphSelection(
         graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
     ),
+    train_coeff_values: Optional[dict[str, list[float]]] = None,
 ) -> None:
     """
     Generate cross-experiment coefficient recovery scatter plots.
@@ -1641,6 +1642,7 @@ def generate_cross_experiment_scatter(
             save_path=primary_path,
             dpi=dpi,
             step=step_val,
+            train_coeff_values=train_coeff_values,
         )
         plt.close(fig)
 
@@ -1843,8 +1845,20 @@ def main():
                     (dir_name, EvaluationResults.from_dir(rpath.parent))
                 )
 
+            # Load training coefficient values for distribution lines
+            train_coeffs: Optional[dict[str, list[float]]] = None
+            train_dir = Path(cfg.data.meta_train_dir)
+            if train_dir.exists():
+                train_coeffs = {}
+                for npz_path in sorted(train_dir.glob("*.npz")):
+                    sp = np.load(npz_path, allow_pickle=True)["simulation_params"].item()
+                    for k, v in sp.items():
+                        if isinstance(v, (int, float)):
+                            train_coeffs.setdefault(k, []).append(float(v))
+
             generate_cross_experiment_scatter(
-                config_experiment_results, scatter_output_dirs, dpi, sel
+                config_experiment_results, scatter_output_dirs, dpi, sel,
+                train_coeff_values=train_coeffs,
             )
         else:
             print("  No experiments with evaluation results found.")
