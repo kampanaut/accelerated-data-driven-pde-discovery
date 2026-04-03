@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from ..config import ExperimentConfig
 import copy
 import signal
+import sys
 
 import torch
 import torch.nn as nn
@@ -658,22 +659,25 @@ class MAMLTrainer:
 
         inner_opt = self._create_inner_opt()
 
+        verbose = not getattr(sys.stdout, 'quiet', False)
+
         with higher.innerloop_ctx(
             self.model,
             inner_opt,
             copy_initial_weights=False,
             track_higher_grads=not self._current_first_order,
         ) as (fmodel, diffopt):
-            with torch.no_grad():
-                pre_pred = fmodel(support_x)
-                pre_loss = self.cost_function(pre_pred, support_y, support_coords)
-                pre_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        0, fmodel, pre_pred, support_y, self._pointwise_loss
-                    )
-                    pre_metal = f", metal_loss={ml:.6f}"
-                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
+            if verbose:
+                with torch.no_grad():
+                    pre_pred = fmodel(support_x)
+                    pre_loss = self.cost_function(pre_pred, support_y, support_coords)
+                    pre_metal = ""
+                    if self.metal is not None:
+                        ml = self.metal.log_loss(
+                            0, fmodel, pre_pred, support_y, self._pointwise_loss
+                        )
+                        pre_metal = f", metal_loss={ml:.6f}"
+                    print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
 
             for j in range(self.config.inner_steps):
                 override = self.lslr.get_override(j) if self.lslr else None
@@ -682,21 +686,22 @@ class MAMLTrainer:
                     lr_override=override,
                 )
 
-            # Post-adaptation loss (logging only)
-            with torch.no_grad():
-                post_pred = fmodel(support_x)
-                post_loss = self.cost_function(post_pred, support_y, support_coords)
-                post_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        self.config.inner_steps - 1,
-                        fmodel, post_pred, support_y, self._pointwise_loss,
+            if verbose:
+                # Post-adaptation loss (logging only)
+                with torch.no_grad():
+                    post_pred = fmodel(support_x)
+                    post_loss = self.cost_function(post_pred, support_y, support_coords)
+                    post_metal = ""
+                    if self.metal is not None:
+                        ml = self.metal.log_loss(
+                            self.config.inner_steps - 1,
+                            fmodel, post_pred, support_y, self._pointwise_loss,
+                        )
+                        post_metal = f", metal_loss={ml:.6f}"
+                    print(
+                        f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
+                        f" ({self.config.inner_steps} steps)"
                     )
-                    post_metal = f", metal_loss={ml:.6f}"
-                print(
-                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
-                    f" ({self.config.inner_steps} steps)"
-                )
 
             query_pred = fmodel(query_x)
             query_loss = self.cost_function(query_pred, query_y, query_coords)
@@ -741,23 +746,25 @@ class MAMLTrainer:
 
         inner_opt = self._create_inner_opt()
 
+        verbose = not getattr(sys.stdout, 'quiet', False)
+
         with higher.innerloop_ctx(
             self.model,
             inner_opt,
             copy_initial_weights=False,
             track_higher_grads=not self._current_first_order,
         ) as (fmodel, diffopt):
-            # Pre-adaptation loss (logging only)
-            with torch.no_grad():
-                pre_pred = fmodel(support_x)
-                pre_loss = self.cost_function(pre_pred, support_y, support_coords)
-                pre_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        0, fmodel, pre_pred, support_y, self._pointwise_loss
-                    )
-                    pre_metal = f", metal_loss={ml:.6f}"
-                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
+            if verbose:
+                with torch.no_grad():
+                    pre_pred = fmodel(support_x)
+                    pre_loss = self.cost_function(pre_pred, support_y, support_coords)
+                    pre_metal = ""
+                    if self.metal is not None:
+                        ml = self.metal.log_loss(
+                            0, fmodel, pre_pred, support_y, self._pointwise_loss
+                        )
+                        pre_metal = f", metal_loss={ml:.6f}"
+                    print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
 
             step_losses: List[torch.Tensor] = []
             weights = self._msl_weights()
@@ -773,20 +780,21 @@ class MAMLTrainer:
                 step_loss = self.cost_function(query_pred, query_y, query_coords)
                 step_losses.append(weights[j] * step_loss)
 
-            # Post-adaptation loss (logging only)
-            with torch.no_grad():
-                post_pred = fmodel(support_x)
-                post_loss = self.cost_function(post_pred, support_y, support_coords)
-                post_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        self.config.inner_steps - 1,
-                        fmodel, post_pred, support_y, self._pointwise_loss,
-                    )
-                    post_metal = f", metal_loss={ml:.6f}"
-                print(
-                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
-                    f" ({self.config.inner_steps} steps)"
+            if verbose:
+                # Post-adaptation loss (logging only)
+                with torch.no_grad():
+                    post_pred = fmodel(support_x)
+                    post_loss = self.cost_function(post_pred, support_y, support_coords)
+                    post_metal = ""
+                    if self.metal is not None:
+                        ml = self.metal.log_loss(
+                            self.config.inner_steps - 1,
+                            fmodel, post_pred, support_y, self._pointwise_loss,
+                        )
+                        post_metal = f", metal_loss={ml:.6f}"
+                    print(
+                        f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
+                        f" ({self.config.inner_steps} steps)"
                 )
 
             total_loss = torch.sum(torch.stack(step_losses))
@@ -878,15 +886,14 @@ class MAMLTrainer:
         else:
             self.patience_counter += 1
 
-        if iteration % log_interval == 0:
-            lr_str = (
-                f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
-                if self.scheduler
-                else ""
-            )
-            print(
-                f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}"
-            )
+        lr_str = (
+            f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
+            if self.scheduler
+            else ""
+        )
+        print(
+            f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}"
+        )
 
         if (
             self.patience_counter >= self.config.patience
@@ -902,13 +909,12 @@ class MAMLTrainer:
         self, iteration: int, train_loss: float, log_interval: int, checkpoint_dir: Path
     ) -> bool:
         """Per-iteration logic for interval mode: periodic saves, no best-tracking."""
-        if iteration % log_interval == 0:
-            lr_str = (
-                f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
-                if self.scheduler
-                else ""
-            )
-            print(f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}{lr_str}")
+        lr_str = (
+            f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
+            if self.scheduler
+            else ""
+        )
+        print(f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}{lr_str}")
 
         if (
             iteration > 0
@@ -1133,7 +1139,16 @@ class MAMLTrainer:
                 self.config.meta_batch_size, seed=iteration
             )
 
+            # Suppress per-task prints to stdout (still logged to buffer)
+            # Always print first iteration of each phase (start or resume)
+            verbose = (iteration == start_iter) or (iteration % log_interval == 0)
+            if hasattr(sys.stdout, 'quiet'):
+                sys.stdout.quiet = not verbose  # type: ignore[attr-defined]
+
             train_loss = self.outer_step(tasks)
+
+            if hasattr(sys.stdout, 'quiet'):
+                sys.stdout.quiet = False  # type: ignore[attr-defined]
             self._last_train_loss = train_loss
 
             if torch.tensor(train_loss).isnan():

@@ -25,19 +25,26 @@ from datetime import datetime
 
 
 class _TeeStream:
-    """Write to both stdout and a StringIO buffer."""
+    """Write to both stdout and a StringIO buffer.
+
+    When quiet=True, only writes to buffer (log file) — skips stdout.
+    Toggle with .quiet property to suppress per-task prints during training.
+    """
 
     def __init__(self, original: object):  # type: ignore[arg-type]
         self.original = original
         self.buffer = io.StringIO()
+        self.quiet = False
 
     def write(self, text: str) -> int:
-        self.original.write(text)  # type: ignore[union-attr]
+        if not self.quiet:
+            self.original.write(text)  # type: ignore[union-attr]
         self.buffer.write(text)
         return len(text)
 
     def flush(self) -> None:
-        self.original.flush()  # type: ignore[union-attr]
+        if not self.quiet:
+            self.original.flush()  # type: ignore[union-attr]
 
     def getvalue(self) -> str:
         return self.buffer.getvalue()
