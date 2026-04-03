@@ -657,14 +657,19 @@ def _draw_histogram_panel(
     for i, (est, label) in enumerate(zip(estimates, estimate_labels)):
         fill, edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
         mean, std = float(np.mean(est)), float(np.std(est))
-        kde = stats.gaussian_kde(est)
-        density = kde(x_grid)
-        ax.fill_between(
-            x_grid, density, alpha=0.4, color=fill,
-            label=f"{label}: μ={mean:.4f}, σ={std:.4f}",
-        )
-        ax.plot(x_grid, density, color=edge, linewidth=1.2)
-        ax.axvline(mean, color=fill, linestyle="-", linewidth=1.5, alpha=0.8)
+        if std < 1e-12:
+            # Constant estimates (e.g. linear model) — KDE undefined, draw vertical line
+            ax.axvline(mean, color=fill, linestyle="-", linewidth=2.5, alpha=0.8,
+                       label=f"{label}: μ={mean:.4f}, σ={std:.4f}")
+        else:
+            kde = stats.gaussian_kde(est)
+            density = kde(x_grid)
+            ax.fill_between(
+                x_grid, density, alpha=0.4, color=fill,
+                label=f"{label}: μ={mean:.4f}, σ={std:.4f}",
+            )
+            ax.plot(x_grid, density, color=edge, linewidth=1.2)
+            ax.axvline(mean, color=fill, linestyle="-", linewidth=1.5, alpha=0.8)
 
     # Truth line
     truth_label = (
@@ -1185,6 +1190,7 @@ def _scatter_panel(
     ax: pltax.Axes,
     model_data: ModelScatterData,
     coeff_name: str,
+    train_coeff_values: Optional[list[float]] = None,
 ) -> None:
     """Render one scatter panel with overlaid models, regression lines, Pearson r."""
     # Build IC color map dynamically from all task names in this panel
@@ -1263,6 +1269,16 @@ def _scatter_panel(
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
         return
 
+    # Training distribution: horizontal lines at each training task's true coefficient
+    if train_coeff_values is not None:
+        for d in train_coeff_values:
+            ax.axhline(d, color="orange", alpha=0.15, linewidth=0.8, zorder=0)
+
+    # Test distribution: horizontal lines at each test task's true coefficient
+    if all_true:
+        for d in set(all_true):
+            ax.axhline(d, color="cyan", alpha=0.15, linewidth=0.8, zorder=0)
+
     # y=x reference line
     all_vals = np.array(all_true + all_rec)
     lo, hi = float(all_vals.min()), float(all_vals.max())
@@ -1283,6 +1299,7 @@ def plot_coefficient_scatter_grid(
     dpi: int = 150,
     figsize_per_panel: Tuple[float, float] = (4.0, 3.5),
     step: Optional[int] = None,
+    train_coeff_values: Optional[dict[str, list[float]]] = None,
 ) -> pltf.Figure:
     """
     Multi-panel scatter grid: true vs recovered coefficients across experiments.
@@ -1308,7 +1325,12 @@ def plot_coefficient_scatter_grid(
                 key = (coeff_name, noise, k_val)
                 models = panel_data.get(key, [])
 
-                _scatter_panel(ax, models, coeff_name)
+                coeff_train_vals = (
+                    train_coeff_values.get(coeff_name)
+                    if train_coeff_values is not None
+                    else None
+                )
+                _scatter_panel(ax, models, coeff_name, coeff_train_vals)
 
                 # Column headers on top row
                 if row_idx == 0:
