@@ -15,11 +15,11 @@ training:
   adam_betas:
   - 0.9
   - 0.99
-  inner_steps: 5
+  inner_steps: 10
   meta_batch_size: 25
   k_shot: 800
   query_size: 1600
-  max_iterations: 15000
+  max_iterations: 5000
   patience: 0
   checkpoint_interval: 100
   log_interval: 1
@@ -55,13 +55,13 @@ evaluation:
   - 2
   - 3
   - 4
-  - 5
+  - 10
   - 50
   holdout_size: 5000
   log_weights: true
 visualization:
   dpi: 300
-  only: scatter[0,1,2,3,4,5,50],jacobian[0,5,50],generalization,best-combo
+  only: scatter[0,1,2,3,4,10,50],jacobian[0,10,50],generalization,best-combo
   compare_experiments:
   - heat-5-k800-mamlpp
   - heat-6-k10-mamlpp

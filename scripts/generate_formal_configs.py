@@ -213,6 +213,8 @@ VARIANTS = [
             "loss_preset": GRID2_LOSS_PRESETS,
             "layers": lambda pde: _cheat_layers(pde.input_dim, pde.output_dim),
             "log_weights": True,
+            "inner_steps": 10,
+            "max_iterations": 5000,
         },
     ),
     (
