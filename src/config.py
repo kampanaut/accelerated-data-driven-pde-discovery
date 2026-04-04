@@ -248,6 +248,7 @@ class ExperimentConfig:
                         "cg_steps": t.imaml.cg_steps,
                         "cg_damping": t.imaml.cg_damping,
                         "inner_optimizer": t.imaml.inner_optimizer,
+                        "proximal_every_step": t.imaml.proximal_every_step,
                     }
                 continue
 
