@@ -282,18 +282,28 @@ def main():
         print()
 
     # =========================================================================
-    # Create MAML trainer
+    # Create trainer (MAML or iMAML)
     # =========================================================================
     print("-" * 60)
-    print("Configuring MAML trainer...")
-    print("-" * 60)
-
-    trainer = MAMLTrainer(
-        model=model,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
+    if cfg.training.imaml.enabled:
+        from src.training.imaml import iMAMLTrainer
+        print("Configuring iMAML trainer...")
+        print("-" * 60)
+        trainer = iMAMLTrainer(
+            model=model,
+            cfg=cfg,
+            train_loader=train_loader,
+            val_loader=val_loader,
+        )
+    else:
+        print("Configuring MAML trainer...")
+        print("-" * 60)
+        trainer = MAMLTrainer(
+            model=model,
+            cfg=cfg,
+            train_loader=train_loader,
+            val_loader=val_loader,
+        )
 
     # Resume from checkpoint if requested
     latest_checkpoint = exp_dir / "checkpoints" / "latest_model.pt"
