@@ -56,6 +56,18 @@ class SpectralLossSection:
 
 
 @dataclass
+class IMAMLSection:
+    enabled: bool = False
+    lam: float = 2.0
+    lam_lr: float = 0.0        # 0 = fixed lambda, >0 = meta-learn lambda
+    lam_min: float = 0.0
+    cg_steps: int = 5
+    cg_damping: float = 1.0
+    inner_optimizer: str = "sgd"  # "sgd" or "lbfgs"
+    proximal_every_step: bool = True  # True = paper Eq.3, False = reference code (prox at end only)
+
+
+@dataclass
 class TrainingSection:
     """All training fields as they appear in YAML.
 
@@ -121,6 +133,7 @@ class TrainingSection:
     # Nested sections (spectral_loss before metal to match old YAML order)
     spectral_loss: SpectralLossSection = field(default_factory=SpectralLossSection)
     metal: MetalSection = field(default_factory=MetalSection)
+    imaml: IMAMLSection = field(default_factory=IMAMLSection)
 
 
 @dataclass
@@ -179,10 +192,12 @@ class ExperimentConfig:
         train_raw = dict(d.get("training", {}))
         metal = MetalSection(**train_raw.pop("metal", {}))
         spectral = SpectralLossSection(**train_raw.pop("spectral_loss", {}))
+        imaml = IMAMLSection(**train_raw.pop("imaml", {}))
         training = TrainingSection(
             **_filter_fields(TrainingSection, train_raw),
             metal=metal,
             spectral_loss=spectral,
+            imaml=imaml,
         )
 
         evaluation = EvaluationSection(**_filter_fields(EvaluationSection, d.get("evaluation", {})))
@@ -205,7 +220,7 @@ class ExperimentConfig:
 
         # Build training dict from flat fields in dataclass field order
         train_dict: dict[str, Any] = {}
-        _nested = {"metal", "spectral_loss"}
+        _nested = {"metal", "spectral_loss", "imaml"}
         # Network fields that are mutually exclusive (layers XOR hidden_dims+friends)
         _layers_format = {"hidden_dims", "activation", "input_dim", "output_dim"}
         _conv = {"conv_filters", "conv_kernel_size"}
@@ -222,6 +237,19 @@ class ExperimentConfig:
             if name == "spectral_loss":
                 if t.spectral_loss.enabled:
                     train_dict["spectral_loss"] = {"enabled": t.spectral_loss.enabled, "mode_size": t.spectral_loss.mode_size}
+                continue
+            if name == "imaml":
+                if t.imaml.enabled:
+                    train_dict["imaml"] = {
+                        "enabled": True,
+                        "lam": t.imaml.lam,
+                        "lam_lr": t.imaml.lam_lr,
+                        "lam_min": t.imaml.lam_min,
+                        "cg_steps": t.imaml.cg_steps,
+                        "cg_damping": t.imaml.cg_damping,
+                        "inner_optimizer": t.imaml.inner_optimizer,
+                        "proximal_every_step": t.imaml.proximal_every_step,
+                    }
                 continue
 
             # layers XOR old-format: only emit the format that was provided

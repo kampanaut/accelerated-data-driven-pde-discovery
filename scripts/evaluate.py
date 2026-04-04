@@ -108,6 +108,9 @@ def fine_tune(
     Ly: float = 0.0,
     spectral_mode_size: int = 0,
     max_grad_norm: float = 0.0,
+    proximal_lam: float = 0.0,
+    proximal_theta: Optional[torch.Tensor] = None,
+    inner_optimizer: str = "sgd",
 ) -> FineTuneResult:
     """
     Fine-tune model and return train/holdout loss at each step.
@@ -130,8 +133,17 @@ def fine_tune(
     """
     model.train()
 
-    # LSLR: per-param-group SGD with precomputed learned LR schedule
-    if lslr is not None:
+    # Inner optimizer: SGD (with optional LSLR) or L-BFGS
+    use_lbfgs = (inner_optimizer == "lbfgs")
+
+    if use_lbfgs:
+        param_names = None
+        lr_schedule = None
+        opt = torch.optim.LBFGS(
+            model.parameters(), lr=1.0,
+            max_iter=1, line_search_fn="strong_wolfe",
+        )
+    elif lslr is not None:
         param_names = [n for n, _ in model.named_parameters()]
         opt = torch.optim.SGD(
             [{"params": [p], "lr": lr} for p in model.parameters()]
@@ -147,6 +159,13 @@ def fine_tune(
         param_names = None
         lr_schedule = None
         opt = torch.optim.SGD(model.parameters(), lr=lr)
+
+    # Proximal term for iMAML evaluation
+    def _proximal_loss() -> torch.Tensor:
+        if proximal_lam > 0 and proximal_theta is not None:
+            phi = torch.cat([p.view(-1) for p in model.parameters()])
+            return 0.5 * proximal_lam * (phi - proximal_theta).pow(2).sum()
+        return torch.tensor(0.0, device=features.device)
 
     if metal is not None:
         metal.eval()
@@ -204,23 +223,8 @@ def fine_tune(
         on_step(model, 0)
         model.train()
 
-    def _step(step_idx: int, grad_loss: torch.Tensor) -> None:
-        """Shared step logic: backward, optimize, holdout, callback."""
-        opt.zero_grad()
-        grad_loss.backward()
-        if max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-
-        # Update per-param LRs from LSLR schedule (or fallback to fixed lr)
-        if lr_schedule is not None and param_names is not None:
-            if step_idx < lslr.n_steps:  # type: ignore[union-attr]
-                for pg, name in zip(opt.param_groups, param_names):
-                    pg["lr"] = lr_schedule[name][step_idx]
-            else:
-                for pg in opt.param_groups:
-                    pg["lr"] = lr
-        opt.step()
-
+    def _holdout_and_callback(step_idx: int) -> None:
+        """Record holdout loss and fire callback after a step."""
         with torch.no_grad():
             pred_holdout = model(x_holdout)
             holdout_loss = metric_fn(pred_holdout, y_holdout)
@@ -230,6 +234,54 @@ def fine_tune(
         if on_step is not None and step_num in fixed_steps_set:
             on_step(model, step_num)
             model.train()
+
+    def _step_sgd(step_idx: int, grad_loss: torch.Tensor) -> None:
+        """SGD step: backward, clip, LSLR override, optimize."""
+        total_loss = grad_loss + _proximal_loss()
+        opt.zero_grad()
+        total_loss.backward()
+        if max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        if lr_schedule is not None and param_names is not None:
+            if step_idx < lslr.n_steps:  # type: ignore[union-attr]
+                for pg, name in zip(opt.param_groups, param_names):
+                    pg["lr"] = lr_schedule[name][step_idx]
+            else:
+                for pg in opt.param_groups:
+                    pg["lr"] = lr
+        opt.step()
+        _holdout_and_callback(step_idx)
+
+    def _step_lbfgs(step_idx: int, grad_loss: torch.Tensor) -> None:
+        """L-BFGS step: closure with cost + proximal."""
+        def closure():
+            opt.zero_grad()
+            p = model(x)
+            gl = cost_fn(p, y) + _proximal_loss()
+            gl.backward()
+            return gl
+
+        opt.step(closure)
+        _holdout_and_callback(step_idx)
+
+    def _step_lbfgs_metal(step_idx: int, grad_loss: torch.Tensor) -> None:
+        """L-BFGS step: closure with cost + proximal + MeTAL."""
+        def closure():
+            opt.zero_grad()
+            p = model(x)
+            gl = cost_fn(p, y) + _proximal_loss()
+            ms = metal.support_step(step_idx, model, p, y, cost_fn)  # type: ignore[union-attr]
+            gl = gl + ms
+            gl.backward()
+            return gl
+
+        opt.step(closure)
+        _holdout_and_callback(step_idx)
+
+    if use_lbfgs:
+        _step = _step_lbfgs_metal if metal is not None else _step_lbfgs
+    else:
+        _step = _step_sgd
 
     # Phase 1: MeTAL-shaped inner steps (if MeTAL provided)
     metal_steps = metal.n_steps if metal is not None else 0
@@ -274,6 +326,9 @@ def evaluate_task(
     max_grad_norm: float = 0.0,
     log_weights: bool = False,
     zero_non_rhs_features: bool = False,
+    proximal_lam: float = 0.0,
+    proximal_theta: Optional[torch.Tensor] = None,
+    inner_optimizer: str = "sgd",
 ) -> TaskResult:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -408,6 +463,9 @@ def evaluate_task(
                     Ly=task.Ly,
                     spectral_mode_size=spectral_mode_size,
                     max_grad_norm=max_grad_norm,
+                    proximal_lam=proximal_lam,
+                    proximal_theta=proximal_theta,
+                    inner_optimizer=eval_inner_optimizer,
                 )
 
                 # Fine-tune from θ₀ (baseline) — same loss, no MeTAL, no LSLR
@@ -593,6 +651,9 @@ def evaluate_task(
             Ly=task.Ly,
             spectral_mode_size=spectral_mode_size,
             max_grad_norm=max_grad_norm,
+            proximal_lam=proximal_lam,
+            proximal_theta=proximal_theta,
+            inner_optimizer=inner_optimizer,
         )
 
         step_errors = best.maml.coefficient_recovery.error_pct  # type: ignore[union-attr]
@@ -785,6 +846,43 @@ def main():
         lslr_module.eval()
         print(f"LSLR module loaded from: {lslr_state_path}")
 
+    # iMAML: set up proximal term and inner optimizer for evaluation
+    proximal_lam = 0.0
+    proximal_theta: Optional[torch.Tensor] = None
+    eval_inner_optimizer = "sgd"
+
+    if cfg.training.imaml.enabled:
+        im = cfg.training.imaml
+        proximal_lam = im.lam
+
+        # Load meta-learned lambda if it was saved
+        lam_checkpoint = torch.load(theta_star_path, map_location=device, weights_only=False)
+        saved_lam = lam_checkpoint.get("lam")
+        if saved_lam is not None:
+            proximal_lam = saved_lam.item()
+            print(f"  Using meta-learned λ={proximal_lam:.4f}")
+        else:
+            print(f"  Using config λ={proximal_lam}")
+
+        proximal_theta = torch.cat([
+            p.detach().flatten() for p in theta_star.parameters()
+        ]).clone()
+        eval_inner_optimizer = im.inner_optimizer
+        print(f"  iMAML eval: proximal_lam={proximal_lam}, inner_optimizer={eval_inner_optimizer}")
+
+        # For iMAML+MeTAL: use n_steps=1 (one network, not per-step)
+        if metal_module is not None:
+            metal_module_imaml = MeTALModule(
+                n_steps=1,
+                n_base_params=sum(1 for _ in theta_star.parameters()),
+                output_dim=net_config.output_dim,
+                hidden_dim=cfg.training.metal.hidden_dim,
+            ).to(device)
+            metal_module_imaml.load_state_dict(metal_state)
+            metal_module_imaml.eval()
+            metal_module = metal_module_imaml
+            print(f"  MeTAL (iMAML mode): 1 loss network")
+
     print()
 
     # =========================================================================
@@ -898,6 +996,9 @@ def main():
             max_grad_norm=max_grad_norm,
             log_weights=log_weights,
             zero_non_rhs_features=zero_non_rhs,
+            proximal_lam=proximal_lam,
+            proximal_theta=proximal_theta,
+            inner_optimizer=eval_inner_optimizer,
         )
 
         # Serialize to NPZ
