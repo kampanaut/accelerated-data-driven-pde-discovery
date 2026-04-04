@@ -97,6 +97,19 @@ GRID2_LOSS_PRESETS = Preset([
         "msl_enabled": True, "da_enabled": True, "da_threshold": 5000, "lslr_enabled": True,
         "use_scheduler": True, "scheduler_type": "cosine", "fine_tune_lr": 0.0001,
     }),
+    ("imaml-lbfgs", {
+        "activation": "sin",  # override axis — faithful Raissi setup
+        "k_shot": 800,        # override axis — K=10 not relevant for iMAML
+        "imaml": {"enabled": True, "lam": 2.0, "lam_lr": 0.001, "cg_steps": 5,
+                   "cg_damping": 1.0, "inner_optimizer": "lbfgs"},
+    }),
+    ("imaml-lbfgs+metal", {
+        "activation": "sin",
+        "k_shot": 800,
+        "metal": {"enabled": True, "hidden_dim": 0},
+        "imaml": {"enabled": True, "lam": 2.0, "lam_lr": 0.001, "cg_steps": 5,
+                   "cg_damping": 1.0, "inner_optimizer": "lbfgs"},
+    }),
 ])
 
 # ── Default variant ──────────────────────────────────────────────────────
@@ -142,6 +155,9 @@ DEFAULT = {
 
     # MeTAL default (off)
     "metal": {"enabled": False},
+
+    # iMAML default (off)
+    "imaml": {"enabled": False},
 
     # Spectral loss default (off)
     "spectral_loss": {"enabled": False},
@@ -241,18 +257,25 @@ def _merge_variant(default: dict, overrides: dict) -> dict:
 
 
 def _validate_presets(overrides: dict) -> None:
-    """Check that preset-owned keys don't overlap with the variant's own overrides."""
+    """Check that preset-owned keys don't overlap with the variant's non-axis overrides.
+
+    Presets ARE allowed to override axis values (e.g. iMAML preset forces activation=sin).
+    """
     preset_keys: set[str] = set()
-    top_keys: set[str] = set()
+    non_axis_keys: set[str] = set()
+    axis_keys: set[str] = set()
 
     for key, value in overrides.items():
         if isinstance(value, Preset):
             for _, preset_dict in value.entries:
                 preset_keys.update(preset_dict.keys())
+        elif isinstance(value, Axis):
+            axis_keys.add(key)
         else:
-            top_keys.add(key)
+            non_axis_keys.add(key)
 
-    overlap = preset_keys & top_keys
+    # Only flag overlap with non-axis top-level overrides
+    overlap = preset_keys & non_axis_keys
     if overlap:
         raise ValueError(
             f"Fields {overlap} appear both in presets and as top-level variant overrides. "
@@ -354,12 +377,18 @@ def _flatten_combo(
             continue
         flat[key] = value
 
+    # First pass: set axis values
+    preset_dicts: list[dict] = []
     for axis_name, axis_val in zip(axis_names, combo):
         if isinstance(merged[axis_name], Preset):
             _, preset_dict = axis_val
-            flat.update(preset_dict)
+            preset_dicts.append(preset_dict)
         else:
             flat[axis_name] = axis_val
+
+    # Second pass: preset overrides win over axis values
+    for preset_dict in preset_dicts:
+        flat.update(preset_dict)
 
     return flat
 
@@ -403,6 +432,10 @@ def _build_config(
 
     spectral_raw = flat.get("spectral_loss", {})
     spectral = SpectralLossSection(**(spectral_raw if isinstance(spectral_raw, dict) else {}))
+
+    imaml_raw = flat.get("imaml", {})
+    from src.config import IMAMLSection
+    imaml = IMAMLSection(**(imaml_raw if isinstance(imaml_raw, dict) else {}))
 
     cfg = ExperimentConfig(
         experiment=ExperimentSection(
@@ -450,6 +483,7 @@ def _build_config(
             weight_init=flat.get("weight_init"),
             metal=metal,
             spectral_loss=spectral,
+            imaml=imaml,
             **layers_kwargs,
         ),
         evaluation=EvaluationSection(
@@ -518,10 +552,32 @@ def generate_variant(meta: VariantMeta, overrides: dict, default: dict = DEFAULT
     # For scatter grouping: group configs that share everything except k_shot
     scatter_groups: dict[tuple, list[str]] = {}
     exp_num = 0
+    seen_configs: set[tuple] = set()  # dedup preset-overridden axis combos
 
     for combo in itertools.product(*axis_values):
+        # Flatten to detect preset overrides, build dedup key
+        flat = _flatten_combo(merged, axis_names, combo)
+        # Dedup key: preset name + overridden axis values
+        dedup_parts = []
+        for ax, val in zip(axis_names, combo):
+            if isinstance(merged[ax], Preset):
+                dedup_parts.append(val[0])  # preset name
+            elif ax in flat:
+                dedup_parts.append(str(flat[ax]))  # use overridden value
+            else:
+                dedup_parts.append(str(val))
+        dedup_key = tuple(dedup_parts)
+        if dedup_key in seen_configs:
+            continue
+        seen_configs.add(dedup_key)
+
         exp_num += 1
-        name = _build_name(meta.label, exp_num, merged, default, axis_names, combo)
+        # Use flat values for name when preset overrides an axis
+        name_combo = list(combo)
+        for i, ax in enumerate(axis_names):
+            if not isinstance(merged[ax], Preset) and ax in flat:
+                name_combo[i] = flat[ax]
+        name = _build_name(meta.label, exp_num, merged, default, axis_names, tuple(name_combo))
         config = _build_config(merged, axis_names, combo, meta, name)
 
         # Build scatter group key: all axis values except k_shot
