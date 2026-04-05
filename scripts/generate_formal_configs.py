@@ -131,7 +131,7 @@ DEFAULT = {
     "adam_betas": [0.9, 0.999],
     "inner_steps": 16,
     "meta_batch_size": 25,
-    "max_iterations": 15000,
+    "max_iterations": 5000,
     "patience": 0,
     "checkpoint_interval": 100,
     "log_interval": 20,
@@ -209,12 +209,21 @@ _FINN_OVERRIDES = {"inner_lr": 0.01, "fine_tune_lr": 0.01}
 
 VariantMeta = namedtuple("VariantMeta", ["label", "configs_dir", "models_dir"])
 
+FINALS_PRESETS = Preset([
+    ("sin", {"activation": "sin"}),
+    ("silu", {"activation": "silu"}),
+    ("silu-cosine", {
+        "activation": "silu",
+        "use_scheduler": True, "scheduler_type": "cosine",
+    }),
+])
+
 VARIANTS = [
     # ── Finals: iMAML ────────────────────────────────────────────────
     (
         VariantMeta("finals", "configs/finals", "data/models/finals"),
         {
-            "activation": Axis(["sin", "silu"]),
+            "loss_preset": FINALS_PRESETS,
         },
     ),
 ]

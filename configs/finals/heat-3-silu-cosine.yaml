@@ -1,5 +1,5 @@
 experiment:
-  name: heat-1-sin
+  name: heat-3-silu-cosine
   pde_type: heat
   seed: 42
   device: cuda
@@ -26,7 +26,7 @@ training:
   hidden_dims:
   - 100
   - 100
-  activation: sin
+  activation: silu
   input_dim: 5
   output_dim: 1
   first_order: false
@@ -35,7 +35,7 @@ training:
   da_threshold: 5000
   lslr_enabled: false
   warmup_iterations: 0
-  use_scheduler: false
+  use_scheduler: true
   scheduler_type: cosine
   T_0: 200
   T_mult: 2
@@ -74,6 +74,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,50],jacobian[0,16,50],generalization,best-combo
   compare_experiments:
-  - heat-1-sin
+  - heat-3-silu-cosine
   exclude_suffixes_append: []
   exclude_max_iteration: 20

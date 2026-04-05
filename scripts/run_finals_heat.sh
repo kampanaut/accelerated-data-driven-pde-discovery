@@ -2,22 +2,31 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [1/2] heat-1-sin ==="
+echo "=== TRAIN [1/3] heat-1-sin ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== TRAIN [2/2] heat-2-silu ==="
+echo "=== TRAIN [2/3] heat-2-silu ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-2-silu.yaml
 
+echo "=== TRAIN [3/3] heat-3-silu-cosine ==="
+uv run python scripts/train_maml.py --config configs/finals/heat-3-silu-cosine.yaml
+
 # === EVALUATE ===
-echo "=== EVAL [1/2] heat-1-sin ==="
+echo "=== EVAL [1/3] heat-1-sin ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== EVAL [2/2] heat-2-silu ==="
+echo "=== EVAL [2/3] heat-2-silu ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-2-silu.yaml
 
+echo "=== EVAL [3/3] heat-3-silu-cosine ==="
+uv run python scripts/evaluate.py --config configs/finals/heat-3-silu-cosine.yaml
+
 # === VISUALIZE ===
-echo "=== VIS [1/2] heat-1-sin ==="
+echo "=== VIS [1/3] heat-1-sin ==="
 uv run python scripts/visualize.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== VIS [2/2] heat-2-silu ==="
+echo "=== VIS [2/3] heat-2-silu ==="
 uv run python scripts/visualize.py --config configs/finals/heat-2-silu.yaml
+
+echo "=== VIS [3/3] heat-3-silu-cosine ==="
+uv run python scripts/visualize.py --config configs/finals/heat-3-silu-cosine.yaml
