@@ -26,6 +26,7 @@ import torch.nn.functional as F
 
 from .task_loader import PDETask, MetaLearningDataLoader
 from .spectral_loss import compute_spectral_loss
+from .maml import MeTALModule
 
 
 # ---------------------------------------------------------------------------
@@ -148,16 +149,13 @@ class iMAMLTrainer:
               f"cg_damping={im.cg_damping}, inner_optimizer={im.inner_optimizer}, "
               f"proximal={prox_mode}")
 
-        # Outer loop optimizer (meta-update) — model params only
+        # Outer loop optimizer (meta-update) — must be single-step (Adam/SGD).
+        # L-BFGS requires re-evaluating the full meta-objective per line search
+        # probe (all tasks × inner solve × CG), which is prohibitively expensive.
         opt_params = list(self.model.parameters())
-        self._outer_is_lbfgs = (im.outer_optimizer == "lbfgs")
-        if self._outer_is_lbfgs:
-            self.outer_opt = torch.optim.LBFGS(
-                opt_params, lr=1.0, max_iter=5, line_search_fn="strong_wolfe",
-            )
-            print(f"  Outer optimizer: L-BFGS (no outer_lr needed)")
-        else:
-            self.outer_opt = torch.optim.Adam(opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas))
+        self.outer_opt = torch.optim.Adam(
+            opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
+        )  # eps=1e-3 matches reference (aravindr93/imaml_dev, learner_model.py:17)
 
         # LR scheduler: optional warmup → cosine decay (single or warm restarts)
         self.scheduler = None
@@ -248,9 +246,8 @@ class iMAMLTrainer:
 
         # MeTAL for iMAML: one loss network (not per-step) in inner objective
         # Bound at init — no conditionals in hot loop (same pattern as MAML)
-        self.metal: Optional[nn.Module] = None
+        self.metal: Optional[MeTALModule] = None
         if t.metal.enabled:
-            from .maml import MeTALModule
             n_base_params = sum(1 for _ in model.parameters())
             output_dim = list(model.parameters())[-1].shape[0]
             self.metal = MeTALModule(
@@ -478,11 +475,11 @@ class iMAMLTrainer:
         is λI, already accounted for in the matrix evaluator.
         """
         pred = model(support_x)
-        task_loss = self.cost_function(pred, support_y, support_coords)
-        grad_ft = torch.autograd.grad(task_loss, model.parameters(), create_graph=True)
+        task_loss = self._inner_cost(model, pred, support_y, support_coords)
+        grad_ft = torch.autograd.grad(task_loss, list(model.parameters()), create_graph=True)
         flat_grad = torch.cat([g.contiguous().view(-1) for g in grad_ft])
         h = torch.sum(flat_grad * vector)
-        hvp = torch.autograd.grad(h, model.parameters())
+        hvp = torch.autograd.grad(h, list(model.parameters()))
         return torch.cat([g.contiguous().view(-1) for g in hvp])
 
     def _matrix_evaluator(
@@ -492,19 +489,20 @@ class iMAMLTrainer:
         support_y: torch.Tensor,
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> Callable[[torch.Tensor], torch.Tensor]:
-        """Build linear operator A for CG: Av = v + Hv / (lam + damping).
+        """Build linear operator A for CG: Av = (1 + regu_coef) * v + Hv / (lam + lam_damping).
 
-        Corresponds to (I + 1/λ H) from Lemma 1 (Eq. 6), with damping
-        added to λ for numerical stability.
+        Matches reference implementation (aravindr93/imaml_dev, learner_model.py:143).
+        regu_coef = cg_damping (default 1.0), lam_damping hardcoded at 10.0.
         """
         lam = self.lam
-        damping = self.cg_damping
+        regu_coef = self.cg_damping
+        lam_damping = 10.0  # hardcoded in reference
 
         def evaluator(v: torch.Tensor) -> torch.Tensor:
             hvp = self._hessian_vector_product(
                 model, support_x, support_y, support_coords, v
             )
-            return v + hvp / (lam + damping)
+            return (1.0 + regu_coef) * v + hvp / (lam + lam_damping)
 
         return evaluator
 
@@ -587,7 +585,7 @@ class iMAMLTrainer:
         # Query gradient: v_i = ∇φ L_query(φ*)
         query_pred = fast_model(query_x)
         query_loss = self.cost_function(query_pred, query_y, query_coords)
-        query_grad = torch.autograd.grad(query_loss, fast_model.parameters())
+        query_grad = torch.autograd.grad(query_loss, list(fast_model.parameters()))
         flat_grad = torch.cat([g.contiguous().view(-1) for g in query_grad])
         query_loss_val = query_loss.item()
 
@@ -602,20 +600,25 @@ class iMAMLTrainer:
             corrected_grad = cg_solve(evaluator, flat_grad.detach(), cg)
 
         # MeTAL param gradients via cross-Hessian IFT (if MeTAL enabled)
+        # dF/dψ = -g_i^T · ∇²φψ [metal_loss]
+        # where g_i = corrected_grad (already computed by CG above)
         metal_grad: Optional[torch.Tensor] = None
         if self.metal is not None:
-            # Compute ∂L_query/∂(metal_params) at adapted point
-            # The query loss depends on fast_model params, which depend on MeTAL
-            # through the inner objective. We need the cross-Hessian.
-            # For now: direct gradient of query loss w.r.t. MeTAL params
-            # (first-order approximation — the full cross-Hessian CG is future work)
-            metal_query_grad = torch.autograd.grad(
-                query_loss, self.metal.parameters(), allow_unused=True
+            # ∇φ metal_loss at adapted point (create_graph=True for second derivatives)
+            metal_pred = fast_model(support_x)
+            ml = self.metal.support_step(  # type: ignore[union-attr]
+                0, fast_model, metal_pred, support_y, self._pointwise_loss
             )
-            metal_grad = torch.cat([
-                (g.contiguous().view(-1) if g is not None else torch.zeros(p.numel(), device=self.device))
-                for g, p in zip(metal_query_grad, self.metal.parameters())
-            ]).detach()
+            grad_phi_metal = torch.autograd.grad(
+                ml, list(fast_model.parameters()), create_graph=True
+            )
+            flat_grad_metal = torch.cat([g.contiguous().view(-1) for g in grad_phi_metal])
+            # Project through corrected_grad (constant vector) to get cross-Hessian
+            dot = torch.sum(flat_grad_metal * corrected_grad)
+            cross_grads = torch.autograd.grad(dot, list(self.metal.parameters()))
+            metal_grad = -torch.cat([
+                g.contiguous().view(-1) for g in cross_grads
+            ]).detach() / self.lam
 
         if verbose:
             print(f"\t\t\tloss={query_loss_val:.2f}")
@@ -660,7 +663,7 @@ class iMAMLTrainer:
                 support_x, support_y, _, _, support_coords, _ = self._task_setup(task, seed)
                 self._inner_solve(fast_model, theta, support_x, support_y, support_coords)
                 train_loss = self.cost_function(fast_model(support_x), support_y, support_coords)
-                train_grad_t = torch.autograd.grad(train_loss, fast_model.parameters())
+                train_grad_t = torch.autograd.grad(train_loss, list(fast_model.parameters()))
                 flat_train_grad = torch.cat([g.view(-1) for g in train_grad_t]).detach()
                 inner_prod = flat_train_grad.dot(corrected_grad)
                 task_lam_grad = inner_prod / (self.lam ** 2 + 0.1)
@@ -693,13 +696,7 @@ class iMAMLTrainer:
                 clip_params += list(self.metal.parameters())
             torch.nn.utils.clip_grad_norm_(clip_params, self.config.max_grad_norm)
 
-        if self._outer_is_lbfgs:
-            # L-BFGS outer: grads already set, use dummy closure that returns grad·param
-            def outer_closure():
-                return sum((p * p.grad).sum() for p in self.model.parameters() if p.grad is not None)
-            self.outer_opt.step(outer_closure)
-        else:
-            self.outer_opt.step()
+        self.outer_opt.step()
 
         # Lambda update
         if self.lam_lr > 0:
