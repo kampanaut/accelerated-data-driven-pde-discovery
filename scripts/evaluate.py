@@ -819,8 +819,10 @@ def main():
         inner_steps = cfg.training.inner_steps
         metal_hidden_dim = cfg.training.metal.hidden_dim
 
+        # iMAML uses n_steps=1 (one network), MAML uses n_steps=inner_steps
+        metal_n_steps = 1 if cfg.training.imaml.enabled else inner_steps
         metal_module = MeTALModule(
-            n_steps=inner_steps,
+            n_steps=metal_n_steps,
             n_base_params=n_base_params,
             output_dim=output_dim,
             hidden_dim=metal_hidden_dim,
@@ -870,18 +872,7 @@ def main():
         eval_inner_optimizer = im.inner_optimizer
         print(f"  iMAML eval: proximal_lam={proximal_lam}, inner_optimizer={eval_inner_optimizer}")
 
-        # For iMAML+MeTAL: use n_steps=1 (one network, not per-step)
-        if metal_module is not None:
-            metal_module_imaml = MeTALModule(
-                n_steps=1,
-                n_base_params=sum(1 for _ in theta_star.parameters()),
-                output_dim=net_config.output_dim,
-                hidden_dim=cfg.training.metal.hidden_dim,
-            ).to(device)
-            metal_module_imaml.load_state_dict(metal_state)
-            metal_module_imaml.eval()
-            metal_module = metal_module_imaml
-            print(f"  MeTAL (iMAML mode): 1 loss network")
+        # MeTAL already loaded with n_steps=1 above (iMAML detection at load time)
 
     print()
 
