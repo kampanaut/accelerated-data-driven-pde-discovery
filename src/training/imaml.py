@@ -442,6 +442,8 @@ class iMAMLTrainer:
             fast_model.parameters(),
             lr=1.0,
             max_iter=self.config.inner_steps,
+            tolerance_grad=1e-15,
+            tolerance_change=1e-15,
             line_search_fn="strong_wolfe",
         )
 
