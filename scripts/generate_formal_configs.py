@@ -210,11 +210,11 @@ _FINN_OVERRIDES = {"inner_lr": 0.01, "fine_tune_lr": 0.01}
 VariantMeta = namedtuple("VariantMeta", ["label", "configs_dir", "models_dir"])
 
 VARIANTS = [
-    # ── Finals: iMAML baseline ───────────────────────────────────────
+    # ── Finals: iMAML ────────────────────────────────────────────────
     (
         VariantMeta("finals", "configs/finals", "data/models/finals"),
         {
-            # No axes — single baseline config. Grid expands from here.
+            "activation": Axis(["sin", "silu"]),
         },
     ),
 ]
