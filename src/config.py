@@ -58,13 +58,13 @@ class SpectralLossSection:
 @dataclass
 class IMAMLSection:
     enabled: bool = False
-    lam: float = 2.0
+    lam: float = 1.0
     lam_lr: float = 0.0        # 0 = fixed lambda, >0 = meta-learn lambda
     lam_min: float = 0.0
     cg_steps: int = 5
     cg_damping: float = 1.0
-    inner_optimizer: str = "sgd"  # "sgd" or "lbfgs"
-    proximal_every_step: bool = True  # True = paper Eq.3, False = reference code (prox at end only)
+    inner_optimizer: str = "lbfgs"  # "sgd" or "lbfgs"
+    proximal_every_step: bool = False  # True = paper Eq.3, False = reference code (prox at end only)
 
 
 @dataclass
@@ -76,10 +76,10 @@ class TrainingSection:
 
     # Inner/outer loop
     inner_lr: float = 0.01
-    outer_lr: float = 0.001
-    adam_betas: list = field(default_factory=lambda: [0.9, 0.99])
-    inner_steps: int = 1
-    meta_batch_size: int = 4
+    outer_lr: float = 0.01
+    adam_betas: list = field(default_factory=lambda: [0.9, 0.999])
+    inner_steps: int = 16
+    meta_batch_size: int = 25
 
     # Support/query
     k_shot: int = 100

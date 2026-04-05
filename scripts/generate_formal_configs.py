@@ -116,22 +116,20 @@ GRID2_LOSS_PRESETS = Preset([
 # All variants inherit from this. Override only what differs.
 
 DEFAULT = {
-    # Axes
-    "k_shot": Axis([800, 10]),
-
     # PDE
     "pde_type": "heat",
+    "k_shot": 1000,
 
-    # Model
+    # Model (Raissi-faithful)
     "hidden_dims": [100, 100],
-    "activation": "silu",
+    "activation": "sin",
     "zero_non_rhs_features": True,
 
-    # Training
+    # Training (iMAML reference defaults)
     "inner_lr": 0.01,
-    "outer_lr": 0.001,
-    "adam_betas": [0.9, 0.99],
-    "inner_steps": 5,
+    "outer_lr": 0.01,
+    "adam_betas": [0.9, 0.999],
+    "inner_steps": 16,
     "meta_batch_size": 25,
     "max_iterations": 15000,
     "patience": 0,
@@ -144,10 +142,10 @@ DEFAULT = {
     "T_0": 200,
     "T_mult": 2,
     "min_lr": 0.00001,
-    "max_grad_norm": 100.0,
+    "max_grad_norm": 0.0,
     "loss_function": "normalized_mse",
 
-    # MAML++ defaults (off)
+    # MAML++ defaults (off — legacy)
     "msl_enabled": False,
     "da_enabled": False,
     "da_threshold": 5000,
@@ -156,8 +154,10 @@ DEFAULT = {
     # MeTAL default (off)
     "metal": {"enabled": False},
 
-    # iMAML default (off)
-    "imaml": {"enabled": False},
+    # iMAML default (on — L-BFGS, reference defaults)
+    "imaml": {"enabled": True, "lam": 1.0, "cg_steps": 5,
+              "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+              "proximal_every_step": False},
 
     # Spectral loss default (off)
     "spectral_loss": {"enabled": False},
@@ -167,7 +167,8 @@ DEFAULT = {
     "fine_tune_lr": 0.01,
     "max_eval_steps": 50,
     "noise_levels": [0.0],
-    "holdout_size": 5000,
+    "holdout_size": 50000,
+    "query_size": 10000,
 
     # Misc
     "log_weights": False,
@@ -209,38 +210,50 @@ _FINN_OVERRIDES = {"inner_lr": 0.01, "fine_tune_lr": 0.01}
 VariantMeta = namedtuple("VariantMeta", ["label", "configs_dir", "models_dir"])
 
 VARIANTS = [
-    # ── Old grid variants ────────────────────────────────────────────
-    (VariantMeta("formal",              "configs/formal",              "data/models/formal"),              {**_OLD_BASE}),
-    (VariantMeta("zeroed",              "configs/zeroed",              "data/models/zeroed"),              {**_OLD_BASE, "zero_non_rhs_features": True}),
-    (VariantMeta("cheat",               "configs/cheat",               "data/models/cheat"),               {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True}),
-    (VariantMeta("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed"),        {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True}),
-    (VariantMeta("cheat_zero_init",     "configs/cheat_zero_init",     "data/models/cheat_zero_init"),     {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "zeros"}),
-    (VariantMeta("cheat_zeroed_zinit",  "configs/cheat_zeroed_zinit",  "data/models/cheat_zeroed_zinit"),  {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "zeros"}),
-    (VariantMeta("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected"),      {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "expected"}),
-    (VariantMeta("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect"), {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "expected"}),
-    (VariantMeta("cheat_finn",               "configs/cheat_finn",               "data/models/cheat_finn"),               {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, **_FINN_OVERRIDES}),
-    (VariantMeta("cheat_zeroed_finn",        "configs/cheat_zeroed_finn",        "data/models/cheat_zeroed_finn"),        {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, **_FINN_OVERRIDES}),
-    (VariantMeta("cheat_expected_finn",      "configs/cheat_expected_finn",      "data/models/cheat_expected_finn"),      {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "expected", **_FINN_OVERRIDES}),
-    (VariantMeta("cheat_zeroed_expect_finn", "configs/cheat_zeroed_expect_finn", "data/models/cheat_zeroed_expect_finn"), {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "expected", **_FINN_OVERRIDES}),
-    # ── New grid variants ────────────────────────────────────────────
+    # ── Finals: iMAML baseline ───────────────────────────────────────
     (
-        VariantMeta("cheat2", "configs/cheat2", "data/models/cheat2"),
+        VariantMeta("finals", "configs/finals", "data/models/finals"),
         {
-            "loss_preset": GRID2_LOSS_PRESETS,
-            "layers": lambda pde: _cheat_layers(pde.input_dim, pde.output_dim),
-            "log_weights": True,
-            "inner_steps": 10,
-            "max_iterations": 5000,
-        },
-    ),
-    (
-        VariantMeta("mlp", "configs/mlp", "data/models/mlp"),
-        {
-            "loss_preset": GRID2_LOSS_PRESETS,
-            "activation": Axis(["silu", "sin"]),
+            # No axes — single baseline config. Grid expands from here.
         },
     ),
 ]
+
+# ── Archived variants (MAML era) ─────────────────────────────────────
+# These generated configs for the MAML grid (grid1 + grid2).
+# Kept for reference. Do not regenerate — results already collected.
+#
+# _OLD_VARIANTS = [
+#     (VariantMeta("formal",              "configs/formal",              "data/models/formal"),              {**_OLD_BASE}),
+#     (VariantMeta("zeroed",              "configs/zeroed",              "data/models/zeroed"),              {**_OLD_BASE, "zero_non_rhs_features": True}),
+#     (VariantMeta("cheat",               "configs/cheat",               "data/models/cheat"),               {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True}),
+#     (VariantMeta("cheat_zeroed",        "configs/cheat_zeroed",        "data/models/cheat_zeroed"),        {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True}),
+#     (VariantMeta("cheat_zero_init",     "configs/cheat_zero_init",     "data/models/cheat_zero_init"),     {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "zeros"}),
+#     (VariantMeta("cheat_zeroed_zinit",  "configs/cheat_zeroed_zinit",  "data/models/cheat_zeroed_zinit"),  {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "zeros"}),
+#     (VariantMeta("cheat_expected",      "configs/cheat_expected",      "data/models/cheat_expected"),      {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "expected"}),
+#     (VariantMeta("cheat_zeroed_expect", "configs/cheat_zeroed_expect", "data/models/cheat_zeroed_expect"), {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "expected"}),
+#     (VariantMeta("cheat_finn",               "configs/cheat_finn",               "data/models/cheat_finn"),               {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, **_FINN_OVERRIDES}),
+#     (VariantMeta("cheat_zeroed_finn",        "configs/cheat_zeroed_finn",        "data/models/cheat_zeroed_finn"),        {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, **_FINN_OVERRIDES}),
+#     (VariantMeta("cheat_expected_finn",      "configs/cheat_expected_finn",      "data/models/cheat_expected_finn"),      {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "weight_init": "expected", **_FINN_OVERRIDES}),
+#     (VariantMeta("cheat_zeroed_expect_finn", "configs/cheat_zeroed_expect_finn", "data/models/cheat_zeroed_expect_finn"), {**_OLD_BASE, "layers": _CHEAT_LAYERS, "log_weights": True, "zero_non_rhs_features": True, "weight_init": "expected", **_FINN_OVERRIDES}),
+#     (
+#         VariantMeta("cheat2", "configs/cheat2", "data/models/cheat2"),
+#         {
+#             "loss_preset": GRID2_LOSS_PRESETS,
+#             "layers": lambda pde: _cheat_layers(pde.input_dim, pde.output_dim),
+#             "log_weights": True,
+#             "inner_steps": 10,
+#             "max_iterations": 5000,
+#         },
+#     ),
+#     (
+#         VariantMeta("mlp", "configs/mlp", "data/models/mlp"),
+#         {
+#             "loss_preset": GRID2_LOSS_PRESETS,
+#             "activation": Axis(["silu", "sin"]),
+#         },
+#     ),
+# ]
 
 # ── Config builder ───────────────────────────────────────────────────────
 
@@ -417,9 +430,8 @@ def _build_config(
             "output_dim": pde.output_dim,
         }
 
-    # Query size heuristic
     k_shot = flat["k_shot"]
-    query_size = 1600 if k_shot == 800 else 2000
+    query_size = flat.get("query_size", 10000)
 
     # Fixed steps: include inner_steps as designed step
     inner_steps = flat.get("inner_steps", 5)
