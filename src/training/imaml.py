@@ -743,7 +743,7 @@ class iMAMLTrainer:
             else ""
         )
         print(
-            f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}"
+            f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}, λ={self.lam.item():.4f}"
         )
 
         if (
@@ -765,7 +765,7 @@ class iMAMLTrainer:
             if self.scheduler
             else ""
         )
-        print(f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}{lr_str}")
+        print(f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}{lr_str}, λ={self.lam.item():.4f}")
 
         if (
             iteration > 0
