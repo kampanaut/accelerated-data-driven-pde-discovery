@@ -465,7 +465,7 @@ def evaluate_task(
                     max_grad_norm=max_grad_norm,
                     proximal_lam=proximal_lam,
                     proximal_theta=proximal_theta,
-                    inner_optimizer=eval_inner_optimizer,
+                    inner_optimizer=inner_optimizer,
                 )
 
                 # Fine-tune from θ₀ (baseline) — same loss, no MeTAL, no LSLR
