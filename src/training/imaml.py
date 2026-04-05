@@ -553,7 +553,13 @@ class iMAMLTrainer:
             with torch.no_grad():
                 pre_pred = fast_model(support_x)
                 pre_loss = self.cost_function(pre_pred, support_y, support_coords)
-                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}")
+                pre_metal = ""
+                if self.metal is not None:
+                    ml = self.metal.support_step(  # type: ignore[union-attr]
+                        0, fast_model, pre_pred, support_y, self._pointwise_loss
+                    )
+                    pre_metal = f", metal_loss={ml.item():.6f}"
+                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
 
         # Inner solve: minimize task_loss + λ/2 ||φ - θ||²
         self._inner_solve(fast_model, theta, support_x, support_y, support_coords)
@@ -562,7 +568,13 @@ class iMAMLTrainer:
             with torch.no_grad():
                 post_pred = fast_model(support_x)
                 post_loss = self.cost_function(post_pred, support_y, support_coords)
-                print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}"
+                post_metal = ""
+                if self.metal is not None:
+                    ml = self.metal.support_step(  # type: ignore[union-attr]
+                        0, fast_model, post_pred, support_y, self._pointwise_loss
+                    )
+                    post_metal = f", metal_loss={ml.item():.6f}"
+                print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
                       f" ({self.config.inner_steps} steps)")
 
         # Query gradient: v_i = ∇φ L_query(φ*)
