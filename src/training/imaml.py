@@ -150,7 +150,14 @@ class iMAMLTrainer:
 
         # Outer loop optimizer (meta-update) — model params only
         opt_params = list(self.model.parameters())
-        self.outer_opt = torch.optim.Adam(opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas))
+        self._outer_is_lbfgs = (im.outer_optimizer == "lbfgs")
+        if self._outer_is_lbfgs:
+            self.outer_opt = torch.optim.LBFGS(
+                opt_params, lr=1.0, max_iter=5, line_search_fn="strong_wolfe",
+            )
+            print(f"  Outer optimizer: L-BFGS (no outer_lr needed)")
+        else:
+            self.outer_opt = torch.optim.Adam(opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas))
 
         # LR scheduler: optional warmup → cosine decay (single or warm restarts)
         self.scheduler = None
@@ -686,7 +693,13 @@ class iMAMLTrainer:
                 clip_params += list(self.metal.parameters())
             torch.nn.utils.clip_grad_norm_(clip_params, self.config.max_grad_norm)
 
-        self.outer_opt.step()
+        if self._outer_is_lbfgs:
+            # L-BFGS outer: grads already set, use dummy closure that returns grad·param
+            def outer_closure():
+                return sum((p * p.grad).sum() for p in self.model.parameters() if p.grad is not None)
+            self.outer_opt.step(outer_closure)
+        else:
+            self.outer_opt.step()
 
         # Lambda update
         if self.lam_lr > 0:

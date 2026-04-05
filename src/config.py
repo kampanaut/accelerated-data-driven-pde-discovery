@@ -64,6 +64,7 @@ class IMAMLSection:
     cg_steps: int = 5
     cg_damping: float = 1.0
     inner_optimizer: str = "sgd"  # "sgd" or "lbfgs"
+    outer_optimizer: str = "adam"  # "adam" or "lbfgs"
     proximal_every_step: bool = True  # True = paper Eq.3, False = reference code (prox at end only)
 
 
@@ -248,6 +249,7 @@ class ExperimentConfig:
                         "cg_steps": t.imaml.cg_steps,
                         "cg_damping": t.imaml.cg_damping,
                         "inner_optimizer": t.imaml.inner_optimizer,
+                        "outer_optimizer": t.imaml.outer_optimizer,
                         "proximal_every_step": t.imaml.proximal_every_step,
                     }
                 continue
