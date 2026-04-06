@@ -493,6 +493,7 @@ def evaluate_task(
                     Ly=task.Ly,
                     spectral_mode_size=spectral_mode_size,
                     max_grad_norm=max_grad_norm,
+                    inner_optimizer=inner_optimizer,
                 )
 
                 # Build MethodResult for each method
