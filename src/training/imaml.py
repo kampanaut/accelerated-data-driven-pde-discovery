@@ -188,6 +188,14 @@ class iMAMLTrainer:
                         T_mult=t.T_mult,
                         eta_min=t.min_lr,
                     )
+                elif t.scheduler_type == "exponential":
+                    # gamma from min_lr: min_lr = outer_lr * gamma^max_iters
+                    # gamma = (min_lr / outer_lr) ^ (1 / max_iters)
+                    gamma = (t.min_lr / t.outer_lr) ** (1.0 / post_warmup_iters)
+                    decay = torch.optim.lr_scheduler.ExponentialLR(
+                        self.outer_opt,
+                        gamma=gamma,
+                    )
                 else:
                     decay = torch.optim.lr_scheduler.CosineAnnealingLR(
                         self.outer_opt,
