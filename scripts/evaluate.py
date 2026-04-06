@@ -180,11 +180,13 @@ def fine_tune(
         )
     elif loss_type == "normalized_mse":
         _pw = lambda p, t: F.mse_loss(p, t) / (t**2).mean()
+    elif loss_type == "sse":
+        _pw = lambda p, t: ((p - t) ** 2).sum()
     elif loss_type == "mae":
         _pw = lambda p, t: F.l1_loss(p, t)
     else:
         raise ValueError(
-            f"Unknown loss_type: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'."
+            f"Unknown loss_type: {loss_type}. Use 'mse', 'normalized_mse', 'sse', or 'mae'."
         )
 
     # Metric: always clean pointwise loss (for recording — comparable across experiments)

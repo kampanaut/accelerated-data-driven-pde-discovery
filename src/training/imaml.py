@@ -111,11 +111,13 @@ class iMAMLTrainer:
             self._pointwise_loss = lambda pred, target: (
                 F.mse_loss(pred, target) / (target**2).mean()
             )
+        elif loss_type == "sse":
+            self._pointwise_loss = lambda pred, target: ((pred - target) ** 2).sum()
         elif loss_type == "mae":
             self._pointwise_loss = F.l1_loss
         else:
             raise ValueError(
-                f"Unknown loss_function: {loss_type}. Use 'mse', 'normalized_mse', or 'mae'."
+                f"Unknown loss_function: {loss_type}. Use 'mse', 'normalized_mse', 'sse', or 'mae'."
             )
 
         # Current task domain info — set per-task in compute_task()
