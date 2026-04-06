@@ -141,7 +141,7 @@ def fine_tune(
         lr_schedule = None
         opt = torch.optim.LBFGS(
             model.parameters(), lr=1.0,
-            max_iter=max_steps,
+            max_iter=1, max_eval=20,
             tolerance_grad=1e-15,
             tolerance_change=1e-15,
             line_search_fn="strong_wolfe",
@@ -272,37 +272,36 @@ def fine_tune(
         opt.step()
         _holdout_and_callback(step_idx)
 
-    if use_lbfgs:
-        # Single .step() call — closure tracks iterations, fires callbacks
-        lbfgs_iter = [0]  # mutable counter for closure
-        metal_steps = metal.n_steps if metal is not None else 0
-
-        def lbfgs_closure():
+    def _step_lbfgs(step_idx: int, grad_loss: torch.Tensor) -> None:
+        """L-BFGS step: closure with cost + proximal."""
+        def closure():
             opt.zero_grad()
             p = model(x)
             gl = cost_fn(p, y) + _proximal_loss()
-            if metal is not None and lbfgs_iter[0] < metal_steps:
-                ms = metal.support_step(lbfgs_iter[0], model, p, y, cost_fn)  # type: ignore[union-attr]
-                gl = gl + ms
             gl.backward()
-
-            # Record train loss (clean metric, no MeTAL/spectral)
-            with torch.no_grad():
-                train_losses.append(metric_fn(model(x), y).item())
-            _holdout_and_callback(lbfgs_iter[0])
-            lbfgs_iter[0] += 1
-
             return gl
 
-        opt.step(lbfgs_closure)
+        opt.step(closure)
+        _holdout_and_callback(step_idx)
 
-        return FineTuneResult(
-            train_losses=np.array(train_losses),
-            holdout_losses=np.array(holdout_losses),
-        )
+    def _step_lbfgs_metal(step_idx: int, grad_loss: torch.Tensor) -> None:
+        """L-BFGS step: closure with cost + proximal + MeTAL."""
+        def closure():
+            opt.zero_grad()
+            p = model(x)
+            gl = cost_fn(p, y) + _proximal_loss()
+            ms = metal.support_step(step_idx, model, p, y, cost_fn)  # type: ignore[union-attr]
+            gl = gl + ms
+            gl.backward()
+            return gl
 
-    # SGD path
-    _step = _step_sgd_with_metal if metal is not None else _step_sgd
+        opt.step(closure)
+        _holdout_and_callback(step_idx)
+
+    if use_lbfgs:
+        _step = _step_lbfgs_metal if metal is not None else _step_lbfgs
+    else:
+        _step = _step_sgd_with_metal if metal is not None else _step_sgd
 
     # Phase 1: MeTAL-shaped inner steps (if MeTAL provided)
     metal_steps = metal.n_steps if metal is not None else 0
