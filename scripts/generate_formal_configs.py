@@ -252,6 +252,32 @@ FINALS_PRESETS = Preset([
         "use_scheduler": True, "scheduler_type": "cosine",
         "min_lr": 1e-7,
     }),
+    ("silu-lam01-cosine", {
+        "activation": "silu",
+        "imaml": {"enabled": True, "lam": 0.1, "cg_steps": 5,
+                  "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                  "proximal_every_step": False},
+        "use_scheduler": True, "scheduler_type": "cosine",
+        "min_lr": 1e-7,
+    }),
+    ("silu-lam01-3layers-cg10-cosine", {
+        "activation": "silu",
+        "hidden_dims": [100, 100, 100],
+        "imaml": {"enabled": True, "lam": 0.1, "cg_steps": 10,
+                  "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                  "proximal_every_step": False},
+        "use_scheduler": True, "scheduler_type": "cosine",
+        "min_lr": 1e-7,
+    }),
+    ("silu-lam05-3layers-cg5-cosine", {
+        "activation": "silu",
+        "hidden_dims": [100, 100, 100],
+        "imaml": {"enabled": True, "lam": 0.5, "cg_steps": 5,
+                  "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                  "proximal_every_step": False},
+        "use_scheduler": True, "scheduler_type": "cosine",
+        "min_lr": 1e-7,
+    }),
 ])
 
 VARIANTS = [

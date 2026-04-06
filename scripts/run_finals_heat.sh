@@ -2,76 +2,103 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [1/8] heat-1-sin ==="
+echo "=== TRAIN [1/11] heat-1-sin ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== TRAIN [2/8] heat-2-silu ==="
+echo "=== TRAIN [2/11] heat-2-silu ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-2-silu.yaml
 
-echo "=== TRAIN [3/8] heat-3-silu-cosine ==="
+echo "=== TRAIN [3/11] heat-3-silu-cosine ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-3-silu-cosine.yaml
 
-echo "=== TRAIN [4/8] heat-4-silu-lam05 ==="
+echo "=== TRAIN [4/11] heat-4-silu-lam05 ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-4-silu-lam05.yaml
 
-echo "=== TRAIN [5/8] heat-5-silu-lam05-cosine ==="
+echo "=== TRAIN [5/11] heat-5-silu-lam05-cosine ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-5-silu-lam05-cosine.yaml
 
-echo "=== TRAIN [6/8] heat-6-silu-lam05-3layers ==="
+echo "=== TRAIN [6/11] heat-6-silu-lam05-3layers ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-6-silu-lam05-3layers.yaml
 
-echo "=== TRAIN [7/8] heat-7-silu-lam05-cg10 ==="
+echo "=== TRAIN [7/11] heat-7-silu-lam05-cg10 ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-7-silu-lam05-cg10.yaml
 
-echo "=== TRAIN [8/8] heat-8-silu-lam05-3layers-cg10-cosine ==="
+echo "=== TRAIN [8/11] heat-8-silu-lam05-3layers-cg10-cosine ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-8-silu-lam05-3layers-cg10-cosine.yaml
 
+echo "=== TRAIN [9/11] heat-9-silu-lam01-cosine ==="
+uv run python scripts/train_maml.py --config configs/finals/heat-9-silu-lam01-cosine.yaml
+
+echo "=== TRAIN [10/11] heat-10-silu-lam01-3layers-cg10-cosine ==="
+uv run python scripts/train_maml.py --config configs/finals/heat-10-silu-lam01-3layers-cg10-cosine.yaml
+
+echo "=== TRAIN [11/11] heat-11-silu-lam05-3layers-cg5-cosine ==="
+uv run python scripts/train_maml.py --config configs/finals/heat-11-silu-lam05-3layers-cg5-cosine.yaml
+
 # === EVALUATE ===
-echo "=== EVAL [1/8] heat-1-sin ==="
+echo "=== EVAL [1/11] heat-1-sin ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== EVAL [2/8] heat-2-silu ==="
+echo "=== EVAL [2/11] heat-2-silu ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-2-silu.yaml
 
-echo "=== EVAL [3/8] heat-3-silu-cosine ==="
+echo "=== EVAL [3/11] heat-3-silu-cosine ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-3-silu-cosine.yaml
 
-echo "=== EVAL [4/8] heat-4-silu-lam05 ==="
+echo "=== EVAL [4/11] heat-4-silu-lam05 ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-4-silu-lam05.yaml
 
-echo "=== EVAL [5/8] heat-5-silu-lam05-cosine ==="
+echo "=== EVAL [5/11] heat-5-silu-lam05-cosine ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-5-silu-lam05-cosine.yaml
 
-echo "=== EVAL [6/8] heat-6-silu-lam05-3layers ==="
+echo "=== EVAL [6/11] heat-6-silu-lam05-3layers ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-6-silu-lam05-3layers.yaml
 
-echo "=== EVAL [7/8] heat-7-silu-lam05-cg10 ==="
+echo "=== EVAL [7/11] heat-7-silu-lam05-cg10 ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-7-silu-lam05-cg10.yaml
 
-echo "=== EVAL [8/8] heat-8-silu-lam05-3layers-cg10-cosine ==="
+echo "=== EVAL [8/11] heat-8-silu-lam05-3layers-cg10-cosine ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-8-silu-lam05-3layers-cg10-cosine.yaml
 
+echo "=== EVAL [9/11] heat-9-silu-lam01-cosine ==="
+uv run python scripts/evaluate.py --config configs/finals/heat-9-silu-lam01-cosine.yaml
+
+echo "=== EVAL [10/11] heat-10-silu-lam01-3layers-cg10-cosine ==="
+uv run python scripts/evaluate.py --config configs/finals/heat-10-silu-lam01-3layers-cg10-cosine.yaml
+
+echo "=== EVAL [11/11] heat-11-silu-lam05-3layers-cg5-cosine ==="
+uv run python scripts/evaluate.py --config configs/finals/heat-11-silu-lam05-3layers-cg5-cosine.yaml
+
 # === VISUALIZE ===
-echo "=== VIS [1/8] heat-1-sin ==="
+echo "=== VIS [1/11] heat-1-sin ==="
 uv run python scripts/visualize.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== VIS [2/8] heat-2-silu ==="
+echo "=== VIS [2/11] heat-2-silu ==="
 uv run python scripts/visualize.py --config configs/finals/heat-2-silu.yaml
 
-echo "=== VIS [3/8] heat-3-silu-cosine ==="
+echo "=== VIS [3/11] heat-3-silu-cosine ==="
 uv run python scripts/visualize.py --config configs/finals/heat-3-silu-cosine.yaml
 
-echo "=== VIS [4/8] heat-4-silu-lam05 ==="
+echo "=== VIS [4/11] heat-4-silu-lam05 ==="
 uv run python scripts/visualize.py --config configs/finals/heat-4-silu-lam05.yaml
 
-echo "=== VIS [5/8] heat-5-silu-lam05-cosine ==="
+echo "=== VIS [5/11] heat-5-silu-lam05-cosine ==="
 uv run python scripts/visualize.py --config configs/finals/heat-5-silu-lam05-cosine.yaml
 
-echo "=== VIS [6/8] heat-6-silu-lam05-3layers ==="
+echo "=== VIS [6/11] heat-6-silu-lam05-3layers ==="
 uv run python scripts/visualize.py --config configs/finals/heat-6-silu-lam05-3layers.yaml
 
-echo "=== VIS [7/8] heat-7-silu-lam05-cg10 ==="
+echo "=== VIS [7/11] heat-7-silu-lam05-cg10 ==="
 uv run python scripts/visualize.py --config configs/finals/heat-7-silu-lam05-cg10.yaml
 
-echo "=== VIS [8/8] heat-8-silu-lam05-3layers-cg10-cosine ==="
+echo "=== VIS [8/11] heat-8-silu-lam05-3layers-cg10-cosine ==="
 uv run python scripts/visualize.py --config configs/finals/heat-8-silu-lam05-3layers-cg10-cosine.yaml
+
+echo "=== VIS [9/11] heat-9-silu-lam01-cosine ==="
+uv run python scripts/visualize.py --config configs/finals/heat-9-silu-lam01-cosine.yaml
+
+echo "=== VIS [10/11] heat-10-silu-lam01-3layers-cg10-cosine ==="
+uv run python scripts/visualize.py --config configs/finals/heat-10-silu-lam01-3layers-cg10-cosine.yaml
+
+echo "=== VIS [11/11] heat-11-silu-lam05-3layers-cg5-cosine ==="
+uv run python scripts/visualize.py --config configs/finals/heat-11-silu-lam05-3layers-cg5-cosine.yaml
