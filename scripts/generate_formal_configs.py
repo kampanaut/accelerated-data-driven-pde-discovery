@@ -131,7 +131,7 @@ DEFAULT = {
     "adam_betas": [0.9, 0.999],
     "inner_steps": 16,
     "meta_batch_size": 25,
-    "max_iterations": 5000,
+    "max_iterations": 1000,
     "patience": 0,
     "checkpoint_interval": 100,
     "log_interval": 20,
@@ -273,7 +273,7 @@ VARIANTS = [
 #             "layers": lambda pde: _cheat_layers(pde.input_dim, pde.output_dim),
 #             "log_weights": True,
 #             "inner_steps": 10,
-#             "max_iterations": 5000,
+#             "max_iterations": 1000,
 #         },
 #     ),
 #     (
