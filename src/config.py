@@ -117,6 +117,7 @@ class TrainingSection:
     T_0: int = 500
     T_mult: int = 2
     min_lr: float = 1e-5
+    poly_power: float = 3.0
 
     # Loss
     loss_function: str = "normalized_mse"

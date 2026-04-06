@@ -196,6 +196,12 @@ class iMAMLTrainer:
                         self.outer_opt,
                         gamma=gamma,
                     )
+                elif t.scheduler_type == "polynomial":
+                    decay = torch.optim.lr_scheduler.PolynomialLR(
+                        self.outer_opt,
+                        total_iters=post_warmup_iters,
+                        power=t.poly_power,
+                    )
                 else:
                     decay = torch.optim.lr_scheduler.CosineAnnealingLR(
                         self.outer_opt,
