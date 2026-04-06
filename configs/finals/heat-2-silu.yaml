@@ -58,21 +58,16 @@ evaluation:
   noise_levels:
   - 0.0
   fine_tune_lr: 0.01
-  max_steps: 50
+  max_steps: 16
   deriv_threshold: 0.0005
   fixed_steps:
   - 0
-  - 1
-  - 2
-  - 3
-  - 4
   - 16
-  - 50
   holdout_size: 50000
   log_weights: false
 visualization:
   dpi: 300
-  only: scatter[0,1,2,3,4,16,50],jacobian[0,16,50],generalization,best-combo
+  only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
   - heat-2-silu
   exclude_suffixes_append: []

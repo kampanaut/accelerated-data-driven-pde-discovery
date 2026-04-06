@@ -165,7 +165,7 @@ DEFAULT = {
 
     # Evaluation
     "fine_tune_lr": 0.01,
-    "max_eval_steps": 50,
+    "max_eval_steps": 16,
     "noise_levels": [0.0],
     "holdout_size": 50000,
     "query_size": 10000,
@@ -445,7 +445,7 @@ def _build_config(
     # Fixed steps: include inner_steps as designed step
     inner_steps = flat.get("inner_steps", 5)
     max_eval = flat["max_eval_steps"]
-    fixed_steps = sorted(set([0, 1, 2, 3, 4, inner_steps, max_eval]))
+    fixed_steps = sorted(set([0, max_eval]))
 
     # Metal / spectral as section objects
     metal_raw = flat.get("metal", {})

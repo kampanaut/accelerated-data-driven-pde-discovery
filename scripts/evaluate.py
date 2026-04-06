@@ -141,7 +141,7 @@ def fine_tune(
         lr_schedule = None
         opt = torch.optim.LBFGS(
             model.parameters(), lr=1.0,
-            max_iter=1, max_eval=20,
+            max_iter=max_steps,
             tolerance_grad=1e-15,
             tolerance_change=1e-15,
             line_search_fn="strong_wolfe",
@@ -272,59 +272,60 @@ def fine_tune(
         opt.step()
         _holdout_and_callback(step_idx)
 
-    def _step_lbfgs(step_idx: int, grad_loss: torch.Tensor) -> None:
-        """L-BFGS step: closure with cost + proximal."""
-        def closure():
-            opt.zero_grad()
-            p = model(x)
-            gl = cost_fn(p, y) + _proximal_loss()
-            gl.backward()
-            return gl
-
-        opt.step(closure)
-        _holdout_and_callback(step_idx)
-
-    def _step_lbfgs_metal(step_idx: int, grad_loss: torch.Tensor) -> None:
-        """L-BFGS step: closure with cost + proximal + MeTAL."""
-        def closure():
-            opt.zero_grad()
-            p = model(x)
-            gl = cost_fn(p, y) + _proximal_loss()
-            ms = metal.support_step(step_idx, model, p, y, cost_fn)  # type: ignore[union-attr]
-            gl = gl + ms
-            gl.backward()
-            return gl
-
-        opt.step(closure)
-        _holdout_and_callback(step_idx)
-
     if use_lbfgs:
-        _step = _step_lbfgs_metal if metal is not None else _step_lbfgs
+        # Single .step() — L-BFGS runs max_steps iterations internally.
+        # Override fixed_steps: only step 0 (already done) and max_steps (after).
+        fixed_steps_set = {0, max_steps}
+        def lbfgs_closure():
+            opt.zero_grad()
+            p = model(x)
+            gl = cost_fn(p, y) + _proximal_loss()
+            gl.backward()
+            return gl
+
+        opt.step(lbfgs_closure)
+
+        # Record final train/holdout loss after adaptation
+        with torch.no_grad():
+            pred_final = model(x)
+            train_losses.append(metric_fn(pred_final, y).item())
+            pred_h_final = model(x_holdout)
+            holdout_losses.append(metric_fn(pred_h_final, y_holdout).item())
+
+        # Fire callback at max_steps (the adapted model)
+        if on_step is not None and max_steps in fixed_steps_set:
+            on_step(model, max_steps)
+
+        return FineTuneResult(
+            train_losses=np.array(train_losses),
+            holdout_losses=np.array(holdout_losses),
+        )
     else:
+        # SGD path
         _step = _step_sgd_with_metal if metal is not None else _step_sgd
 
-    # Phase 1: MeTAL-shaped inner steps (if MeTAL provided)
-    metal_steps = metal.n_steps if metal is not None else 0
-    for i in range(min(metal_steps, max_steps)):
-        pred = model(x)
-        train_losses.append(metric_fn(pred, y).item())
+        # Phase 1: MeTAL-shaped inner steps (if MeTAL provided)
+        metal_steps = metal.n_steps if metal is not None else 0
+        for i in range(min(metal_steps, max_steps)):
+            pred = model(x)
+            train_losses.append(metric_fn(pred, y).item())
 
-        grad_loss = cost_fn(pred, y)
-        meta_support = metal.support_step(i, model, pred, y, cost_fn)  # type: ignore[union-attr]
-        _step(i, grad_loss + meta_support)
+            grad_loss = cost_fn(pred, y)
+            meta_support = metal.support_step(i, model, pred, y, cost_fn)  # type: ignore[union-attr]
+            _step(i, grad_loss + meta_support)
 
-    # Phase 2: Standard loss for remaining steps
-    for i in range(metal_steps, max_steps):
-        pred = model(x)
-        train_losses.append(metric_fn(pred, y).item())
+        # Phase 2: Standard loss for remaining steps
+        for i in range(metal_steps, max_steps):
+            pred = model(x)
+            train_losses.append(metric_fn(pred, y).item())
 
-        grad_loss = cost_fn(pred, y)
-        _step(i, grad_loss)
+            grad_loss = cost_fn(pred, y)
+            _step(i, grad_loss)
 
-    return FineTuneResult(
-        train_losses=np.array(train_losses),
-        holdout_losses=np.array(holdout_losses),
-    )
+        return FineTuneResult(
+            train_losses=np.array(train_losses),
+            holdout_losses=np.array(holdout_losses),
+        )
 
 
 def evaluate_task(
@@ -533,8 +534,10 @@ def evaluate_task(
                 }
 
                 for si, step in enumerate(fixed_steps):
-                    maml_h = maml_result.holdout_losses[step]
-                    baseline_h = baseline_result.holdout_losses[step]
+                    # L-BFGS: holdout has 2 entries [step_0, step_N]. SGD: one per step.
+                    h_idx = si if (inner_optimizer == "lbfgs") else step
+                    maml_h = maml_result.holdout_losses[h_idx]
+                    baseline_h = baseline_result.holdout_losses[h_idx]
                     if maml_h > baseline_h:
                         loss_worse_steps.append(step)
 
