@@ -2,40 +2,40 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [1/17] heat-1-sin ==="
+echo "=== TRAIN [1/19] heat-1-sin ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== TRAIN [2/17] heat-2-silu ==="
+echo "=== TRAIN [2/19] heat-2-silu ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-2-silu.yaml
 
-echo "=== TRAIN [3/17] heat-3-silu-cosine ==="
+echo "=== TRAIN [3/19] heat-3-silu-cosine ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-3-silu-cosine.yaml
 
-echo "=== TRAIN [4/17] heat-4-silu-lam05 ==="
+echo "=== TRAIN [4/19] heat-4-silu-lam05 ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-4-silu-lam05.yaml
 
 # === EVALUATE ===
-echo "=== EVAL [1/17] heat-1-sin ==="
+echo "=== EVAL [1/19] heat-1-sin ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== EVAL [2/17] heat-2-silu ==="
+echo "=== EVAL [2/19] heat-2-silu ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-2-silu.yaml
 
-echo "=== EVAL [3/17] heat-3-silu-cosine ==="
+echo "=== EVAL [3/19] heat-3-silu-cosine ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-3-silu-cosine.yaml
 
-echo "=== EVAL [4/17] heat-4-silu-lam05 ==="
+echo "=== EVAL [4/19] heat-4-silu-lam05 ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-4-silu-lam05.yaml
 
 # === VISUALIZE ===
-echo "=== VIS [1/17] heat-1-sin ==="
+echo "=== VIS [1/19] heat-1-sin ==="
 uv run python scripts/visualize.py --config configs/finals/heat-1-sin.yaml
 
-echo "=== VIS [2/17] heat-2-silu ==="
+echo "=== VIS [2/19] heat-2-silu ==="
 uv run python scripts/visualize.py --config configs/finals/heat-2-silu.yaml
 
-echo "=== VIS [3/17] heat-3-silu-cosine ==="
+echo "=== VIS [3/19] heat-3-silu-cosine ==="
 uv run python scripts/visualize.py --config configs/finals/heat-3-silu-cosine.yaml
 
-echo "=== VIS [4/17] heat-4-silu-lam05 ==="
+echo "=== VIS [4/19] heat-4-silu-lam05 ==="
 uv run python scripts/visualize.py --config configs/finals/heat-4-silu-lam05.yaml

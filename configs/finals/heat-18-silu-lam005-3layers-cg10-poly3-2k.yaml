@@ -1,5 +1,5 @@
 experiment:
-  name: heat-9-silu-lam01-cosine
+  name: heat-18-silu-lam005-3layers-cg10-poly3-2k
   pde_type: heat
   seed: 42
   device: cuda
@@ -19,11 +19,12 @@ training:
   meta_batch_size: 25
   k_shot: 1000
   query_size: 10000
-  max_iterations: 1000
+  max_iterations: 2000
   patience: 0
   checkpoint_interval: 100
   log_interval: 20
   hidden_dims:
+  - 100
   - 100
   - 100
   activation: silu
@@ -36,7 +37,7 @@ training:
   lslr_enabled: false
   warmup_iterations: 0
   use_scheduler: true
-  scheduler_type: cosine
+  scheduler_type: polynomial
   T_0: 200
   T_mult: 2
   min_lr: 1.0e-07
@@ -46,10 +47,10 @@ training:
   zero_non_rhs_features: true
   imaml:
     enabled: true
-    lam: 0.1
+    lam: 0.005
     lam_lr: 0.0
     lam_min: 0.0
-    cg_steps: 5
+    cg_steps: 10
     cg_damping: 1.0
     inner_optimizer: lbfgs
     proximal_every_step: false
@@ -70,6 +71,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - heat-9-silu-lam01-cosine
+  - heat-18-silu-lam005-3layers-cg10-poly3-2k
   exclude_suffixes_append: []
   exclude_max_iteration: 20
