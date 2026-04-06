@@ -237,6 +237,12 @@ FINALS_PRESETS = Preset([
                   "cg_damping": 1.0, "inner_optimizer": "lbfgs",
                   "proximal_every_step": False},
     }),
+    ("silu-lam05-cg10", {
+        "activation": "silu",
+        "imaml": {"enabled": True, "lam": 0.5, "cg_steps": 10,
+                  "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                  "proximal_every_step": False},
+    }),
 ])
 
 VARIANTS = [
