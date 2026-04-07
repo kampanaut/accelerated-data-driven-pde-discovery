@@ -425,6 +425,22 @@ VARIANTS = [
             "min_lr": 1e-7,
         },
     ),
+    # ── The Finals L-BFGS outer: curvature-aware meta-updates ──────────
+    (
+        VariantMeta("the-finals-lbfgs-outer", "configs/the-finals-lbfgs-outer", "data/models/the-finals-lbfgs-outer"),
+        {
+            "pde_type": Axis(["heat", "nl_heat"]),
+            "activation": "silu",
+            "hidden_dims": [100, 100, 100],
+            "max_iterations": 1000,
+            "meta_batch_size": 25,
+            "use_scheduler": False,
+            "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                      "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                      "outer_optimizer": "lbfgs",
+                      "proximal_every_step": False},
+        },
+    ),
     # ── The Finals 5K: longer training ────────────────────────────────
     (
         VariantMeta("the-finals-5k", "configs/the-finals-5k", "data/models/the-finals-5k"),
