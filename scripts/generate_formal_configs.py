@@ -425,6 +425,23 @@ VARIANTS = [
             "min_lr": 1e-7,
         },
     ),
+    # ── The Finals 5K: longer training ────────────────────────────────
+    (
+        VariantMeta("the-finals-5k", "configs/the-finals-5k", "data/models/the-finals-5k"),
+        {
+            "pde_type": Axis(["heat", "nl_heat"]),
+            "activation": "silu",
+            "hidden_dims": [100, 100, 100],
+            "max_iterations": 5000,
+            "meta_batch_size": 25,
+            "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                      "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                      "proximal_every_step": False},
+            "use_scheduler": True, "scheduler_type": "polynomial",
+            "poly_power": 3.0,
+            "min_lr": 1e-7,
+        },
+    ),
 ]
 
 # ── Archived variants (MAML era) ─────────────────────────────────────
