@@ -57,6 +57,8 @@ training:
     cg_steps: 5
     cg_damping: 1.0
     inner_optimizer: lbfgs
+    outer_optimizer: adam
+    outer_lbfgs_after: 0
     proximal_every_step: false
 evaluation:
   k_values:
