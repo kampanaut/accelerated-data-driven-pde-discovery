@@ -387,6 +387,17 @@ FINALS_PRESETS = Preset([
         "use_scheduler": True, "scheduler_type": "polynomial",
         "min_lr": 1e-7,
     }),
+    ("sin-lam005-3layers-cg10-poly3-2k-sse", {
+        "activation": "sin",
+        "hidden_dims": [100, 100, 100],
+        "max_iterations": 2000,
+        "loss_function": "sse",
+        "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                  "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                  "proximal_every_step": False},
+        "use_scheduler": True, "scheduler_type": "polynomial",
+        "min_lr": 1e-7,
+    }),
 ])
 
 VARIANTS = [
