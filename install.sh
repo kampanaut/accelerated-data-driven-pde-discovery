@@ -38,7 +38,32 @@ uv sync
 # Make runner scripts executable
 chmod u+x scripts/*.sh
 
-# Download Heat dataset
-hf download kampanaut/ai-chaos-theory-heat --repo-type dataset --include "heat_*_00*" --local-dir data/datasets/heat_train-1 && \
-hf download kampanaut/ai-chaos-theory-heat --repo-type dataset --include "heat_*_v0*" --local-dir data/datasets/heat_val-1 && \
-hf download kampanaut/ai-chaos-theory-heat --repo-type dataset --include "heat_*_t0*" --local-dir data/datasets/heat_test-1
+# Download datasets
+# Usage: ./install.sh [heat|nl_heat|br]  (no flag = all)
+REPO="kampanaut/maml-pde-datasets"
+
+download_heat() {
+    hf download $REPO --repo-type dataset --include "heat_train-1/*" --local-dir data/datasets
+    hf download $REPO --repo-type dataset --include "heat_val-1/*" --local-dir data/datasets
+    hf download $REPO --repo-type dataset --include "heat_test-1/*" --local-dir data/datasets
+}
+
+download_nl_heat() {
+    hf download $REPO --repo-type dataset --include "nl_heat_train-1/*" --local-dir data/datasets
+    hf download $REPO --repo-type dataset --include "nl_heat_val-1/*" --local-dir data/datasets
+    hf download $REPO --repo-type dataset --include "nl_heat_test-1/*" --local-dir data/datasets
+}
+
+download_br() {
+    hf download $REPO --repo-type dataset --include "br_train-2/*" --local-dir data/datasets
+    hf download $REPO --repo-type dataset --include "br_val-2/*" --local-dir data/datasets
+    hf download $REPO --repo-type dataset --include "br_test-2/*" --local-dir data/datasets
+}
+
+case "${1:-all}" in
+    heat)    download_heat ;;
+    nl_heat) download_nl_heat ;;
+    br)      download_br ;;
+    all)     download_heat && download_nl_heat && download_br ;;
+    *)       echo "Usage: $0 [heat|nl_heat|br|all]"; exit 1 ;;
+esac
