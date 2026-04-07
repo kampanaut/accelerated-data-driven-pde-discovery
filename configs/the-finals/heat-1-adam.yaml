@@ -1,5 +1,5 @@
 experiment:
-  name: heat-1
+  name: heat-1-adam
   pde_type: heat
   seed: 42
   device: cuda
@@ -58,6 +58,8 @@ training:
     cg_steps: 10
     cg_damping: 1.0
     inner_optimizer: lbfgs
+    outer_optimizer: adam
+    outer_lbfgs_after: 0
     proximal_every_step: false
 evaluation:
   k_values:
@@ -76,6 +78,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - heat-1
+  - heat-1-adam
   exclude_suffixes_append: []
   exclude_max_iteration: 20

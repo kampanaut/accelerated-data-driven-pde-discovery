@@ -2,31 +2,40 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [1/3] heat-1 ==="
-uv run python scripts/train_maml.py --config configs/the-finals/heat-1.yaml
+echo "=== TRAIN [1/6] heat-1-adam ==="
+uv run python scripts/train_maml.py --config configs/the-finals/heat-1-adam.yaml
 
-echo "=== TRAIN [2/3] nl_heat-2 ==="
-uv run python scripts/train_maml.py --config configs/the-finals/nl_heat-2.yaml
+echo "=== TRAIN [2/6] heat-2-adam+lbfgs ==="
+uv run python scripts/train_maml.py --config configs/the-finals/heat-2-adam+lbfgs.yaml
 
-echo "=== TRAIN [3/3] br-3 ==="
-uv run python scripts/train_maml.py --config configs/the-finals/br-3.yaml
+echo "=== TRAIN [3/6] nl_heat-3-adam ==="
+uv run python scripts/train_maml.py --config configs/the-finals/nl_heat-3-adam.yaml
+
+echo "=== TRAIN [4/6] nl_heat-4-adam+lbfgs ==="
+uv run python scripts/train_maml.py --config configs/the-finals/nl_heat-4-adam+lbfgs.yaml
 
 # === EVALUATE ===
-echo "=== EVAL [1/3] heat-1 ==="
-uv run python scripts/evaluate.py --config configs/the-finals/heat-1.yaml
+echo "=== EVAL [1/6] heat-1-adam ==="
+uv run python scripts/evaluate.py --config configs/the-finals/heat-1-adam.yaml
 
-echo "=== EVAL [2/3] nl_heat-2 ==="
-uv run python scripts/evaluate.py --config configs/the-finals/nl_heat-2.yaml
+echo "=== EVAL [2/6] heat-2-adam+lbfgs ==="
+uv run python scripts/evaluate.py --config configs/the-finals/heat-2-adam+lbfgs.yaml
 
-echo "=== EVAL [3/3] br-3 ==="
-uv run python scripts/evaluate.py --config configs/the-finals/br-3.yaml
+echo "=== EVAL [3/6] nl_heat-3-adam ==="
+uv run python scripts/evaluate.py --config configs/the-finals/nl_heat-3-adam.yaml
+
+echo "=== EVAL [4/6] nl_heat-4-adam+lbfgs ==="
+uv run python scripts/evaluate.py --config configs/the-finals/nl_heat-4-adam+lbfgs.yaml
 
 # === VISUALIZE ===
-echo "=== VIS [1/3] heat-1 ==="
-uv run python scripts/visualize.py --config configs/the-finals/heat-1.yaml
+echo "=== VIS [1/6] heat-1-adam ==="
+uv run python scripts/visualize.py --config configs/the-finals/heat-1-adam.yaml
 
-echo "=== VIS [2/3] nl_heat-2 ==="
-uv run python scripts/visualize.py --config configs/the-finals/nl_heat-2.yaml
+echo "=== VIS [2/6] heat-2-adam+lbfgs ==="
+uv run python scripts/visualize.py --config configs/the-finals/heat-2-adam+lbfgs.yaml
 
-echo "=== VIS [3/3] br-3 ==="
-uv run python scripts/visualize.py --config configs/the-finals/br-3.yaml
+echo "=== VIS [3/6] nl_heat-3-adam ==="
+uv run python scripts/visualize.py --config configs/the-finals/nl_heat-3-adam.yaml
+
+echo "=== VIS [4/6] nl_heat-4-adam+lbfgs ==="
+uv run python scripts/visualize.py --config configs/the-finals/nl_heat-4-adam+lbfgs.yaml

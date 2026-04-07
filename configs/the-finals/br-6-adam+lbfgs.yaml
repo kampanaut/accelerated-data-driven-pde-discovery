@@ -1,14 +1,14 @@
 experiment:
-  name: nl_heat-2
-  pde_type: nl_heat
+  name: br-6-adam+lbfgs
+  pde_type: br
   seed: 42
   device: cuda
 output:
-  base_dir: data/models/the-finals/nl_heat
+  base_dir: data/models/the-finals/br
 data:
-  meta_train_dir: data/datasets/nl_heat_train-1
-  meta_val_dir: data/datasets/nl_heat_val-1
-  meta_test_dir: data/datasets/nl_heat_test-1
+  meta_train_dir: data/datasets/br_train-2
+  meta_val_dir: data/datasets/br_val-2
+  meta_test_dir: data/datasets/br_test-2
 training:
   inner_lr: 0.01
   outer_lr: 0.01
@@ -19,7 +19,7 @@ training:
   meta_batch_size: 25
   k_shot: 1000
   query_size: 10000
-  max_iterations: 2000
+  max_iterations: 2100
   patience: 0
   checkpoint_interval: 100
   log_interval: 20
@@ -28,8 +28,8 @@ training:
   - 100
   - 100
   activation: silu
-  input_dim: 5
-  output_dim: 1
+  input_dim: 10
+  output_dim: 2
   first_order: false
   msl_enabled: false
   da_enabled: false
@@ -58,6 +58,8 @@ training:
     cg_steps: 10
     cg_damping: 1.0
     inner_optimizer: lbfgs
+    outer_optimizer: adam+lbfgs
+    outer_lbfgs_after: 2000
     proximal_every_step: false
 evaluation:
   k_values:
@@ -76,6 +78,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-2
+  - br-6-adam+lbfgs
   exclude_suffixes_append: []
   exclude_max_iteration: 20
