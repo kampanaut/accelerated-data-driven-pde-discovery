@@ -118,6 +118,11 @@ class TrainingSection:
     T_mult: int = 2
     min_lr: float = 1e-5
     poly_power: float = 3.0
+    plateau_factor: float = 0.8
+    plateau_patience: int = 70
+    plateau_cooldown: int = 40
+    plateau_threshold: float = 1e-3
+    plateau_window: int = 20
 
     # Loss
     loss_function: str = "normalized_mse"

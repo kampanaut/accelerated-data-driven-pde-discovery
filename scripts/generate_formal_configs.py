@@ -356,6 +356,26 @@ FINALS_PRESETS = Preset([
         "use_scheduler": True, "scheduler_type": "polynomial",
         "min_lr": 1e-7,
     }),
+    ("silu-lam005-3layers-cg10-plateau-2k", {
+        "activation": "silu",
+        "hidden_dims": [100, 100, 100],
+        "max_iterations": 2000,
+        "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                  "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                  "proximal_every_step": False},
+        "use_scheduler": True, "scheduler_type": "plateau",
+        "min_lr": 1e-7,
+    }),
+    ("silu-lam01-3layers-cg10-plateau-2k", {
+        "activation": "silu",
+        "hidden_dims": [100, 100, 100],
+        "max_iterations": 2000,
+        "imaml": {"enabled": True, "lam": 0.1, "cg_steps": 10,
+                  "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                  "proximal_every_step": False},
+        "use_scheduler": True, "scheduler_type": "plateau",
+        "min_lr": 1e-7,
+    }),
 ])
 
 VARIANTS = [

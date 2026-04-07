@@ -2,40 +2,40 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [5/19] heat-5-silu-lam05-cosine ==="
+echo "=== TRAIN [5/21] heat-5-silu-lam05-cosine ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-5-silu-lam05-cosine.yaml
 
-echo "=== TRAIN [6/19] heat-6-silu-lam05-3layers ==="
+echo "=== TRAIN [6/21] heat-6-silu-lam05-3layers ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-6-silu-lam05-3layers.yaml
 
-echo "=== TRAIN [7/19] heat-7-silu-lam05-cg10 ==="
+echo "=== TRAIN [7/21] heat-7-silu-lam05-cg10 ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-7-silu-lam05-cg10.yaml
 
-echo "=== TRAIN [8/19] heat-8-silu-lam05-3layers-cg10-cosine ==="
+echo "=== TRAIN [8/21] heat-8-silu-lam05-3layers-cg10-cosine ==="
 uv run python scripts/train_maml.py --config configs/finals/heat-8-silu-lam05-3layers-cg10-cosine.yaml
 
 # === EVALUATE ===
-echo "=== EVAL [5/19] heat-5-silu-lam05-cosine ==="
+echo "=== EVAL [5/21] heat-5-silu-lam05-cosine ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-5-silu-lam05-cosine.yaml
 
-echo "=== EVAL [6/19] heat-6-silu-lam05-3layers ==="
+echo "=== EVAL [6/21] heat-6-silu-lam05-3layers ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-6-silu-lam05-3layers.yaml
 
-echo "=== EVAL [7/19] heat-7-silu-lam05-cg10 ==="
+echo "=== EVAL [7/21] heat-7-silu-lam05-cg10 ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-7-silu-lam05-cg10.yaml
 
-echo "=== EVAL [8/19] heat-8-silu-lam05-3layers-cg10-cosine ==="
+echo "=== EVAL [8/21] heat-8-silu-lam05-3layers-cg10-cosine ==="
 uv run python scripts/evaluate.py --config configs/finals/heat-8-silu-lam05-3layers-cg10-cosine.yaml
 
 # === VISUALIZE ===
-echo "=== VIS [5/19] heat-5-silu-lam05-cosine ==="
+echo "=== VIS [5/21] heat-5-silu-lam05-cosine ==="
 uv run python scripts/visualize.py --config configs/finals/heat-5-silu-lam05-cosine.yaml
 
-echo "=== VIS [6/19] heat-6-silu-lam05-3layers ==="
+echo "=== VIS [6/21] heat-6-silu-lam05-3layers ==="
 uv run python scripts/visualize.py --config configs/finals/heat-6-silu-lam05-3layers.yaml
 
-echo "=== VIS [7/19] heat-7-silu-lam05-cg10 ==="
+echo "=== VIS [7/21] heat-7-silu-lam05-cg10 ==="
 uv run python scripts/visualize.py --config configs/finals/heat-7-silu-lam05-cg10.yaml
 
-echo "=== VIS [8/19] heat-8-silu-lam05-3layers-cg10-cosine ==="
+echo "=== VIS [8/21] heat-8-silu-lam05-3layers-cg10-cosine ==="
 uv run python scripts/visualize.py --config configs/finals/heat-8-silu-lam05-3layers-cg10-cosine.yaml

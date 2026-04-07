@@ -42,6 +42,11 @@ training:
   T_mult: 2
   min_lr: 1.0e-07
   poly_power: 3.0
+  plateau_factor: 0.8
+  plateau_patience: 70
+  plateau_cooldown: 40
+  plateau_threshold: 0.001
+  plateau_window: 20
   loss_function: normalized_mse
   max_grad_norm: 0.0
   zero_non_rhs_features: true

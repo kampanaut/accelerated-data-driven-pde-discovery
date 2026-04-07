@@ -202,6 +202,16 @@ class iMAMLTrainer:
                         total_iters=post_warmup_iters,
                         power=t.poly_power,
                     )
+                elif t.scheduler_type == "plateau":
+                    decay = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        self.outer_opt,
+                        mode="min",
+                        factor=t.plateau_factor,
+                        patience=t.plateau_patience,
+                        threshold=t.plateau_threshold,
+                        cooldown=t.plateau_cooldown,
+                        min_lr=t.min_lr,
+                    )
                 else:
                     decay = torch.optim.lr_scheduler.CosineAnnealingLR(
                         self.outer_opt,
@@ -219,6 +229,10 @@ class iMAMLTrainer:
                 )
             elif schedulers:
                 self.scheduler = schedulers[0]
+
+        # Plateau scheduler state
+        self._plateau_mode = (t.use_scheduler and t.scheduler_type == "plateau")
+        self._loss_window: List[float] = []
 
         # Checkpoint mode validation: exactly one of patience or checkpoint_interval
         if t.patience > 0 and t.checkpoint_interval == 0:
@@ -1059,7 +1073,15 @@ class iMAMLTrainer:
                 return self.history
 
             if self.scheduler is not None:
-                self.scheduler.step()
+                if self._plateau_mode:
+                    # Feed rolling average to ReduceLROnPlateau
+                    self._loss_window.append(train_loss)
+                    if len(self._loss_window) > self.config.plateau_window:
+                        self._loss_window.pop(0)
+                    rolling_avg = sum(self._loss_window) / len(self._loss_window)
+                    self.scheduler.step(rolling_avg)  # type: ignore[call-arg]
+                else:
+                    self.scheduler.step()
 
             self.history["train_loss"].append(train_loss)
             self.history["iteration"].append(iteration)
