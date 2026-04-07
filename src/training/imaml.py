@@ -151,13 +151,21 @@ class iMAMLTrainer:
               f"cg_damping={im.cg_damping}, inner_optimizer={im.inner_optimizer}, "
               f"proximal={prox_mode}")
 
-        # Outer loop optimizer (meta-update) — must be single-step (Adam/SGD).
-        # L-BFGS requires re-evaluating the full meta-objective per line search
-        # probe (all tasks × inner solve × CG), which is prohibitively expensive.
+        # Outer loop optimizer
         opt_params = list(self.model.parameters())
-        self.outer_opt = torch.optim.Adam(
-            opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
-        )  # eps=1e-3 matches reference (aravindr93/imaml_dev, learner_model.py:17)
+        if im.outer_optimizer == "lbfgs":
+            self.outer_opt = torch.optim.LBFGS(
+                opt_params, lr=1.0, max_iter=1, max_eval=20,
+                tolerance_grad=1e-15, tolerance_change=1e-15,
+                line_search_fn="strong_wolfe",
+            )
+            self._outer_step = self._outer_step_lbfgs
+            print(f"  Outer optimizer: L-BFGS (no LR, no scheduler needed)")
+        else:
+            self.outer_opt = torch.optim.Adam(
+                opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
+            )  # eps=1e-3 matches reference (aravindr93/imaml_dev, learner_model.py:17)
+            self._outer_step = self._outer_step_adam
 
         # LR scheduler: optional warmup → cosine decay (single or warm restarts)
         self.scheduler = None
@@ -657,25 +665,19 @@ class iMAMLTrainer:
 
         return corrected_grad, query_loss_val, metal_grad
 
-    def outer_step(self, tasks: List[PDETask]) -> float:
-        """
-        Perform one iMAML meta-update step.
+    def _compute_meta_gradient(self, tasks: List[PDETask]) -> float:
+        """Compute CG-corrected meta-gradient and set .grad on model params.
 
-        Accumulates CG-corrected gradient vectors (not loss tensors),
-        then sets .grad on model params and calls outer_opt.step().
-
-        Returns:
-            Average query loss across tasks
+        Returns average query loss. Does NOT call optimizer.step().
         """
         self.model.train()
-        self.outer_opt.zero_grad()
 
         n_params = sum(p.numel() for p in self.model.parameters())
         meta_grad = torch.zeros(n_params, device=self.device)
         n_metal_params = sum(p.numel() for p in self.metal.parameters()) if self.metal is not None else 0
         metal_meta_grad = torch.zeros(n_metal_params, device=self.device) if n_metal_params > 0 else None
         total_loss = 0.0
-        lam_grad = 0.0
+        self._lam_grad = 0.0
 
         for i, task in enumerate(tasks):
             print(f"\ttask [{i}/{len(tasks)}]: {task.task_name}")
@@ -688,8 +690,6 @@ class iMAMLTrainer:
 
             # Optional lambda meta-learning
             if self.lam_lr > 0:
-                # Compute support gradient at adapted point for lambda update
-                # (already available from CG — recompute cheaply)
                 fast_model = copy.deepcopy(self.model)
                 theta = self._get_flat_params(self.model)
                 support_x, support_y, _, _, support_coords, _ = self._task_setup(task, seed)
@@ -699,7 +699,7 @@ class iMAMLTrainer:
                 flat_train_grad = torch.cat([g.view(-1) for g in train_grad_t]).detach()
                 inner_prod = flat_train_grad.dot(corrected_grad)
                 task_lam_grad = inner_prod / (self.lam ** 2 + 0.1)
-                lam_grad += task_lam_grad / len(tasks)
+                self._lam_grad += task_lam_grad / len(tasks)
 
         # Check for NaN
         avg_loss = total_loss
@@ -721,18 +721,55 @@ class iMAMLTrainer:
                 p.grad = metal_meta_grad[offset:offset + numel].view(p.size()).clone()
                 offset += numel
 
-        # Gradient clipping (model + MeTAL params for outer step)
+        # Gradient clipping
         if self.config.max_grad_norm > 0:
             clip_params = list(self.model.parameters())
             if self.metal is not None:
                 clip_params += list(self.metal.parameters())
             torch.nn.utils.clip_grad_norm_(clip_params, self.config.max_grad_norm)
 
-        self.outer_opt.step()
+        return avg_loss
+
+    def _outer_step_adam(self, tasks: List[PDETask]) -> float:
+        """Adam outer step: compute gradient, then step."""
+        avg_loss = self._compute_meta_gradient(tasks)
+        self.outer_opt.step()  # type: ignore[call-arg]
+        return avg_loss
+
+    def _outer_step_lbfgs(self, tasks: List[PDETask]) -> float:
+        """L-BFGS outer step: closure recomputes gradient at trial points."""
+        result = 0.0
+        probe = 0
+
+        def closure():
+            nonlocal result, probe
+            probe += 1
+            print(f"\t[L-BFGS outer probe {probe}]")
+            self.outer_opt.zero_grad()
+            result = self._compute_meta_gradient(tasks)
+            return torch.tensor(result, device=self.device)
+
+        self.outer_opt.step(closure)
+        return result
+
+    def outer_step(self, tasks: List[PDETask]) -> float:
+        """
+        Perform one iMAML meta-update step.
+
+        For Adam: compute gradient, then Adam.step().
+        For L-BFGS: closure recomputes gradient at trial points during line search.
+        Same task batch used across all closure calls within one .step().
+
+        Returns:
+            Average query loss across tasks
+        """
+        self.outer_opt.zero_grad()
+
+        avg_loss = self._outer_step(tasks)
 
         # Lambda update
         if self.lam_lr > 0:
-            lam_delta = -self.lam_lr * lam_grad
+            lam_delta = -self.lam_lr * self._lam_grad
             self.lam = torch.clamp(self.lam + lam_delta, self.lam_min, 5000.0)
 
         return avg_loss
