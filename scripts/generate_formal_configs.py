@@ -401,11 +401,28 @@ FINALS_PRESETS = Preset([
 ])
 
 VARIANTS = [
-    # ── Finals: iMAML ────────────────────────────────────────────────
+    # ── Finals: iMAML Heat ablation ──────────────────────────────────
     (
         VariantMeta("finals", "configs/finals", "data/models/finals"),
         {
             "loss_preset": FINALS_PRESETS,
+        },
+    ),
+    # ── The Finals: winner config across PDEs ────────────────────────
+    (
+        VariantMeta("the-finals", "configs/the-finals", "data/models/the-finals"),
+        {
+            "pde_type": Axis(["heat", "nl_heat", "br"]),
+            "activation": "silu",
+            "hidden_dims": [100, 100, 100],
+            "max_iterations": 2000,
+            "meta_batch_size": 25,
+            "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                      "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                      "proximal_every_step": False},
+            "use_scheduler": True, "scheduler_type": "polynomial",
+            "poly_power": 3.0,
+            "min_lr": 1e-7,
         },
     ),
 ]
