@@ -1010,7 +1010,7 @@ class iMAMLTrainer:
         self._training_finalize(self._last_train_loss, self._early_stopped, checkpoint_dir)
 
         print()
-        print(f"Training complete at iteration {self.iteration}")
+        print(f"Training complete at iteration {self.iteration + 1}")
 
         return self.history, True
 
