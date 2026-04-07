@@ -433,12 +433,23 @@ VARIANTS = [
             "activation": "silu",
             "hidden_dims": [100, 100, 100],
             "max_iterations": 1000,
-            "meta_batch_size": 25,
             "use_scheduler": False,
-            "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
-                      "cg_damping": 1.0, "inner_optimizer": "lbfgs",
-                      "outer_optimizer": "lbfgs",
-                      "proximal_every_step": False},
+            "loss_preset": Preset([
+                ("mb25", {
+                    "meta_batch_size": 25,
+                    "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                              "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                              "outer_optimizer": "lbfgs",
+                              "proximal_every_step": False},
+                }),
+                ("full", {
+                    "meta_batch_size": 36,
+                    "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                              "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                              "outer_optimizer": "lbfgs",
+                              "proximal_every_step": False},
+                }),
+            ]),
         },
     ),
     # ── The Finals 5K: longer training ────────────────────────────────
