@@ -443,7 +443,7 @@ VARIANTS = [
                               "proximal_every_step": False},
                 }),
                 ("full", {
-                    "meta_batch_size": 36,
+                    "meta_batch_size": 9999,  # full batch — capped by task count
                     "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
                               "cg_damping": 1.0, "inner_optimizer": "lbfgs",
                               "outer_optimizer": "lbfgs",

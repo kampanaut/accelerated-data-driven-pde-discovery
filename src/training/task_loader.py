@@ -1185,10 +1185,8 @@ class MetaLearningDataLoader:
         """
         Sample random subset of tasks for meta-training batch.
         """
-        if n_tasks > len(self.tasks):
-            raise ValueError(
-                f"Cannot sample {n_tasks} tasks from {len(self.tasks)} available tasks"
-            )
+        if n_tasks >= len(self.tasks):
+            return list(self.tasks)
 
         gen = torch.Generator()
         if seed is not None:
