@@ -153,6 +153,7 @@ class iMAMLTrainer:
 
         # Outer loop optimizer
         opt_params = list(self.model.parameters())
+        self._opt_params = opt_params
         if im.outer_optimizer == "lbfgs":
             self.outer_opt = torch.optim.LBFGS(
                 opt_params, lr=1.0, max_iter=1, max_eval=20,
@@ -161,6 +162,14 @@ class iMAMLTrainer:
             )
             self._outer_step = self._outer_step_lbfgs
             print(f"  Outer optimizer: L-BFGS (no LR, no scheduler needed)")
+        elif im.outer_optimizer == "adam+lbfgs":
+            # Phase 1: Adam. Phase 2: L-BFGS (switched in train())
+            self.outer_opt = torch.optim.Adam(
+                opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
+            )
+            self._outer_step = self._outer_step_adam
+            self._outer_lbfgs_after = im.outer_lbfgs_after
+            print(f"  Outer optimizer: Adam → L-BFGS after iter {im.outer_lbfgs_after}")
         else:
             self.outer_opt = torch.optim.Adam(
                 opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
@@ -1015,7 +1024,34 @@ class iMAMLTrainer:
             signal.SIGINT, lambda *_: setattr(self, "_stop_requested", True)
         )
 
-        if self.config.da_enabled:
+        im = self.config.imaml
+        if im.outer_optimizer == "adam+lbfgs":
+            # Phase 1: Adam
+            switch_at = im.outer_lbfgs_after
+            phase1_start = max(start_iteration, 0)
+            if phase1_start < switch_at:
+                print(f"  Phase 1: Adam outer, iterations {phase1_start}→{switch_at}")
+                result = self._run_phase(phase1_start, switch_at, checkpoint_dir, log_interval)
+                if result is not None:
+                    signal.signal(signal.SIGINT, prev_handler)
+                    return result, False
+
+            # Phase 2: switch to L-BFGS outer
+            phase2_start = max(start_iteration, switch_at)
+            if phase2_start < self.config.max_iterations:
+                print(f"  Phase 2: L-BFGS outer (full batch), iterations {phase2_start}→{self.config.max_iterations}")
+                self.outer_opt = torch.optim.LBFGS(
+                    self._opt_params, lr=1.0, max_iter=1, max_eval=20,
+                    tolerance_grad=1e-15, tolerance_change=1e-15,
+                    line_search_fn="strong_wolfe",
+                )
+                self._outer_step = self._outer_step_lbfgs
+                self.scheduler = None  # L-BFGS doesn't use scheduler
+                result = self._run_phase(phase2_start, self.config.max_iterations, checkpoint_dir, log_interval)
+                if result is not None:
+                    signal.signal(signal.SIGINT, prev_handler)
+                    return result, False
+        elif self.config.da_enabled:
             # DA for iMAML: CG=0 (FOMAML) until da_threshold, then CG=config value
             da_end = min(self.config.da_threshold, self.config.max_iterations)
             phase1_start = max(start_iteration, 0)
