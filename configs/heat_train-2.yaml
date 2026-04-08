@@ -1,0 +1,61 @@
+# Heat Equation Training Configuration v2
+# 28 tasks: 7 gb + 7 mb + 7 rp + 7 ss
+# u_t = D * nabla^2(u), D uniformly sampled across tasks from [0.0, 2.0]
+# Domain 2pi x 2pi, 512x512, dt=0.005
+
+simulation:
+  name: "heat_train-2"
+  uniform_sample: true
+  seed: 42
+
+  D: [0.0, 2.0]
+
+  domain_size: [6.283185307179586, 6.283185307179586]  # 2*pi
+  resolution: [512, 512]
+
+  t_end: 5.0
+  dt: 0.005
+  save_interval: 0.1
+
+output:
+  base_dir: "data/datasets"
+
+# ============================================================================
+# Initial Conditions: 7 gb + 7 mb + 7 rp + 7 ss = 28 tasks
+# ============================================================================
+initial_conditions:
+  # ========== gaussian_bump (gb) — 7 tasks ==========
+  - {name: "heat_gb_001", type: "gaussian_bump", sigma: 0.3, amplitude: 1.0, seed: 5010001}
+  - {name: "heat_gb_002", type: "gaussian_bump", sigma: 0.5, amplitude: 1.5, seed: 5010002}
+  - {name: "heat_gb_003", type: "gaussian_bump", sigma: 0.7, amplitude: 0.8, seed: 5010003}
+  - {name: "heat_gb_004", type: "gaussian_bump", sigma: 0.4, amplitude: 2.0, seed: 5010004}
+  - {name: "heat_gb_005", type: "gaussian_bump", sigma: 0.2, amplitude: 1.2, seed: 5010005}
+  - {name: "heat_gb_006", type: "gaussian_bump", sigma: 0.6, amplitude: 1.0, seed: 5010006}
+  - {name: "heat_gb_007", type: "gaussian_bump", sigma: 0.3, amplitude: 1.8, seed: 5010007}
+
+  # ========== multi_bump (mb) — 7 tasks ==========
+  - {name: "heat_mb_001", type: "multi_bump", n_bumps: 3, sigma_range: [0.2, 0.6], seed: 5020001}
+  - {name: "heat_mb_002", type: "multi_bump", n_bumps: 5, sigma_range: [0.2, 0.6], seed: 5020002}
+  - {name: "heat_mb_003", type: "multi_bump", n_bumps: 2, sigma_range: [0.3, 0.8], seed: 5020003}
+  - {name: "heat_mb_004", type: "multi_bump", n_bumps: 4, sigma_range: [0.1, 0.5], seed: 5020004}
+  - {name: "heat_mb_005", type: "multi_bump", n_bumps: 6, sigma_range: [0.2, 0.4], seed: 5020005}
+  - {name: "heat_mb_006", type: "multi_bump", n_bumps: 3, sigma_range: [0.3, 0.7], seed: 5020006}
+  - {name: "heat_mb_007", type: "multi_bump", n_bumps: 5, sigma_range: [0.1, 0.6], seed: 5020007}
+
+  # ========== random_perturbation (rp) — 7 tasks ==========
+  - {name: "heat_rp_001", type: "random_perturbation", amplitude: 0.5, n_modes: 8, seed: 5030001}
+  - {name: "heat_rp_002", type: "random_perturbation", amplitude: 1.0, n_modes: 12, seed: 5030002}
+  - {name: "heat_rp_003", type: "random_perturbation", amplitude: 0.3, n_modes: 5, seed: 5030003}
+  - {name: "heat_rp_004", type: "random_perturbation", amplitude: 0.8, n_modes: 15, seed: 5030004}
+  - {name: "heat_rp_005", type: "random_perturbation", amplitude: 0.5, n_modes: 10, seed: 5030005}
+  - {name: "heat_rp_006", type: "random_perturbation", amplitude: 1.2, n_modes: 8, seed: 5030006}
+  - {name: "heat_rp_007", type: "random_perturbation", amplitude: 0.4, n_modes: 20, seed: 5030007}
+
+  # ========== sine_superposition (ss) — 7 tasks ==========
+  - {name: "heat_ss_001", type: "sine_superposition", modes: 2, seed: 5040001}
+  - {name: "heat_ss_002", type: "sine_superposition", modes: 3, seed: 5040002}
+  - {name: "heat_ss_003", type: "sine_superposition", modes: 4, seed: 5040003}
+  - {name: "heat_ss_004", type: "sine_superposition", modes: 5, seed: 5040004}
+  - {name: "heat_ss_005", type: "sine_superposition", modes: 2, seed: 5040005}
+  - {name: "heat_ss_006", type: "sine_superposition", modes: 3, seed: 5040006}
+  - {name: "heat_ss_007", type: "sine_superposition", modes: 4, seed: 5040007}
