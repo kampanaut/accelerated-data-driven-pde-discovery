@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-6-adam-mb25
+  name: nl_heat-14-100x100x100-anil
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -60,6 +60,7 @@ training:
     inner_optimizer: lbfgs
     outer_optimizer: adam
     outer_lbfgs_after: 0
+    anil: true
     proximal_every_step: false
 evaluation:
   k_values:
@@ -78,6 +79,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-6-adam-mb25
+  - nl_heat-14-100x100x100-anil
   exclude_suffixes_append: []
   exclude_max_iteration: 20

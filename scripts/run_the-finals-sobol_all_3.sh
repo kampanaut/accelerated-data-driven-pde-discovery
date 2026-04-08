@@ -2,9 +2,6 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [8/14] nl_heat-8-adam+lbfgs ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-8-adam+lbfgs.yaml
-
 echo "=== TRAIN [9/14] nl_heat-9-adam-mb25 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-9-adam-mb25.yaml
 
@@ -17,16 +14,7 @@ uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-11
 echo "=== TRAIN [12/14] nl_heat-12-250x250 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-12-250x250.yaml
 
-echo "=== TRAIN [13/14] nl_heat-13-250x250-anil ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-13-250x250-anil.yaml
-
-echo "=== TRAIN [14/14] nl_heat-14-100x100x100-anil ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-14-100x100x100-anil.yaml
-
 # === EVALUATE ===
-echo "=== EVAL [8/14] nl_heat-8-adam+lbfgs ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-8-adam+lbfgs.yaml
-
 echo "=== EVAL [9/14] nl_heat-9-adam-mb25 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-9-adam-mb25.yaml
 
@@ -39,16 +27,7 @@ uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-11-a
 echo "=== EVAL [12/14] nl_heat-12-250x250 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-12-250x250.yaml
 
-echo "=== EVAL [13/14] nl_heat-13-250x250-anil ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-13-250x250-anil.yaml
-
-echo "=== EVAL [14/14] nl_heat-14-100x100x100-anil ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-14-100x100x100-anil.yaml
-
 # === VISUALIZE ===
-echo "=== VIS [8/14] nl_heat-8-adam+lbfgs ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-8-adam+lbfgs.yaml
-
 echo "=== VIS [9/14] nl_heat-9-adam-mb25 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-9-adam-mb25.yaml
 
@@ -60,9 +39,3 @@ uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-11-
 
 echo "=== VIS [12/14] nl_heat-12-250x250 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-12-250x250.yaml
-
-echo "=== VIS [13/14] nl_heat-13-250x250-anil ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-13-250x250-anil.yaml
-
-echo "=== VIS [14/14] nl_heat-14-100x100x100-anil ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-14-100x100x100-anil.yaml

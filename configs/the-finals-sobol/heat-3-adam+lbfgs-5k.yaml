@@ -60,6 +60,7 @@ training:
     inner_optimizer: lbfgs
     outer_optimizer: adam+lbfgs
     outer_lbfgs_after: 5000
+    anil: false
     proximal_every_step: false
 evaluation:
   k_values:
