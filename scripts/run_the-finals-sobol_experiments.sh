@@ -2,130 +2,148 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [1/14] heat-1-adam+lbfgs ==="
+echo "=== TRAIN [1/16] heat-1-adam+lbfgs ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-1-adam+lbfgs.yaml
 
-echo "=== TRAIN [2/14] heat-2-adam-mb25 ==="
+echo "=== TRAIN [2/16] heat-2-adam-mb25 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-2-adam-mb25.yaml
 
-echo "=== TRAIN [3/14] heat-3-adam+lbfgs-5k ==="
+echo "=== TRAIN [3/16] heat-3-adam+lbfgs-5k ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-3-adam+lbfgs-5k.yaml
 
-echo "=== TRAIN [4/14] heat-4-adam+lbfgs-mb25 ==="
+echo "=== TRAIN [4/16] heat-4-adam+lbfgs-mb25 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-4-adam+lbfgs-mb25.yaml
 
-echo "=== TRAIN [5/14] heat-5-250x250 ==="
+echo "=== TRAIN [5/16] heat-5-250x250 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-5-250x250.yaml
 
-echo "=== TRAIN [6/14] heat-6-250x250-anil ==="
+echo "=== TRAIN [6/16] heat-6-250x250-anil ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-6-250x250-anil.yaml
 
-echo "=== TRAIN [7/14] heat-7-100x100x100-anil ==="
+echo "=== TRAIN [7/16] heat-7-100x100x100-anil ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-7-100x100x100-anil.yaml
 
-echo "=== TRAIN [8/14] nl_heat-8-adam+lbfgs ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-8-adam+lbfgs.yaml
+echo "=== TRAIN [8/16] heat-8-300x300x300-anil ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-8-300x300x300-anil.yaml
 
-echo "=== TRAIN [9/14] nl_heat-9-adam-mb25 ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-9-adam-mb25.yaml
+echo "=== TRAIN [9/16] nl_heat-9-adam+lbfgs ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-9-adam+lbfgs.yaml
 
-echo "=== TRAIN [10/14] nl_heat-10-adam+lbfgs-5k ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-10-adam+lbfgs-5k.yaml
+echo "=== TRAIN [10/16] nl_heat-10-adam-mb25 ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-10-adam-mb25.yaml
 
-echo "=== TRAIN [11/14] nl_heat-11-adam+lbfgs-mb25 ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-11-adam+lbfgs-mb25.yaml
+echo "=== TRAIN [11/16] nl_heat-11-adam+lbfgs-5k ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-11-adam+lbfgs-5k.yaml
 
-echo "=== TRAIN [12/14] nl_heat-12-250x250 ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-12-250x250.yaml
+echo "=== TRAIN [12/16] nl_heat-12-adam+lbfgs-mb25 ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-12-adam+lbfgs-mb25.yaml
 
-echo "=== TRAIN [13/14] nl_heat-13-250x250-anil ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-13-250x250-anil.yaml
+echo "=== TRAIN [13/16] nl_heat-13-250x250 ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-13-250x250.yaml
 
-echo "=== TRAIN [14/14] nl_heat-14-100x100x100-anil ==="
-uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-14-100x100x100-anil.yaml
+echo "=== TRAIN [14/16] nl_heat-14-250x250-anil ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-14-250x250-anil.yaml
+
+echo "=== TRAIN [15/16] nl_heat-15-100x100x100-anil ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-15-100x100x100-anil.yaml
+
+echo "=== TRAIN [16/16] nl_heat-16-300x300x300-anil ==="
+uv run python scripts/train_maml.py --config configs/the-finals-sobol/nl_heat-16-300x300x300-anil.yaml
 
 # === EVALUATE ===
-echo "=== EVAL [1/14] heat-1-adam+lbfgs ==="
+echo "=== EVAL [1/16] heat-1-adam+lbfgs ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-1-adam+lbfgs.yaml
 
-echo "=== EVAL [2/14] heat-2-adam-mb25 ==="
+echo "=== EVAL [2/16] heat-2-adam-mb25 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-2-adam-mb25.yaml
 
-echo "=== EVAL [3/14] heat-3-adam+lbfgs-5k ==="
+echo "=== EVAL [3/16] heat-3-adam+lbfgs-5k ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-3-adam+lbfgs-5k.yaml
 
-echo "=== EVAL [4/14] heat-4-adam+lbfgs-mb25 ==="
+echo "=== EVAL [4/16] heat-4-adam+lbfgs-mb25 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-4-adam+lbfgs-mb25.yaml
 
-echo "=== EVAL [5/14] heat-5-250x250 ==="
+echo "=== EVAL [5/16] heat-5-250x250 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-5-250x250.yaml
 
-echo "=== EVAL [6/14] heat-6-250x250-anil ==="
+echo "=== EVAL [6/16] heat-6-250x250-anil ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-6-250x250-anil.yaml
 
-echo "=== EVAL [7/14] heat-7-100x100x100-anil ==="
+echo "=== EVAL [7/16] heat-7-100x100x100-anil ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-7-100x100x100-anil.yaml
 
-echo "=== EVAL [8/14] nl_heat-8-adam+lbfgs ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-8-adam+lbfgs.yaml
+echo "=== EVAL [8/16] heat-8-300x300x300-anil ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-8-300x300x300-anil.yaml
 
-echo "=== EVAL [9/14] nl_heat-9-adam-mb25 ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-9-adam-mb25.yaml
+echo "=== EVAL [9/16] nl_heat-9-adam+lbfgs ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-9-adam+lbfgs.yaml
 
-echo "=== EVAL [10/14] nl_heat-10-adam+lbfgs-5k ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-10-adam+lbfgs-5k.yaml
+echo "=== EVAL [10/16] nl_heat-10-adam-mb25 ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-10-adam-mb25.yaml
 
-echo "=== EVAL [11/14] nl_heat-11-adam+lbfgs-mb25 ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-11-adam+lbfgs-mb25.yaml
+echo "=== EVAL [11/16] nl_heat-11-adam+lbfgs-5k ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-11-adam+lbfgs-5k.yaml
 
-echo "=== EVAL [12/14] nl_heat-12-250x250 ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-12-250x250.yaml
+echo "=== EVAL [12/16] nl_heat-12-adam+lbfgs-mb25 ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-12-adam+lbfgs-mb25.yaml
 
-echo "=== EVAL [13/14] nl_heat-13-250x250-anil ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-13-250x250-anil.yaml
+echo "=== EVAL [13/16] nl_heat-13-250x250 ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-13-250x250.yaml
 
-echo "=== EVAL [14/14] nl_heat-14-100x100x100-anil ==="
-uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-14-100x100x100-anil.yaml
+echo "=== EVAL [14/16] nl_heat-14-250x250-anil ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-14-250x250-anil.yaml
+
+echo "=== EVAL [15/16] nl_heat-15-100x100x100-anil ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-15-100x100x100-anil.yaml
+
+echo "=== EVAL [16/16] nl_heat-16-300x300x300-anil ==="
+uv run python scripts/evaluate.py --config configs/the-finals-sobol/nl_heat-16-300x300x300-anil.yaml
 
 # === VISUALIZE ===
-echo "=== VIS [1/14] heat-1-adam+lbfgs ==="
+echo "=== VIS [1/16] heat-1-adam+lbfgs ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-1-adam+lbfgs.yaml
 
-echo "=== VIS [2/14] heat-2-adam-mb25 ==="
+echo "=== VIS [2/16] heat-2-adam-mb25 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-2-adam-mb25.yaml
 
-echo "=== VIS [3/14] heat-3-adam+lbfgs-5k ==="
+echo "=== VIS [3/16] heat-3-adam+lbfgs-5k ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-3-adam+lbfgs-5k.yaml
 
-echo "=== VIS [4/14] heat-4-adam+lbfgs-mb25 ==="
+echo "=== VIS [4/16] heat-4-adam+lbfgs-mb25 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-4-adam+lbfgs-mb25.yaml
 
-echo "=== VIS [5/14] heat-5-250x250 ==="
+echo "=== VIS [5/16] heat-5-250x250 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-5-250x250.yaml
 
-echo "=== VIS [6/14] heat-6-250x250-anil ==="
+echo "=== VIS [6/16] heat-6-250x250-anil ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-6-250x250-anil.yaml
 
-echo "=== VIS [7/14] heat-7-100x100x100-anil ==="
+echo "=== VIS [7/16] heat-7-100x100x100-anil ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-7-100x100x100-anil.yaml
 
-echo "=== VIS [8/14] nl_heat-8-adam+lbfgs ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-8-adam+lbfgs.yaml
+echo "=== VIS [8/16] heat-8-300x300x300-anil ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-8-300x300x300-anil.yaml
 
-echo "=== VIS [9/14] nl_heat-9-adam-mb25 ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-9-adam-mb25.yaml
+echo "=== VIS [9/16] nl_heat-9-adam+lbfgs ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-9-adam+lbfgs.yaml
 
-echo "=== VIS [10/14] nl_heat-10-adam+lbfgs-5k ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-10-adam+lbfgs-5k.yaml
+echo "=== VIS [10/16] nl_heat-10-adam-mb25 ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-10-adam-mb25.yaml
 
-echo "=== VIS [11/14] nl_heat-11-adam+lbfgs-mb25 ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-11-adam+lbfgs-mb25.yaml
+echo "=== VIS [11/16] nl_heat-11-adam+lbfgs-5k ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-11-adam+lbfgs-5k.yaml
 
-echo "=== VIS [12/14] nl_heat-12-250x250 ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-12-250x250.yaml
+echo "=== VIS [12/16] nl_heat-12-adam+lbfgs-mb25 ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-12-adam+lbfgs-mb25.yaml
 
-echo "=== VIS [13/14] nl_heat-13-250x250-anil ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-13-250x250-anil.yaml
+echo "=== VIS [13/16] nl_heat-13-250x250 ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-13-250x250.yaml
 
-echo "=== VIS [14/14] nl_heat-14-100x100x100-anil ==="
-uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-14-100x100x100-anil.yaml
+echo "=== VIS [14/16] nl_heat-14-250x250-anil ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-14-250x250-anil.yaml
+
+echo "=== VIS [15/16] nl_heat-15-100x100x100-anil ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-15-100x100x100-anil.yaml
+
+echo "=== VIS [16/16] nl_heat-16-300x300x300-anil ==="
+uv run python scripts/visualize.py --config configs/the-finals-sobol/nl_heat-16-300x300x300-anil.yaml
