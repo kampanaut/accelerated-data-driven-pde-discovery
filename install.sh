@@ -67,6 +67,8 @@ REPO="kampanaut/maml-pde-datasets"
 download_heat() {
     [ -d data/datasets/heat_train-1 ] && echo "heat_train-1 exists, skipping" || \
         hf download $REPO --repo-type dataset --include "heat_train-1/*" --local-dir data/datasets
+    [ -d data/datasets/heat_train-2 ] && echo "heat_train-2 exists, skipping" || \
+        hf download $REPO --repo-type dataset --include "heat_train-2/*" --local-dir data/datasets
     [ -d data/datasets/heat_val-1 ] && echo "heat_val-1 exists, skipping" || \
         hf download $REPO --repo-type dataset --include "heat_val-1/*" --local-dir data/datasets
     [ -d data/datasets/heat_test-1 ] && echo "heat_test-1 exists, skipping" || \
@@ -91,6 +93,12 @@ download_br() {
         hf download $REPO --repo-type dataset --include "br_test-2/*" --local-dir data/datasets
 }
 
+download_dir() {
+    local dir="$1"
+    [ -d "data/datasets/$dir" ] && echo "$dir exists, skipping" || \
+        hf download $REPO --repo-type dataset --include "$dir/*" --local-dir data/datasets
+}
+
 DATASETS="${@:-all}"
 for ds in $DATASETS; do
     case "$ds" in
@@ -98,6 +106,6 @@ for ds in $DATASETS; do
         nl_heat) download_nl_heat ;;
         br)      download_br ;;
         all)     download_heat && download_nl_heat && download_br ;;
-        *)       echo "Unknown dataset: $ds. Options: heat nl_heat br all"; exit 1 ;;
+        *)       download_dir "$ds" ;;
     esac
 done
