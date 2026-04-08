@@ -38,6 +38,16 @@ PDE_REGISTRY = {
                    5, 1),
 }
 
+# Sobol variants — same PDE types, different training data
+PDE_REGISTRY_SOBOL = {
+    "heat": PDE("heat", "heat",
+                "data/datasets/heat_train-2", "data/datasets/heat_val-1", "data/datasets/heat_test-1",
+                5, 1),
+    "nl_heat": PDE("nl_heat", "nl_heat",
+                   "data/datasets/nl_heat_train-2", "data/datasets/nl_heat_val-1", "data/datasets/nl_heat_test-1",
+                   5, 1),
+}
+
 # ── Field labels for filenames ───────────────────────────────────────────
 # Only fields that can appear as axes need labels.
 # If a field varies from default and has no label here, the generator errors.
@@ -441,12 +451,12 @@ VARIANTS = [
             ]),
         },
     ),
-    # ── The Finals Sobol: Heat with uniform D training set ─────────────
+    # ── The Finals Sobol: uniform coefficient training sets ─────────────
     (
         VariantMeta("the-finals-sobol", "configs/the-finals-sobol", "data/models/the-finals-sobol"),
         {
-            "pde_type": "heat",
-            "meta_train_dir": "data/datasets/heat_train-2",
+            "pde_type": Axis(["heat", "nl_heat"]),
+            "pde_registry": PDE_REGISTRY_SOBOL,
             "activation": "silu",
             "hidden_dims": [100, 100, 100],
             "loss_preset": Preset([
@@ -731,7 +741,8 @@ def _build_config(
     flat = _flatten_combo(merged, axis_names, combo)
 
     # Resolve PDE
-    pde = PDE_REGISTRY[flat["pde_type"]]
+    registry = flat.get("pde_registry", PDE_REGISTRY)
+    pde = registry[flat["pde_type"]]
 
     # Resolve layers
     if "layers" in merged and callable(merged["layers"]):

@@ -4,7 +4,7 @@ experiment:
   seed: 42
   device: cuda
 output:
-  base_dir: data/models/the-finals-sobol
+  base_dir: data/models/the-finals-sobol/heat
 data:
   meta_train_dir: data/datasets/heat_train-2
   meta_val_dir: data/datasets/heat_val-1
