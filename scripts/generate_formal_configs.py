@@ -415,10 +415,10 @@ VARIANTS = [
             "pde_type": Axis(["heat", "nl_heat", "br"]),
             "activation": "silu",
             "hidden_dims": [100, 100, 100],
-            "meta_batch_size": 25,
             "loss_preset": Preset([
                 ("adam", {
                     "max_iterations": 2000,
+                    "meta_batch_size": 25,
                     "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
                               "cg_damping": 1.0, "inner_optimizer": "lbfgs",
                               "proximal_every_step": False},
@@ -428,6 +428,7 @@ VARIANTS = [
                 }),
                 ("adam+lbfgs", {
                     "max_iterations": 2100,
+                    "meta_batch_size": 8,
                     "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
                               "cg_damping": 1.0, "inner_optimizer": "lbfgs",
                               "outer_optimizer": "adam+lbfgs",

@@ -1047,6 +1047,8 @@ class iMAMLTrainer:
                 )
                 self._outer_step = self._outer_step_lbfgs
                 self.scheduler = None  # L-BFGS doesn't use scheduler
+                # Force full batch for L-BFGS (deterministic objective for line search)
+                self.config.meta_batch_size = len(self.train_loader.tasks)
                 result = self._run_phase(phase2_start, self.config.max_iterations, checkpoint_dir, log_interval)
                 if result is not None:
                     signal.signal(signal.SIGINT, prev_handler)
