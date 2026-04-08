@@ -427,32 +427,38 @@ def run_generation(spec: PDESpec, config_path: str | Path, workers: int = 1) -> 
     ic_configs = config["initial_conditions"]
     print(f"\nInitial conditions: {len(ic_configs)} configurations")
 
-    # Uniform coefficient sampling: pre-sample N values and assign one per task.
-    # Per-task fixed scalars are preserved. Per-task [min, max] ranges are used
-    # for that task's sampling range. Global range is the fallback.
+    # Sobol coefficient sampling: low-discrepancy points for uniform coverage.
+    # Tasks inheriting the global range get Sobol values. Tasks with their own
+    # [min, max] range or fixed scalar are left alone.
     if config.get("simulation", {}).get("uniform_sample", False):
+        from scipy.stats.qmc import Sobol
+
         samplable = (
             spec.samplable_params
             if spec.samplable_params is not None
             else spec.pde_param_keys
         )
         sample_seed = config.get("simulation", {}).get("seed", 42)
-        rng = np.random.default_rng(sample_seed)
         for key in samplable:
-            # Collect tasks that have a [min, max] range for this key
-            range_tasks = []
+            global_raw = simulation_params.get(key)
+            if not (isinstance(global_raw, list) and len(global_raw) == 2):
+                continue
+            lo, hi = global_raw
+
+            # Find tasks that inherit the global range (no local D field)
+            sobol_indices = []
             for i, ic in enumerate(ic_configs):
-                raw = ic.get(key, simulation_params.get(key))
-                if isinstance(raw, list) and len(raw) == 2:
-                    range_tasks.append((i, raw[0], raw[1]))
-            if range_tasks:
-                # Sample one value per task from its own range
-                values = [rng.uniform(lo, hi) for _, lo, hi in range_tasks]
-                values.sort()
-                print(f"\n  Uniform sample for '{key}': {len(range_tasks)} tasks")
-                for (idx, lo, hi), val in zip(range_tasks, values):
+                if key not in ic:
+                    sobol_indices.append(i)
+
+            if sobol_indices:
+                sampler = Sobol(d=1, scramble=True, seed=sample_seed)
+                points = sampler.random(len(sobol_indices)).flatten()
+                values = lo + points * (hi - lo)
+                print(f"\n  Sobol sample for '{key}': {len(sobol_indices)} tasks in [{lo}, {hi}]")
+                for idx, val in zip(sobol_indices, values):
                     ic_configs[idx][key] = float(val)
-                    print(f"    {ic_configs[idx].get('name', idx)}: {key}={val:.6f} (from [{lo}, {hi}])")
+                    print(f"    {ic_configs[idx].get('name', idx)}: {key}={val:.6f}")
 
     # Output directory
     sim_name = config.get("simulation", {}).get("name") or config.get(
