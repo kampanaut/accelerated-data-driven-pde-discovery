@@ -147,9 +147,10 @@ class iMAMLTrainer:
         else:
             self._inner_solve = self._inner_solve_sgd_prox_end
         prox_mode = "every_step" if im.proximal_every_step else "end_only"
+        anil_str = ", ANIL (head-only adaptation)" if im.anil else ""
         print(f"  iMAML: lam={im.lam}, cg_steps={im.cg_steps}, "
               f"cg_damping={im.cg_damping}, inner_optimizer={im.inner_optimizer}, "
-              f"proximal={prox_mode}")
+              f"proximal={prox_mode}{anil_str}")
 
         # Outer loop optimizer
         opt_params = list(self.model.parameters())
@@ -409,6 +410,16 @@ class iMAMLTrainer:
     # Parameter vector helpers
     # ------------------------------------------------------------------
 
+    def _inner_params(self, model: nn.Module) -> List[nn.Parameter]:
+        """Return parameters for inner loop optimization.
+
+        ANIL: only last layer (weight + bias). Otherwise: all params.
+        """
+        params = list(model.parameters())
+        if self.config.imaml.anil:
+            return params[-2:]  # output layer weight + bias
+        return params
+
     def _get_flat_params(self, model: nn.Module) -> torch.Tensor:
         """Return flattened parameter vector (detached clone)."""
         return torch.cat([p.data.view(-1) for p in model.parameters()]).clone()
@@ -440,7 +451,7 @@ class iMAMLTrainer:
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> None:
         """Inner loop: SGD on inner_cost + proximal for inner_steps steps (Eq. 3)."""
-        opt = torch.optim.SGD(fast_model.parameters(), lr=self.config.inner_lr)
+        opt = torch.optim.SGD(self._inner_params(fast_model), lr=self.config.inner_lr)
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
             pred = fast_model(support_x)
@@ -461,7 +472,7 @@ class iMAMLTrainer:
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> None:
         """Inner loop: plain SGD with inner_cost then one proximal step at end."""
-        opt = torch.optim.SGD(fast_model.parameters(), lr=self.config.inner_lr)
+        opt = torch.optim.SGD(self._inner_params(fast_model), lr=self.config.inner_lr)
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
             pred = fast_model(support_x)
@@ -486,7 +497,7 @@ class iMAMLTrainer:
     ) -> None:
         """Inner loop: L-BFGS on task_loss + proximal (Raissi 2018 style)."""
         opt = torch.optim.LBFGS(
-            fast_model.parameters(),
+            self._inner_params(fast_model),
             lr=1.0,
             max_iter=self.config.inner_steps,
             tolerance_grad=1e-15,

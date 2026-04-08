@@ -66,6 +66,7 @@ class IMAMLSection:
     inner_optimizer: str = "lbfgs"  # "sgd" or "lbfgs"
     outer_optimizer: str = "adam"  # "adam", "lbfgs", or "adam+lbfgs"
     outer_lbfgs_after: int = 0  # for "adam+lbfgs": switch to L-BFGS after this many iters
+    anil: bool = False  # True = only adapt last layer during inner loop (ANIL)
     proximal_every_step: bool = False  # True = paper Eq.3, False = reference code (prox at end only)
 
 
@@ -258,6 +259,7 @@ class ExperimentConfig:
                         "inner_optimizer": t.imaml.inner_optimizer,
                         "outer_optimizer": t.imaml.outer_optimizer,
                         "outer_lbfgs_after": t.imaml.outer_lbfgs_after,
+                        "anil": t.imaml.anil,
                         "proximal_every_step": t.imaml.proximal_every_step,
                     }
                 continue
