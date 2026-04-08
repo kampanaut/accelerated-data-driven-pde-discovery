@@ -441,6 +441,52 @@ VARIANTS = [
             ]),
         },
     ),
+    # ── The Finals Sobol: Heat with uniform D training set ─────────────
+    (
+        VariantMeta("the-finals-sobol", "configs/the-finals-sobol", "data/models/the-finals-sobol"),
+        {
+            "pde_type": "heat",
+            "meta_train_dir": "data/datasets/heat_train-2",
+            "activation": "silu",
+            "hidden_dims": [100, 100, 100],
+            "loss_preset": Preset([
+                ("adam+lbfgs", {
+                    "max_iterations": 2100,
+                    "meta_batch_size": 8,
+                    "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                              "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                              "outer_optimizer": "adam+lbfgs",
+                              "outer_lbfgs_after": 2000,
+                              "proximal_every_step": False},
+                    "use_scheduler": True, "scheduler_type": "polynomial",
+                    "poly_power": 3.0,
+                    "min_lr": 1e-7,
+                }),
+                ("adam-mb25", {
+                    "max_iterations": 2000,
+                    "meta_batch_size": 25,
+                    "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                              "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                              "proximal_every_step": False},
+                    "use_scheduler": True, "scheduler_type": "polynomial",
+                    "poly_power": 3.0,
+                    "min_lr": 1e-7,
+                }),
+                ("adam+lbfgs-5k", {
+                    "max_iterations": 5100,
+                    "meta_batch_size": 8,
+                    "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                              "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                              "outer_optimizer": "adam+lbfgs",
+                              "outer_lbfgs_after": 5000,
+                              "proximal_every_step": False},
+                    "use_scheduler": True, "scheduler_type": "polynomial",
+                    "poly_power": 3.0,
+                    "min_lr": 1e-7,
+                }),
+            ]),
+        },
+    ),
     # ── The Finals L-BFGS outer: curvature-aware meta-updates ──────────
     (
         VariantMeta("the-finals-lbfgs-outer", "configs/the-finals-lbfgs-outer", "data/models/the-finals-lbfgs-outer"),
@@ -730,7 +776,7 @@ def _build_config(
                       else meta.models_dir),
         ),
         data=DataSection(
-            meta_train_dir=pde.train_dir,
+            meta_train_dir=flat.get("meta_train_dir", pde.train_dir),
             meta_val_dir=pde.val_dir,
             meta_test_dir=pde.test_dir,
         ),
