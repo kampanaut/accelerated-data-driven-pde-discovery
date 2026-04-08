@@ -427,6 +427,33 @@ def run_generation(spec: PDESpec, config_path: str | Path, workers: int = 1) -> 
     ic_configs = config["initial_conditions"]
     print(f"\nInitial conditions: {len(ic_configs)} configurations")
 
+    # Uniform coefficient sampling: pre-sample N values and assign one per task.
+    # Per-task fixed scalars are preserved. Per-task [min, max] ranges are used
+    # for that task's sampling range. Global range is the fallback.
+    if config.get("simulation", {}).get("uniform_sample", False):
+        samplable = (
+            spec.samplable_params
+            if spec.samplable_params is not None
+            else spec.pde_param_keys
+        )
+        sample_seed = config.get("simulation", {}).get("seed", 42)
+        rng = np.random.default_rng(sample_seed)
+        for key in samplable:
+            # Collect tasks that have a [min, max] range for this key
+            range_tasks = []
+            for i, ic in enumerate(ic_configs):
+                raw = ic.get(key, simulation_params.get(key))
+                if isinstance(raw, list) and len(raw) == 2:
+                    range_tasks.append((i, raw[0], raw[1]))
+            if range_tasks:
+                # Sample one value per task from its own range
+                values = [rng.uniform(lo, hi) for _, lo, hi in range_tasks]
+                values.sort()
+                print(f"\n  Uniform sample for '{key}': {len(range_tasks)} tasks")
+                for (idx, lo, hi), val in zip(range_tasks, values):
+                    ic_configs[idx][key] = float(val)
+                    print(f"    {ic_configs[idx].get('name', idx)}: {key}={val:.6f} (from [{lo}, {hi}])")
+
     # Output directory
     sim_name = config.get("simulation", {}).get("name") or config.get(
         "output_dir", spec.default_output_name
