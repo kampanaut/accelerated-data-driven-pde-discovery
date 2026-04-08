@@ -111,6 +111,7 @@ def fine_tune(
     proximal_lam: float = 0.0,
     proximal_theta: Optional[torch.Tensor] = None,
     inner_optimizer: str = "sgd",
+    anil: bool = False,
 ) -> FineTuneResult:
     """
     Fine-tune model and return train/holdout loss at each step.
@@ -136,11 +137,14 @@ def fine_tune(
     # Inner optimizer: SGD (with optional LSLR) or L-BFGS
     use_lbfgs = (inner_optimizer == "lbfgs")
 
+    # ANIL: only adapt head (last layer) during fine-tuning
+    adapt_params = list(model.parameters())[-2:] if anil else list(model.parameters())
+
     if use_lbfgs:
         param_names = None
         lr_schedule = None
         opt = torch.optim.LBFGS(
-            model.parameters(), lr=1.0,
+            adapt_params, lr=1.0,
             max_iter=max_steps,
             tolerance_grad=1e-15,
             tolerance_change=1e-15,
@@ -161,7 +165,7 @@ def fine_tune(
     else:
         param_names = None
         lr_schedule = None
-        opt = torch.optim.SGD(model.parameters(), lr=lr)
+        opt = torch.optim.SGD(adapt_params, lr=lr)
 
     # Proximal term for iMAML evaluation
     def _proximal_loss() -> torch.Tensor:
@@ -352,6 +356,7 @@ def evaluate_task(
     proximal_lam: float = 0.0,
     proximal_theta: Optional[torch.Tensor] = None,
     inner_optimizer: str = "sgd",
+    anil: bool = False,
 ) -> TaskResult:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -489,6 +494,7 @@ def evaluate_task(
                     proximal_lam=proximal_lam,
                     proximal_theta=proximal_theta,
                     inner_optimizer=inner_optimizer,
+                    anil=anil,
                 )
 
                 # Fine-tune from θ₀ (baseline) — same loss, no MeTAL, no LSLR
@@ -1016,6 +1022,7 @@ def main():
             proximal_lam=proximal_lam,
             proximal_theta=proximal_theta,
             inner_optimizer=eval_inner_optimizer,
+            anil=cfg.training.imaml.anil if cfg.training.imaml.enabled else False,
         )
 
         # Serialize to NPZ
