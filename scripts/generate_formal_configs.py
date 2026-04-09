@@ -544,6 +544,18 @@ VARIANTS = [
                     "poly_power": 3.0,
                     "min_lr": 1e-7,
                 }),
+                ("350x350-anil", {
+                    "max_iterations": 2000,
+                    "meta_batch_size": 25,
+                    "hidden_dims": [350, 350],
+                    "imaml": {"enabled": True, "lam": 0.005, "cg_steps": 10,
+                              "cg_damping": 1.0, "inner_optimizer": "lbfgs",
+                              "anil": True,
+                              "proximal_every_step": False},
+                    "use_scheduler": True, "scheduler_type": "polynomial",
+                    "poly_power": 3.0,
+                    "min_lr": 1e-7,
+                }),
                 ("300x300x300-anil", {
                     "max_iterations": 2000,
                     "meta_batch_size": 25,
