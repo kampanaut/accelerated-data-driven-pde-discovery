@@ -30,6 +30,7 @@ training:
   activation: silu
   input_dim: 5
   output_dim: 1
+  input_bypass: false
   first_order: false
   msl_enabled: false
   da_enabled: false
