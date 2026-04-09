@@ -82,6 +82,7 @@ class NetworkConfig:
     output_spec: OutputLayerSpec = field(default_factory=lambda: OutputLayerSpec(output=2))
     conv_filters: int = 0
     conv_kernel_size: int = 3
+    input_bypass: bool = False
 
     @property
     def input_dim(self) -> int:
@@ -110,11 +111,14 @@ class NetworkConfig:
 
         conv_filters = d.get("conv_filters", 0)
         conv_kernel_size = d.get("conv_kernel_size", 3)
+        input_bypass = d.get("input_bypass", False)
 
         if has_layers:
-            return cls._parse_layers(d["layers"], conv_filters, conv_kernel_size)
+            cfg = cls._parse_layers(d["layers"], conv_filters, conv_kernel_size)
         else:
-            return cls._parse_old(d, conv_filters, conv_kernel_size)
+            cfg = cls._parse_old(d, conv_filters, conv_kernel_size)
+        cfg.input_bypass = input_bypass
+        return cfg
 
     @classmethod
     def _parse_layers(
@@ -204,6 +208,8 @@ class NetworkConfig:
         if self.conv_filters != 0:
             d["conv_filters"] = self.conv_filters
             d["conv_kernel_size"] = self.conv_kernel_size
+        if self.input_bypass:
+            d["input_bypass"] = True
         return d
 
 
@@ -278,11 +284,24 @@ class PDEOperatorNetwork(nn.Module):
                 layers.append(ACTIVATION_MAP[spec.activation]())
             prev_dim = spec.hidden
 
+        # Input bypass: head receives body output + raw input
+        self._input_bypass = config.input_bypass
+        if config.input_bypass:
+            head_input = prev_dim + config.input_dim
+        else:
+            head_input = prev_dim
+
         layers.append(nn.Linear(
-            prev_dim, config.output_spec.output, bias=config.output_spec.bias
+            head_input, config.output_spec.output, bias=config.output_spec.bias
         ))
 
-        self.network = nn.Sequential(*layers)
+        if config.input_bypass:
+            # Split into body (all but last) and head (last layer)
+            self.body = nn.Sequential(*layers[:-1])
+            self.head = layers[-1]
+            self.network = None  # type: ignore[assignment]
+        else:
+            self.network = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -306,7 +325,10 @@ class PDEOperatorNetwork(nn.Module):
             filtered = self.conv(x_2d)  # (batch, filters, n_combos)
             x = filtered.flatten(1)  # (batch, filters * n_combos)
 
-        return self.network(x)
+        if self._input_bypass:
+            body_out = self.body(x)
+            return self.head(torch.cat([body_out, x], dim=-1))
+        return self.network(x)  # type: ignore[misc]
 
     def __repr__(self) -> str:
         """String representation of the network."""

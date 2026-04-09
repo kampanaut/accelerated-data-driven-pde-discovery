@@ -101,6 +101,7 @@ class TrainingSection:
     input_dim: Optional[int] = None
     output_dim: Optional[int] = None
     layers: Optional[list] = None
+    input_bypass: bool = False
     conv_filters: int = 0
     conv_kernel_size: int = 3
 
@@ -346,6 +347,8 @@ class ExperimentConfig:
         if t.conv_filters > 0:
             d["conv_filters"] = t.conv_filters
             d["conv_kernel_size"] = t.conv_kernel_size
+        if t.input_bypass:
+            d["input_bypass"] = True
         return NetworkConfig.from_dict(d)
 
     # ── Convenience properties ───────────────────────────────────────
