@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-26-250x250
+  name: nl_heat-29-100x100x100-anil
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -25,8 +25,9 @@ training:
   checkpoint_interval: 100
   log_interval: 20
   hidden_dims:
-  - 250
-  - 250
+  - 100
+  - 100
+  - 100
   activation: silu
   input_dim: 5
   output_dim: 1
@@ -61,7 +62,7 @@ training:
     inner_optimizer: lbfgs
     outer_optimizer: adam
     outer_lbfgs_after: 0
-    anil: false
+    anil: true
     proximal_every_step: false
 evaluation:
   k_values:
@@ -80,6 +81,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-26-250x250
+  - nl_heat-29-100x100x100-anil
   exclude_suffixes_append: []
   exclude_max_iteration: 20

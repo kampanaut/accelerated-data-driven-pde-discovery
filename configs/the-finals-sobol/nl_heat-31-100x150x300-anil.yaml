@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-38-100x150x450-anil
+  name: nl_heat-31-100x150x300-anil
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -11,7 +11,7 @@ data:
   meta_test_dir: data/datasets/nl_heat_test-1
 training:
   inner_lr: 0.01
-  outer_lr: 0.007
+  outer_lr: 0.01
   adam_betas:
   - 0.9
   - 0.999
@@ -27,7 +27,7 @@ training:
   hidden_dims:
   - 100
   - 150
-  - 450
+  - 300
   activation: silu
   input_dim: 5
   output_dim: 1
@@ -81,6 +81,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-38-100x150x450-anil
+  - nl_heat-31-100x150x300-anil
   exclude_suffixes_append: []
   exclude_max_iteration: 20

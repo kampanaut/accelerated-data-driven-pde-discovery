@@ -2,40 +2,40 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [13/42] heat-13-100x100x100-anil-bypass ==="
+echo "=== TRAIN [13/44] heat-13-100x100x100-anil-bypass ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-13-100x100x100-anil-bypass.yaml
 
-echo "=== TRAIN [14/42] heat-14-100x120x300-anil-bypass ==="
+echo "=== TRAIN [14/44] heat-14-100x120x300-anil-bypass ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-14-100x120x300-anil-bypass.yaml
 
-echo "=== TRAIN [15/42] heat-15-100x100x300-anil-bypass ==="
+echo "=== TRAIN [15/44] heat-15-100x100x300-anil-bypass ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-15-100x100x300-anil-bypass.yaml
 
-echo "=== TRAIN [16/42] heat-16-100x150x300-anil-2epoch ==="
+echo "=== TRAIN [16/44] heat-16-100x150x300-anil-2epoch ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-16-100x150x300-anil-2epoch.yaml
 
 # === EVALUATE ===
-echo "=== EVAL [13/42] heat-13-100x100x100-anil-bypass ==="
+echo "=== EVAL [13/44] heat-13-100x100x100-anil-bypass ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-13-100x100x100-anil-bypass.yaml
 
-echo "=== EVAL [14/42] heat-14-100x120x300-anil-bypass ==="
+echo "=== EVAL [14/44] heat-14-100x120x300-anil-bypass ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-14-100x120x300-anil-bypass.yaml
 
-echo "=== EVAL [15/42] heat-15-100x100x300-anil-bypass ==="
+echo "=== EVAL [15/44] heat-15-100x100x300-anil-bypass ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-15-100x100x300-anil-bypass.yaml
 
-echo "=== EVAL [16/42] heat-16-100x150x300-anil-2epoch ==="
+echo "=== EVAL [16/44] heat-16-100x150x300-anil-2epoch ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-16-100x150x300-anil-2epoch.yaml
 
 # === VISUALIZE ===
-echo "=== VIS [13/42] heat-13-100x100x100-anil-bypass ==="
+echo "=== VIS [13/44] heat-13-100x100x100-anil-bypass ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-13-100x100x100-anil-bypass.yaml
 
-echo "=== VIS [14/42] heat-14-100x120x300-anil-bypass ==="
+echo "=== VIS [14/44] heat-14-100x120x300-anil-bypass ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-14-100x120x300-anil-bypass.yaml
 
-echo "=== VIS [15/42] heat-15-100x100x300-anil-bypass ==="
+echo "=== VIS [15/44] heat-15-100x100x300-anil-bypass ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-15-100x100x300-anil-bypass.yaml
 
-echo "=== VIS [16/42] heat-16-100x150x300-anil-2epoch ==="
+echo "=== VIS [16/44] heat-16-100x150x300-anil-2epoch ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-16-100x150x300-anil-2epoch.yaml

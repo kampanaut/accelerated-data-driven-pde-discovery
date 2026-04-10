@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-28-100x100x100-anil
+  name: nl_heat-33-300x300x300-anil
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -25,9 +25,9 @@ training:
   checkpoint_interval: 100
   log_interval: 20
   hidden_dims:
-  - 100
-  - 100
-  - 100
+  - 300
+  - 300
+  - 300
   activation: silu
   input_dim: 5
   output_dim: 1
@@ -81,6 +81,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-28-100x100x100-anil
+  - nl_heat-33-300x300x300-anil
   exclude_suffixes_append: []
   exclude_max_iteration: 20
