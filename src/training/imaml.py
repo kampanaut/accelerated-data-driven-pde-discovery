@@ -156,8 +156,106 @@ class iMAMLTrainer:
               f"proximal={prox_mode}{anil_str}")
 
         # Outer loop optimizer
+        self._reset_for_epoch()
+
+        # Checkpoint mode validation: exactly one of patience or checkpoint_interval
+        if t.patience > 0 and t.checkpoint_interval == 0:
+            self._patience_enabled = True
+        elif t.patience == 0 and t.checkpoint_interval > 0:
+            self._patience_enabled = False
+        else:
+            raise ValueError(
+                f"Invalid checkpoint config: patience={t.patience}, "
+                f"checkpoint_interval={t.checkpoint_interval}. "
+                f"Use (patience>0, checkpoint_interval=0) for early stopping, "
+                f"or (patience=0, checkpoint_interval>0) for periodic saves."
+            )
+
+        # Mutual exclusion: iMAML is incompatible with MSL and LSLR
+        if t.msl_enabled:
+            raise ValueError("MSL is MAML-specific (per-step outer loss), incompatible with iMAML.")
+        if t.lslr_enabled:
+            raise ValueError("LSLR is MAML-specific (per-step learnable LRs), incompatible with iMAML.")
+
+        # L-BFGS + inner_lr validation
+        if im.inner_optimizer == "lbfgs" and t.inner_lr != 0.01:
+            raise ValueError(
+                f"inner_lr={t.inner_lr} is set but inner_optimizer=lbfgs ignores it. "
+                f"Set inner_lr=0.01 (default) or use inner_optimizer=sgd."
+            )
+
+        # L-BFGS + grad clipping warning (clipping only applies to outer step, not inner)
+        if im.inner_optimizer == "lbfgs" and t.max_grad_norm > 0:
+            print(f"  Note: max_grad_norm={t.max_grad_norm} applies to outer step only. "
+                  f"L-BFGS inner loop uses line search instead of gradient clipping.")
+
+        # DA → CG-step annealing: start with cg_steps=0, switch to cg_steps after da_threshold
+        self._cg_steps_active = im.cg_steps
+        if t.da_enabled:
+            self._cg_steps_active = 0  # Phase 1: FOMAML equivalent
+            print(f"  DA enabled: CG=0 until iter {t.da_threshold}, then CG={im.cg_steps}")
+        elif t.first_order:
+            self._cg_steps_active = 0  # Permanent FOMAML equivalent
+            print(f"  first_order=True: CG=0 (FOMAML equivalent)")
+
+        # MeTAL for iMAML: one loss network (not per-step) in inner objective
+        # Bound at init — no conditionals in hot loop (same pattern as MAML)
+        self.metal: Optional[MeTALModule] = None
+        if t.metal.enabled:
+            n_base_params = sum(1 for _ in model.parameters())
+            output_dim = list(model.parameters())[-1].shape[0]
+            self.metal = MeTALModule(
+                n_steps=1,
+                n_base_params=n_base_params,
+                output_dim=output_dim,
+                hidden_dim=t.metal.hidden_dim,
+            ).to(self.device)
+            n_metal_params = sum(p.numel() for p in self.metal.parameters())
+            print(f"  MeTAL enabled (iMAML mode): 1 loss network, {n_metal_params:,} params")
+            opt_params += list(self.metal.parameters())
+
+        # Bind inner cost function — no conditionals in the hot loop
+        self._inner_cost = (
+            self._inner_cost_metal
+            if self.metal is not None
+            else self._inner_cost_standard
+        )
+
+        # Bind compute_task
+        self.compute_task = self._compute_task_imaml
+
+        # Bind iteration hook + finalize — no conditionals in the hot loop
+        if self._patience_enabled:
+            self._iteration_hook = self._patience_iteration_hook
+            self._training_finalize = self._patience_finalize
+        else:
+            self._iteration_hook = self._interval_iteration_hook
+            self._training_finalize = self._interval_finalize
+
+        # Training state
+        self.iteration = 0
+        self.best_train_loss = float("inf")
+        self.best_val_loss = float("inf")
+        self.best_train_state = None  # Stash weights when train loss improves (patience mode only)
+        self.patience_counter = 0
+        self._nan_at: Optional[int] = None
+        self._last_train_loss: float = 0.0
+        self._early_stopped: bool = False
+        self.history: Dict[str, List] = {
+            "train_loss": [],
+            "val_loss": [],
+            "iteration": [],
+        }
+        self._resumed = False
+        self._stop_requested = False
+
+
+    def _reset_for_epoch(self) -> None:
+        """Reset optimizer + scheduler for a new epoch. Model weights unchanged."""
+        t = self.config
         opt_params = list(self.model.parameters())
         self._opt_params = opt_params
+        im = t.imaml
         if im.outer_optimizer == "lbfgs":
             self.outer_opt = torch.optim.LBFGS(
                 opt_params, lr=1.0, max_iter=1, max_eval=20,
@@ -254,153 +352,6 @@ class iMAMLTrainer:
         # Plateau scheduler state
         self._plateau_mode = (t.use_scheduler and t.scheduler_type == "plateau")
         self._loss_window: List[float] = []
-
-    def _reset_for_epoch(self) -> None:
-        """Reset optimizer + scheduler for a new epoch. Model weights unchanged."""
-        t = self.config
-        self.outer_opt = torch.optim.Adam(
-            self._opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
-        )
-        self._outer_step = self._outer_step_adam
-
-        self.scheduler = None
-        if t.use_scheduler or t.warmup_iterations > 0:
-            schedulers = []
-            milestones = []
-
-            if t.warmup_iterations > 0:
-                warmup = torch.optim.lr_scheduler.LinearLR(
-                    self.outer_opt,
-                    start_factor=1.0 / t.warmup_iterations,
-                    end_factor=1.0,
-                    total_iters=t.warmup_iterations,
-                )
-                schedulers.append(warmup)
-                milestones.append(t.warmup_iterations)
-
-            if t.use_scheduler:
-                post_warmup_iters = t.max_iterations - t.warmup_iterations
-                if t.scheduler_type == "warm_restarts":
-                    decay = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-                        self.outer_opt, T_0=t.T_0, T_mult=t.T_mult, eta_min=t.min_lr,
-                    )
-                elif t.scheduler_type == "exponential":
-                    gamma = (t.min_lr / t.outer_lr) ** (1.0 / post_warmup_iters)
-                    decay = torch.optim.lr_scheduler.ExponentialLR(self.outer_opt, gamma=gamma)
-                elif t.scheduler_type == "polynomial":
-                    decay = torch.optim.lr_scheduler.PolynomialLR(
-                        self.outer_opt, total_iters=post_warmup_iters, power=t.poly_power,
-                    )
-                elif t.scheduler_type == "plateau":
-                    decay = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                        self.outer_opt, mode="min", factor=t.plateau_factor,
-                        patience=t.plateau_patience, threshold=t.plateau_threshold,
-                        cooldown=t.plateau_cooldown, min_lr=t.min_lr,
-                    )
-                else:
-                    decay = torch.optim.lr_scheduler.CosineAnnealingLR(
-                        self.outer_opt, T_max=post_warmup_iters, eta_min=t.min_lr,
-                    )
-                schedulers.append(decay)
-
-            if len(schedulers) > 1:
-                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
-                    self.outer_opt, schedulers=schedulers, milestones=milestones,
-                )
-            elif schedulers:
-                self.scheduler = schedulers[0]
-
-        self._loss_window = []
-
-        # Checkpoint mode validation: exactly one of patience or checkpoint_interval
-        if t.patience > 0 and t.checkpoint_interval == 0:
-            self._patience_enabled = True
-        elif t.patience == 0 and t.checkpoint_interval > 0:
-            self._patience_enabled = False
-        else:
-            raise ValueError(
-                f"Invalid checkpoint config: patience={t.patience}, "
-                f"checkpoint_interval={t.checkpoint_interval}. "
-                f"Use (patience>0, checkpoint_interval=0) for early stopping, "
-                f"or (patience=0, checkpoint_interval>0) for periodic saves."
-            )
-
-        # Mutual exclusion: iMAML is incompatible with MSL and LSLR
-        if t.msl_enabled:
-            raise ValueError("MSL is MAML-specific (per-step outer loss), incompatible with iMAML.")
-        if t.lslr_enabled:
-            raise ValueError("LSLR is MAML-specific (per-step learnable LRs), incompatible with iMAML.")
-
-        # L-BFGS + inner_lr validation
-        if im.inner_optimizer == "lbfgs" and t.inner_lr != 0.01:
-            raise ValueError(
-                f"inner_lr={t.inner_lr} is set but inner_optimizer=lbfgs ignores it. "
-                f"Set inner_lr=0.01 (default) or use inner_optimizer=sgd."
-            )
-
-        # L-BFGS + grad clipping warning (clipping only applies to outer step, not inner)
-        if im.inner_optimizer == "lbfgs" and t.max_grad_norm > 0:
-            print(f"  Note: max_grad_norm={t.max_grad_norm} applies to outer step only. "
-                  f"L-BFGS inner loop uses line search instead of gradient clipping.")
-
-        # DA → CG-step annealing: start with cg_steps=0, switch to cg_steps after da_threshold
-        self._cg_steps_active = im.cg_steps
-        if t.da_enabled:
-            self._cg_steps_active = 0  # Phase 1: FOMAML equivalent
-            print(f"  DA enabled: CG=0 until iter {t.da_threshold}, then CG={im.cg_steps}")
-        elif t.first_order:
-            self._cg_steps_active = 0  # Permanent FOMAML equivalent
-            print(f"  first_order=True: CG=0 (FOMAML equivalent)")
-
-        # MeTAL for iMAML: one loss network (not per-step) in inner objective
-        # Bound at init — no conditionals in hot loop (same pattern as MAML)
-        if t.metal.enabled:
-            n_base_params = sum(1 for _ in model.parameters())
-            output_dim = list(model.parameters())[-1].shape[0]
-            self.metal = MeTALModule(
-                n_steps=1,
-                n_base_params=n_base_params,
-                output_dim=output_dim,
-                hidden_dim=t.metal.hidden_dim,
-            ).to(self.device)
-            n_metal_params = sum(p.numel() for p in self.metal.parameters())
-            print(f"  MeTAL enabled (iMAML mode): 1 loss network, {n_metal_params:,} params")
-            opt_params += list(self.metal.parameters())
-
-        # Bind inner cost function — no conditionals in the hot loop
-        self._inner_cost = (
-            self._inner_cost_metal
-            if self.metal is not None
-            else self._inner_cost_standard
-        )
-
-        # Bind compute_task
-        self.compute_task = self._compute_task_imaml
-
-        # Bind iteration hook + finalize — no conditionals in the hot loop
-        if self._patience_enabled:
-            self._iteration_hook = self._patience_iteration_hook
-            self._training_finalize = self._patience_finalize
-        else:
-            self._iteration_hook = self._interval_iteration_hook
-            self._training_finalize = self._interval_finalize
-
-        # Training state
-        self.iteration = 0
-        self.best_train_loss = float("inf")
-        self.best_val_loss = float("inf")
-        self.best_train_state = None  # Stash weights when train loss improves (patience mode only)
-        self.patience_counter = 0
-        self._nan_at: Optional[int] = None
-        self._last_train_loss: float = 0.0
-        self._early_stopped: bool = False
-        self.history: Dict[str, List] = {
-            "train_loss": [],
-            "val_loss": [],
-            "iteration": [],
-        }
-        self._resumed = False
-        self._stop_requested = False
 
     # ------------------------------------------------------------------
     # Cost function: pointwise MSE + optional spectral loss
