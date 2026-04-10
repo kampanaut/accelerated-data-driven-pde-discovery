@@ -1136,7 +1136,7 @@ class iMAMLTrainer:
             self.iteration = iteration
 
             tasks = self.train_loader.sample_batch(
-                self.config.meta_batch_size, seed=iteration
+                self.config.meta_batch_size, seed=(iteration % self.config.max_iterations)
             )
 
             # Suppress per-task prints to stdout (still logged to buffer)
