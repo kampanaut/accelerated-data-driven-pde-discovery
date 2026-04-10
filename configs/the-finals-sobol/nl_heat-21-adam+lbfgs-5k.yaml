@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-21-250x250
+  name: nl_heat-21-adam+lbfgs-5k
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -16,17 +16,18 @@ training:
   - 0.9
   - 0.999
   inner_steps: 16
-  meta_batch_size: 25
+  meta_batch_size: 8
   k_shot: 1000
   query_size: 10000
   epochs: 1
-  max_iterations: 2000
+  max_iterations: 5100
   patience: 0
   checkpoint_interval: 100
   log_interval: 20
   hidden_dims:
-  - 250
-  - 250
+  - 100
+  - 100
+  - 100
   activation: silu
   input_dim: 5
   output_dim: 1
@@ -59,8 +60,8 @@ training:
     cg_steps: 10
     cg_damping: 1.0
     inner_optimizer: lbfgs
-    outer_optimizer: adam
-    outer_lbfgs_after: 0
+    outer_optimizer: adam+lbfgs
+    outer_lbfgs_after: 5000
     anil: false
     proximal_every_step: false
 evaluation:
@@ -80,6 +81,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-21-250x250
+  - nl_heat-21-adam+lbfgs-5k
   exclude_suffixes_append: []
   exclude_max_iteration: 20
