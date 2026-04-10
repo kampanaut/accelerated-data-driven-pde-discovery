@@ -89,7 +89,8 @@ class TrainingSection:
     query_size: int = 1000
 
     # Training loop
-    max_iterations: int = 1000
+    epochs: int = 1
+    max_iterations: int = 1000  # per epoch
     patience: int = 50
     checkpoint_interval: int = 0
     log_interval: int = 20

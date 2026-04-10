@@ -252,6 +252,63 @@ class iMAMLTrainer:
         self._plateau_mode = (t.use_scheduler and t.scheduler_type == "plateau")
         self._loss_window: List[float] = []
 
+    def _reset_for_epoch(self) -> None:
+        """Reset optimizer + scheduler for a new epoch. Model weights unchanged."""
+        t = self.config
+        self.outer_opt = torch.optim.Adam(
+            self._opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
+        )
+        self._outer_step = self._outer_step_adam
+
+        self.scheduler = None
+        if t.use_scheduler or t.warmup_iterations > 0:
+            schedulers = []
+            milestones = []
+
+            if t.warmup_iterations > 0:
+                warmup = torch.optim.lr_scheduler.LinearLR(
+                    self.outer_opt,
+                    start_factor=1.0 / t.warmup_iterations,
+                    end_factor=1.0,
+                    total_iters=t.warmup_iterations,
+                )
+                schedulers.append(warmup)
+                milestones.append(t.warmup_iterations)
+
+            if t.use_scheduler:
+                post_warmup_iters = t.max_iterations - t.warmup_iterations
+                if t.scheduler_type == "warm_restarts":
+                    decay = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                        self.outer_opt, T_0=t.T_0, T_mult=t.T_mult, eta_min=t.min_lr,
+                    )
+                elif t.scheduler_type == "exponential":
+                    gamma = (t.min_lr / t.outer_lr) ** (1.0 / post_warmup_iters)
+                    decay = torch.optim.lr_scheduler.ExponentialLR(self.outer_opt, gamma=gamma)
+                elif t.scheduler_type == "polynomial":
+                    decay = torch.optim.lr_scheduler.PolynomialLR(
+                        self.outer_opt, total_iters=post_warmup_iters, power=t.poly_power,
+                    )
+                elif t.scheduler_type == "plateau":
+                    decay = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                        self.outer_opt, mode="min", factor=t.plateau_factor,
+                        patience=t.plateau_patience, threshold=t.plateau_threshold,
+                        cooldown=t.plateau_cooldown, min_lr=t.min_lr,
+                    )
+                else:
+                    decay = torch.optim.lr_scheduler.CosineAnnealingLR(
+                        self.outer_opt, T_max=post_warmup_iters, eta_min=t.min_lr,
+                    )
+                schedulers.append(decay)
+
+            if len(schedulers) > 1:
+                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+                    self.outer_opt, schedulers=schedulers, milestones=milestones,
+                )
+            elif schedulers:
+                self.scheduler = schedulers[0]
+
+        self._loss_window = []
+
         # Checkpoint mode validation: exactly one of patience or checkpoint_interval
         if t.patience > 0 and t.checkpoint_interval == 0:
             self._patience_enabled = True
@@ -1085,10 +1142,20 @@ class iMAMLTrainer:
                     signal.signal(signal.SIGINT, prev_handler)
                     return result, False
         else:
-            result = self._run_phase(start_iteration, self.config.max_iterations, checkpoint_dir, log_interval)
-            if result is not None:
-                signal.signal(signal.SIGINT, prev_handler)
-                return result, False
+            per_epoch = self.config.max_iterations
+            total = per_epoch * self.config.epochs
+            start_epoch = start_iteration // per_epoch
+            for epoch in range(start_epoch, self.config.epochs):
+                epoch_start = max(start_iteration, epoch * per_epoch)
+                epoch_end = (epoch + 1) * per_epoch
+                if epoch > start_epoch:
+                    # Reset scheduler + optimizer for new epoch (keep model weights)
+                    self._reset_for_epoch()
+                    print(f"\n  Epoch {epoch + 1}/{self.config.epochs}: reset scheduler + optimizer")
+                result = self._run_phase(epoch_start, epoch_end, checkpoint_dir, log_interval)
+                if result is not None:
+                    signal.signal(signal.SIGINT, prev_handler)
+                    return result, False
 
         # Restore original handler
         signal.signal(signal.SIGINT, prev_handler)
