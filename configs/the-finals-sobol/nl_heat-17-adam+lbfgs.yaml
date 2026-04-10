@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-16-adam+lbfgs
+  name: nl_heat-17-adam+lbfgs
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -19,6 +19,7 @@ training:
   meta_batch_size: 8
   k_shot: 1000
   query_size: 10000
+  epochs: 1
   max_iterations: 2100
   patience: 0
   checkpoint_interval: 100
@@ -80,6 +81,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-16-adam+lbfgs
+  - nl_heat-17-adam+lbfgs
   exclude_suffixes_append: []
   exclude_max_iteration: 20
