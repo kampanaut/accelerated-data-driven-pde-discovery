@@ -1101,7 +1101,7 @@ class iMAMLTrainer:
             for epoch in range(start_epoch, self.config.epochs):
                 epoch_start = max(start_iteration, epoch * per_epoch)
                 epoch_end = (epoch + 1) * per_epoch
-                if epoch > start_epoch:
+                if epoch > 0 and (epoch > start_epoch or start_iteration == epoch * per_epoch):
                     # Reset scheduler + optimizer for new epoch (keep model weights)
                     self._reset_for_epoch()
                     print(f"\n  Epoch {epoch + 1}/{self.config.epochs}: reset scheduler + optimizer")
