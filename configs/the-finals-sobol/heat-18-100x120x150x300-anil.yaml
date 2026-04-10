@@ -1,14 +1,14 @@
 experiment:
-  name: nl_heat-34-100x150x300-anil-2epoch
-  pde_type: nl_heat
+  name: heat-18-100x120x150x300-anil
+  pde_type: heat
   seed: 42
   device: cuda
 output:
-  base_dir: data/models/the-finals-sobol/nl_heat
+  base_dir: data/models/the-finals-sobol/heat
 data:
-  meta_train_dir: data/datasets/nl_heat_train-2
-  meta_val_dir: data/datasets/nl_heat_val-1
-  meta_test_dir: data/datasets/nl_heat_test-1
+  meta_train_dir: data/datasets/heat_train-2
+  meta_val_dir: data/datasets/heat_val-1
+  meta_test_dir: data/datasets/heat_test-1
 training:
   inner_lr: 0.01
   outer_lr: 0.01
@@ -19,13 +19,14 @@ training:
   meta_batch_size: 25
   k_shot: 1000
   query_size: 10000
-  epochs: 2
+  epochs: 1
   max_iterations: 2000
   patience: 0
   checkpoint_interval: 100
   log_interval: 20
   hidden_dims:
   - 100
+  - 120
   - 150
   - 300
   activation: silu
@@ -81,6 +82,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-34-100x150x300-anil-2epoch
+  - heat-18-100x120x150x300-anil
   exclude_suffixes_append: []
   exclude_max_iteration: 20
