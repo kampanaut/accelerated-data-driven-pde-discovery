@@ -99,6 +99,9 @@ class iMAMLTrainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
 
+
+        self.metal: Optional[MeTALModule] = None
+
         # Move model to device and store
         self.device = cfg.experiment.device
         self.model = model.to(self.device)
@@ -351,7 +354,6 @@ class iMAMLTrainer:
 
         # MeTAL for iMAML: one loss network (not per-step) in inner objective
         # Bound at init — no conditionals in hot loop (same pattern as MAML)
-        self.metal: Optional[MeTALModule] = None
         if t.metal.enabled:
             n_base_params = sum(1 for _ in model.parameters())
             output_dim = list(model.parameters())[-1].shape[0]
