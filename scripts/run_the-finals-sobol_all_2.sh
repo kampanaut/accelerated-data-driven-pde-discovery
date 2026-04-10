@@ -2,40 +2,40 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [5/40] heat-5-250x250 ==="
+echo "=== TRAIN [5/42] heat-5-250x250 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-5-250x250.yaml
 
-echo "=== TRAIN [6/40] heat-6-250x250-anil ==="
+echo "=== TRAIN [6/42] heat-6-250x250-anil ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-6-250x250-anil.yaml
 
-echo "=== TRAIN [7/40] heat-7-100x100x100-anil ==="
+echo "=== TRAIN [7/42] heat-7-100x100x100-anil ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-7-100x100x100-anil.yaml
 
-echo "=== TRAIN [8/40] heat-8-350x350-anil ==="
+echo "=== TRAIN [8/42] heat-8-350x350-anil ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-8-350x350-anil.yaml
 
 # === EVALUATE ===
-echo "=== EVAL [5/40] heat-5-250x250 ==="
+echo "=== EVAL [5/42] heat-5-250x250 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-5-250x250.yaml
 
-echo "=== EVAL [6/40] heat-6-250x250-anil ==="
+echo "=== EVAL [6/42] heat-6-250x250-anil ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-6-250x250-anil.yaml
 
-echo "=== EVAL [7/40] heat-7-100x100x100-anil ==="
+echo "=== EVAL [7/42] heat-7-100x100x100-anil ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-7-100x100x100-anil.yaml
 
-echo "=== EVAL [8/40] heat-8-350x350-anil ==="
+echo "=== EVAL [8/42] heat-8-350x350-anil ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-8-350x350-anil.yaml
 
 # === VISUALIZE ===
-echo "=== VIS [5/40] heat-5-250x250 ==="
+echo "=== VIS [5/42] heat-5-250x250 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-5-250x250.yaml
 
-echo "=== VIS [6/40] heat-6-250x250-anil ==="
+echo "=== VIS [6/42] heat-6-250x250-anil ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-6-250x250-anil.yaml
 
-echo "=== VIS [7/40] heat-7-100x100x100-anil ==="
+echo "=== VIS [7/42] heat-7-100x100x100-anil ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-7-100x100x100-anil.yaml
 
-echo "=== VIS [8/40] heat-8-350x350-anil ==="
+echo "=== VIS [8/42] heat-8-350x350-anil ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-8-350x350-anil.yaml

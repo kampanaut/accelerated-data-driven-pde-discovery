@@ -2,40 +2,40 @@
 set -e
 
 # === TRAIN ===
-echo "=== TRAIN [1/40] heat-1-adam+lbfgs ==="
+echo "=== TRAIN [1/42] heat-1-adam+lbfgs ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-1-adam+lbfgs.yaml
 
-echo "=== TRAIN [2/40] heat-2-adam-mb25 ==="
+echo "=== TRAIN [2/42] heat-2-adam-mb25 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-2-adam-mb25.yaml
 
-echo "=== TRAIN [3/40] heat-3-adam+lbfgs-5k ==="
+echo "=== TRAIN [3/42] heat-3-adam+lbfgs-5k ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-3-adam+lbfgs-5k.yaml
 
-echo "=== TRAIN [4/40] heat-4-adam+lbfgs-mb25 ==="
+echo "=== TRAIN [4/42] heat-4-adam+lbfgs-mb25 ==="
 uv run python scripts/train_maml.py --config configs/the-finals-sobol/heat-4-adam+lbfgs-mb25.yaml
 
 # === EVALUATE ===
-echo "=== EVAL [1/40] heat-1-adam+lbfgs ==="
+echo "=== EVAL [1/42] heat-1-adam+lbfgs ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-1-adam+lbfgs.yaml
 
-echo "=== EVAL [2/40] heat-2-adam-mb25 ==="
+echo "=== EVAL [2/42] heat-2-adam-mb25 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-2-adam-mb25.yaml
 
-echo "=== EVAL [3/40] heat-3-adam+lbfgs-5k ==="
+echo "=== EVAL [3/42] heat-3-adam+lbfgs-5k ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-3-adam+lbfgs-5k.yaml
 
-echo "=== EVAL [4/40] heat-4-adam+lbfgs-mb25 ==="
+echo "=== EVAL [4/42] heat-4-adam+lbfgs-mb25 ==="
 uv run python scripts/evaluate.py --config configs/the-finals-sobol/heat-4-adam+lbfgs-mb25.yaml
 
 # === VISUALIZE ===
-echo "=== VIS [1/40] heat-1-adam+lbfgs ==="
+echo "=== VIS [1/42] heat-1-adam+lbfgs ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-1-adam+lbfgs.yaml
 
-echo "=== VIS [2/40] heat-2-adam-mb25 ==="
+echo "=== VIS [2/42] heat-2-adam-mb25 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-2-adam-mb25.yaml
 
-echo "=== VIS [3/40] heat-3-adam+lbfgs-5k ==="
+echo "=== VIS [3/42] heat-3-adam+lbfgs-5k ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-3-adam+lbfgs-5k.yaml
 
-echo "=== VIS [4/40] heat-4-adam+lbfgs-mb25 ==="
+echo "=== VIS [4/42] heat-4-adam+lbfgs-mb25 ==="
 uv run python scripts/visualize.py --config configs/the-finals-sobol/heat-4-adam+lbfgs-mb25.yaml
