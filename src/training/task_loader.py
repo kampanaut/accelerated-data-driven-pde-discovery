@@ -1099,9 +1099,10 @@ class NLHeatEquationTask(PDETask):
 
     @staticmethod
     def _extract_K(jvp_per_point: np.ndarray, features: np.ndarray) -> np.ndarray:
-        """Correct JVP by (1-u) factor: JVP = K*(1-u), so K = JVP / (1-u)."""
-        u = features[:, 0]  # u is the first feature
-        return jvp_per_point / np.clip(1.0 - u, 1e-6, None)  # clip to avoid division by zero
+        """Recover K via least-squares regression: JVP = K*(1-u), solve for K."""
+        one_minus_u = 1.0 - features[:, 0]
+        K = np.dot(jvp_per_point, one_minus_u) / np.dot(one_minus_u, one_minus_u)
+        return np.full_like(jvp_per_point, K)
 
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
