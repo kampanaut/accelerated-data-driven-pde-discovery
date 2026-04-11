@@ -125,6 +125,9 @@ def analyze_jacobian(
             .numpy()
         )
 
+        if spec.post_extract is not None:
+            coeff = spec.post_extract(coeff, features.detach().cpu().numpy())
+
         estimates[spec.name] = coeff  # type: ignore[assignment]
         true_values[spec.name] = spec.true_value
 

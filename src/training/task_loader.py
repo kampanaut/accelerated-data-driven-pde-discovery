@@ -12,7 +12,7 @@ features/targets at random collocation points on-the-fly on GPU. This gives:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, List, Optional, Type
+from typing import Callable, Tuple, List, Optional, Type
 import numpy as np
 import torch
 
@@ -41,6 +41,7 @@ class CoefficientSpec:
     output_index: int
     true_value: float
     coeff_name: str = ""
+    post_extract: Optional[Callable] = None  # (jvp_per_point, features) → corrected_per_point
 
     def __post_init__(self) -> None:
         if not self.coeff_name:
@@ -1096,11 +1097,18 @@ class NLHeatEquationTask(PDETask):
         # Uses: u, u_xx, u_yy. NOT: u_x, u_y
         return [True, False, False, True, True]
 
+    @staticmethod
+    def _extract_K(jvp_per_point: np.ndarray, features: np.ndarray) -> np.ndarray:
+        """Correct JVP by (1-u) factor: JVP = K*(1-u), so K = JVP / (1-u)."""
+        u = features[:, 0]  # u is the first feature
+        return jvp_per_point / np.clip(1.0 - u, 1e-6, None)  # clip to avoid division by zero
+
     @property
     def coefficient_specs(self) -> list[CoefficientSpec]:
         return [
             CoefficientSpec(
-                name="K", perturb_indices=[3, 4], output_index=0, true_value=self.K
+                name="K", perturb_indices=[3, 4], output_index=0, true_value=self.K,
+                post_extract=self._extract_K,
             ),
         ]
 
