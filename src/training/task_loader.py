@@ -10,7 +10,7 @@ features/targets at random collocation points on-the-fly on GPU. This gives:
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Tuple, List, Optional, Type
 import numpy as np
@@ -41,7 +41,7 @@ class CoefficientSpec:
     output_index: int
     true_value: float
     coeff_name: str = ""
-    post_extract: Optional[Callable] = None  # (jvp_per_point, features) → corrected_per_point
+    post_extract: Optional[Callable] = field(default=None, repr=False)  # (jvp_per_point, features) → corrected_per_point
 
     def __post_init__(self) -> None:
         if not self.coeff_name:

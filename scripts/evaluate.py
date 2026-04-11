@@ -1088,7 +1088,7 @@ def main():
     # Save metadata JSON
     results_path = eval_dir / "results.json"
     with open(results_path, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(results, f, indent=2, default=lambda o: None if callable(o) else str(o))
 
     print(f"Saved metadata to: {results_path}")
     print(f"Saved samples to: {samples_dir}")
