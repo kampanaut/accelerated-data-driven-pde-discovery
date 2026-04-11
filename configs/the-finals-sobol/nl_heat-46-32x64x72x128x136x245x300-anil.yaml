@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-45-32x64x72x128x136x245x300-anil
+  name: nl_heat-46-32x64x72x128x136x245x300-anil
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -85,6 +85,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-45-32x64x72x128x136x245x300-anil
+  - nl_heat-46-32x64x72x128x136x245x300-anil
   exclude_suffixes_append: []
   exclude_max_iteration: 20

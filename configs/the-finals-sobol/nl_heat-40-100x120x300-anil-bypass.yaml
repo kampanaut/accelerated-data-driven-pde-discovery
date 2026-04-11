@@ -1,5 +1,5 @@
 experiment:
-  name: nl_heat-32-100x100x100-anil
+  name: nl_heat-40-100x120x300-anil-bypass
   pde_type: nl_heat
   seed: 42
   device: cuda
@@ -26,12 +26,12 @@ training:
   log_interval: 20
   hidden_dims:
   - 100
-  - 100
-  - 100
+  - 120
+  - 300
   activation: silu
   input_dim: 5
   output_dim: 1
-  input_bypass: false
+  input_bypass: true
   first_order: false
   msl_enabled: false
   da_enabled: false
@@ -81,6 +81,6 @@ visualization:
   dpi: 300
   only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
   compare_experiments:
-  - nl_heat-32-100x100x100-anil
+  - nl_heat-40-100x120x300-anil-bypass
   exclude_suffixes_append: []
   exclude_max_iteration: 20
