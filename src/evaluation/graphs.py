@@ -650,14 +650,19 @@ def _draw_histogram_panel(
     """Draw one histogram panel (MAML or Baseline) with N overlaid estimates."""
     # Shared bins across all estimates
     all_vals = np.concatenate(estimates)
-    bins = np.linspace(np.min(all_vals), np.max(all_vals), 51)
-
-    # KDE curves + per-estimate mean lines
-    x_grid = np.linspace(np.min(all_vals), np.max(all_vals), 300)
+    val_range = np.max(all_vals) - np.min(all_vals)
+    if val_range < 1e-10:
+        # All values identical — expand range for plotting
+        center = np.mean(all_vals)
+        bins = np.linspace(center - 0.1, center + 0.1, 51)
+        x_grid = np.linspace(center - 0.1, center + 0.1, 300)
+    else:
+        bins = np.linspace(np.min(all_vals), np.max(all_vals), 51)
+        x_grid = np.linspace(np.min(all_vals), np.max(all_vals), 300)
     for i, (est, label) in enumerate(zip(estimates, estimate_labels)):
         fill, edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
         mean, std = float(np.mean(est)), float(np.std(est))
-        if std < 1e-12:
+        if std < 1e-6:
             # Constant estimates (e.g. linear model) — KDE undefined, draw vertical line
             ax.axvline(mean, color=fill, linestyle="-", linewidth=2.5, alpha=0.8,
                        label=f"{label}: μ={mean:.4f}, σ={std:.4f}")
