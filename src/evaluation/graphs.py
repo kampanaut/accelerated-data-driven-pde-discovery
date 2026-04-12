@@ -861,6 +861,20 @@ def plot_jacobian_regression_scatter(
         K_est = reg["value"]
         r2 = reg["r2"]
 
+        # Handle per-step arrays (take last step)
+        if hasattr(K_est, '__len__') and len(K_est) > 1:
+            K_est = float(K_est[-1])
+        else:
+            K_est = float(K_est)
+        if hasattr(r2, '__len__') and len(r2) > 1:
+            r2 = float(r2[-1])
+        else:
+            r2 = float(r2)
+        if y.ndim > 1:
+            y = y[-1]
+        if x.ndim > 1:
+            x = x[-1]
+
         # Subsample for plotting if too many points
         n = len(x)
         if n > 5000:
