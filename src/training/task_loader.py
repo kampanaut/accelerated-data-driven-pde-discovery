@@ -66,6 +66,7 @@ class PDETask(ABC):
     n_snapshots: int
     n_features: int = 10  # Override in subclass for scalar PDEs (e.g., heat: 5)
     n_targets: int = 2  # Override in subclass for scalar PDEs (e.g., heat: 1)
+    jacobian_plot_type: str = "histogram"  # Override in subclass (e.g., nl_heat: "scatter")
 
     def __init__(self, npz_path: Path, device: str = "cuda"):
         self.npz_path = Path(npz_path)
@@ -1014,6 +1015,7 @@ class NLHeatEquationTask(PDETask):
 
     n_features: int = 5
     n_targets: int = 1
+    jacobian_plot_type: str = "scatter"
 
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]

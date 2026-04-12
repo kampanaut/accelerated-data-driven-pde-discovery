@@ -108,6 +108,7 @@ class MethodResult:
     # Raw arrays for NPZ (not serialized to JSON)
     jacobian_estimates: Dict[str, np.ndarray] = field(default_factory=dict)  # coeff_name → (n_steps, holdout)
     jacobian_true: Dict[str, np.ndarray] = field(default_factory=dict)      # coeff_name → (1,)
+    jacobian_regression: Dict[str, Dict] = field(default_factory=dict)      # coeff_name → {value, r2, raw_jvp, regressor}
     pred_errors: np.ndarray = field(default_factory=lambda: np.array([]))    # (n_steps, holdout, n_outputs)
     weights: np.ndarray = field(default_factory=lambda: np.array([]))        # (n_steps, n_params) if log_weights
 
@@ -225,6 +226,18 @@ class TaskResult:
                     if true_val is not None:
                         jac_true[name] = true_val
 
+                # Load regression data if present
+                jac_regression: Dict[str, Dict] = {}
+                for name in coeff_names:
+                    reg_val = raw_npz.get(f"{ck}/{label}/{name}_regression_value")
+                    if reg_val is not None:
+                        jac_regression[name] = {
+                            "value": reg_val,           # (n_steps,)
+                            "r2": raw_npz[f"{ck}/{label}/{name}_regression_r2"],  # (n_steps,)
+                            "raw_jvp": raw_npz[f"{ck}/{label}/{name}_regression_raw_jvp"],  # (n_steps, holdout)
+                            "regressor": raw_npz[f"{ck}/{label}/{name}_regression_regressor"],  # (n_steps, holdout)
+                        }
+
                 pred_err = raw_npz.get(f"{ck}/{label}/pred_errors")
                 weights = raw_npz.get(f"{ck}/{label}/weights")
 
@@ -238,6 +251,7 @@ class TaskResult:
                     coefficient_recovery=summary,
                     jacobian_estimates=jac_estimates,
                     jacobian_true=jac_true,
+                    jacobian_regression=jac_regression,
                     pred_errors=pred_err if pred_err is not None else np.array([]),
                     weights=weights if weights is not None else np.array([]),
                 )
@@ -327,6 +341,12 @@ class TaskResult:
                     npz[f"{ck}/{label}/{coeff_name}"] = arr
                 for coeff_name, arr in method.jacobian_true.items():
                     npz[f"{ck}/{label}/{coeff_name}_true"] = arr
+
+                for coeff_name, reg in method.jacobian_regression.items():
+                    npz[f"{ck}/{label}/{coeff_name}_regression_value"] = np.array(reg["value"])
+                    npz[f"{ck}/{label}/{coeff_name}_regression_r2"] = np.array(reg["r2"])
+                    npz[f"{ck}/{label}/{coeff_name}_regression_raw_jvp"] = np.stack(reg["raw_jvp"])
+                    npz[f"{ck}/{label}/{coeff_name}_regression_regressor"] = np.stack(reg["regressor"])
 
                 if method.pred_errors.size > 0:
                     npz[f"{ck}/{label}/pred_errors"] = method.pred_errors
@@ -471,11 +491,22 @@ def build_method_result(
         jac_estimates[name] = np.stack([jac.estimates[name] for jac in jac_snapshots])
         jac_true[name] = np.array([jac_snapshots[0].true_values[name]])
 
+    # Regression data per step
+    jac_regression: Dict[str, Dict] = {}
+    for name in jac_snapshots[0].regressions:
+        jac_regression[name] = {
+            "value": [jac.regressions[name].value for jac in jac_snapshots],
+            "r2": [jac.regressions[name].r_squared for jac in jac_snapshots],
+            "raw_jvp": [jac.regressions[name].raw_jvp for jac in jac_snapshots],
+            "regressor": [jac.regressions[name].regressor for jac in jac_snapshots],
+        }
+
     return MethodResult(
         fine_tune=fine_tune_result,
         coefficient_recovery=summary,
         jacobian_estimates=jac_estimates,
         jacobian_true=jac_true,
+        jacobian_regression=jac_regression,
         pred_errors=np.stack(pred_snapshots) if pred_snapshots else np.array([]),
         weights=np.stack(weight_snapshots) if weight_snapshots else np.array([]),
     )

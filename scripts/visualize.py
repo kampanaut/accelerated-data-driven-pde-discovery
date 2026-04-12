@@ -23,6 +23,7 @@ import numpy as np
 import matplotlib
 from src.config import ExperimentConfig, OutputSection
 from src.evaluation.results import EvaluationResults, TaskResult
+from src.training.task_loader import CoefficientSpec
 
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
@@ -169,6 +170,7 @@ from src.evaluation.graphs import (
     plot_sample_efficiency,
     # Graph 7-10: Jacobian analysis graphs
     plot_jacobian_histogram,
+    plot_jacobian_regression_scatter,
     plot_coefficient_heatmap,
     plot_coefficient_vs_k,
     plot_coefficient_vs_noise,
@@ -289,7 +291,7 @@ def generate_per_task_figures(
 
         # Build coefficient grouping from task-level specs
         specs = task.coefficient_specs
-        coeff_group: Dict[str, List[Dict[str, Any]]] = {}
+        coeff_group: Dict[str, List[CoefficientSpec]] = {}
         for s in specs:
             coeff_group.setdefault(s.coeff_name, []).append(s)
 
@@ -394,19 +396,47 @@ def generate_per_task_figures(
                                 if step_label != ""
                                 else ""
                             )
-                            fig = plot_jacobian_histogram(
-                                maml_estimates=maml_ests,
-                                baseline_estimates=baseline_ests,
-                                estimate_labels=member_names,
-                                coeff_true=float(true_arr[0]),
-                                title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
-                                coeff_name=coeff_name,
-                                save_path=task_dir
-                                / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
-                                dpi=dpi,
-                                maml_pred_errors=maml_pe_list,
-                                baseline_pred_errors=baseline_pe_list,
-                            )
+                            # Use scatter for regression-based extraction (NLHeat), histogram otherwise
+                            maml_reg_full = combo.maml.jacobian_regression.get(member_names[0], {})
+                            baseline_reg_full = combo.baseline.jacobian_regression.get(member_names[0], {})
+                            if maml_reg_full:
+                                # Index per-step regression data
+                                maml_reg = {
+                                    "value": float(maml_reg_full["value"][si]),
+                                    "r2": float(maml_reg_full["r2"][si]),
+                                    "raw_jvp": maml_reg_full["raw_jvp"][si],
+                                    "regressor": maml_reg_full["regressor"][si],
+                                }
+                                baseline_reg = {
+                                    "value": float(baseline_reg_full["value"][si]),
+                                    "r2": float(baseline_reg_full["r2"][si]),
+                                    "raw_jvp": baseline_reg_full["raw_jvp"][si],
+                                    "regressor": baseline_reg_full["regressor"][si],
+                                } if baseline_reg_full else {}
+                                fig = plot_jacobian_regression_scatter(
+                                    maml_regression=maml_reg,
+                                    baseline_regression=baseline_reg,
+                                    coeff_true=float(true_arr[0]),
+                                    title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
+                                    coeff_name=coeff_name,
+                                    save_path=task_dir
+                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
+                                    dpi=dpi,
+                                )
+                            else:
+                                fig = plot_jacobian_histogram(
+                                    maml_estimates=maml_ests,
+                                    baseline_estimates=baseline_ests,
+                                    estimate_labels=member_names,
+                                    coeff_true=float(true_arr[0]),
+                                    title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
+                                    coeff_name=coeff_name,
+                                    save_path=task_dir
+                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
+                                    dpi=dpi,
+                                    maml_pred_errors=maml_pe_list,
+                                    baseline_pred_errors=baseline_pe_list,
+                                )
                             plt.close(fig)
 
         # ---------------------------------------------------------------------
@@ -808,7 +838,7 @@ def generate_aggregated_figures(
     specs = any_task.coefficient_specs if any_task else []
     # For the patterns below, build per-task combo lookups
     task_combo_lookups = {tn: {c.combo_key: c for c in t.combos} for tn, t in tasks.items()}
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    grouped: Dict[str, List[CoefficientSpec]] = {}
     for s in specs:
         grouped.setdefault(s.coeff_name, []).append(s)
 
@@ -894,18 +924,35 @@ def generate_aggregated_figures(
                             step_suffix = (
                                 f"_step[{step_label}]" if step_label != "" else ""
                             )
-                            fig = plot_jacobian_histogram(
-                                maml_estimates=[np.array(x) for x in maml_all],
-                                baseline_estimates=[np.array(x) for x in baseline_all],
-                                estimate_labels=member_names,
-                                coeff_true=1.0,
-                                title=f"Aggregated {coeff_name} Recovery Ratio (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
-                                coeff_name=coeff_name,
-                                save_path=agg_dir
-                                / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
-                                dpi=dpi,
-                                ratio_mode=True,
-                            )
+                            # Use scatter for regression-based extraction (NLHeat), histogram otherwise
+                            # Check first available task for regression data
+                            _first_tc = task_combo_lookups[task_names[0]][combo_key]
+                            maml_reg = _first_tc.maml.jacobian_regression.get(member_names[0], {})
+                            baseline_reg = _first_tc.baseline.jacobian_regression.get(member_names[0], {})
+                            if maml_reg:
+                                fig = plot_jacobian_regression_scatter(
+                                    maml_regression=maml_reg,
+                                    baseline_regression=baseline_reg,
+                                    coeff_true=float(_first_tc.maml.jacobian_true[member_names[0]][0]),
+                                    title=f"Aggregated {coeff_name} (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
+                                    coeff_name=coeff_name,
+                                    save_path=agg_dir
+                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
+                                    dpi=dpi,
+                                )
+                            else:
+                                fig = plot_jacobian_histogram(
+                                    maml_estimates=[np.array(x) for x in maml_all],
+                                    baseline_estimates=[np.array(x) for x in baseline_all],
+                                    estimate_labels=member_names,
+                                    coeff_true=1.0,
+                                    title=f"Aggregated {coeff_name} Recovery Ratio (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
+                                    coeff_name=coeff_name,
+                                    save_path=agg_dir
+                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
+                                    dpi=dpi,
+                                    ratio_mode=True,
+                                )
                             plt.close(fig)
 
     # -------------------------------------------------------------------------
@@ -1562,7 +1609,6 @@ def generate_cross_experiment_scatter(
         scatter_fixed_steps = [s for s in scatter_fixed_steps if int(s) in allowed]
 
     for step_val in scatter_fixed_steps:
-        step_idx = all_fixed_steps.index(step_val)
         # Build panel_data for this step
         panel_data: PanelDataDict = {}
 

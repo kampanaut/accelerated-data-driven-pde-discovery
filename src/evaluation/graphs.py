@@ -830,6 +830,71 @@ def plot_jacobian_histogram(
     return fig
 
 
+def plot_jacobian_regression_scatter(
+    maml_regression: dict,
+    baseline_regression: dict,
+    coeff_true: float,
+    title: str,
+    coeff_name: str,
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (14, 6),
+    dpi: int = 150,
+) -> plt.Figure:
+    """Scatter plot of raw JVP vs (1-u) with regression line for NLHeat-style PDEs.
+
+    Shows how well the model learned K(1-u) structure. R² on the plot.
+    """
+    symbol = {"K": "K"}.get(coeff_name, coeff_name)
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    fig.suptitle(f"{title}\nTrue {symbol} = {coeff_true:.6f}", fontsize=12)
+
+    for ax, reg, panel_title in [
+        (axes[0], maml_regression, "MAML (θ*)"),
+        (axes[1], baseline_regression, "Baseline (θ₀)"),
+    ]:
+        if not reg:
+            ax.set_title(f"{panel_title}\nNo regression data")
+            continue
+
+        x = reg["regressor"]  # (1-u)
+        y = reg["raw_jvp"]    # JVP values
+        K_est = reg["value"]
+        r2 = reg["r2"]
+
+        # Subsample for plotting if too many points
+        n = len(x)
+        if n > 5000:
+            idx = np.random.RandomState(42).choice(n, 5000, replace=False)
+            x_plot, y_plot = x[idx], y[idx]
+        else:
+            x_plot, y_plot = x, y
+
+        ax.scatter(x_plot, y_plot, s=1, alpha=0.3, color="steelblue", rasterized=True)
+
+        # Regression line
+        x_line = np.linspace(0, max(x.max(), 1.0), 100)
+        ax.plot(x_line, K_est * x_line, color="red", linewidth=2,
+                label=f"K={K_est:.4f} (R²={r2:.4f})")
+        # True K line
+        ax.plot(x_line, coeff_true * x_line, color="green", linewidth=2,
+                linestyle="--", label=f"True K={coeff_true:.4f}")
+
+        ax.set_xlabel("(1 − u)")
+        ax.set_ylabel(f"JVP  (∂u_t/∂∇²u)")
+        ax.set_title(panel_title)
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+
+    return fig
+
+
 def plot_coefficient_heatmap(
     k_values: NDArray[np.integer[Any]],
     noise_levels: NDArray[np.floating[Any]],

@@ -23,6 +23,15 @@ from src.training.task_loader import CoefficientSpec
 
 
 @dataclass
+class RegressionResult:
+    """Result from regression-based coefficient extraction (e.g. NLHeat K)."""
+    value: float         # recovered coefficient (K)
+    r_squared: float     # R² of the regression fit
+    raw_jvp: NDArray[np.floating]     # raw JVP per point (before regression)
+    regressor: NDArray[np.floating]   # (1-u) per point — x-axis for scatter
+
+
+@dataclass
 class JacobianResults:
     """Generic results from JVP-based coefficient extraction.
 
@@ -32,6 +41,7 @@ class JacobianResults:
 
     estimates: dict[str, NDArray[np.floating]] = field(default_factory=dict)
     true_values: dict[str, float] = field(default_factory=dict)
+    regressions: dict[str, RegressionResult] = field(default_factory=dict)
 
     def recovered(self, name: str) -> float:
         """Mean of per-point estimates for a named coefficient."""
@@ -59,6 +69,8 @@ class JacobianResults:
             d[f"{name}_mean"] = float(np.mean(self.estimates[name]))
             d[f"{name}_std"] = float(np.std(self.estimates[name]))
         d["error_pct"] = self.error_pct
+        for name, reg in self.regressions.items():
+            d[f"{name}_regression_r2"] = reg.r_squared
         return d
 
     def to_npz_dict(self, prefix: str = "") -> dict[str, np.ndarray]:
@@ -68,6 +80,11 @@ class JacobianResults:
         for name, arr in self.estimates.items():
             d[f"{p}{name}"] = arr
             d[f"{p}{name}_true"] = np.array([self.true_values[name]])
+        for name, reg in self.regressions.items():
+            d[f"{p}{name}_regression_value"] = np.array([reg.value])
+            d[f"{p}{name}_regression_r2"] = np.array([reg.r_squared])
+            d[f"{p}{name}_regression_raw_jvp"] = reg.raw_jvp
+            d[f"{p}{name}_regression_regressor"] = reg.regressor
         return d
 
 
@@ -108,6 +125,7 @@ def analyze_jacobian(
 
     estimates: dict[str, NDArray[np.floating]] = {}
     true_values: dict[str, float] = {}
+    regressions: dict[str, RegressionResult] = {}
 
     for spec in specs:
         tangent = torch.zeros_like(features)
@@ -126,9 +144,24 @@ def analyze_jacobian(
         )
 
         if spec.post_extract is not None:
-            coeff = spec.post_extract(coeff, features.detach().cpu().numpy())
+            raw_jvp = coeff.copy()
+            feat_np = features.detach().cpu().numpy()
+            coeff = spec.post_extract(raw_jvp, feat_np)
+            # Compute R² of the regression
+            one_minus_u = 1.0 - feat_np[:, 0]
+            K_est = float(coeff[0])  # all identical from regression
+            predicted = K_est * one_minus_u
+            ss_res = np.sum((raw_jvp - predicted) ** 2)
+            ss_tot = np.sum((raw_jvp - np.mean(raw_jvp)) ** 2)
+            r_squared = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+            regressions[spec.name] = RegressionResult(
+                value=K_est,
+                r_squared=r_squared,
+                raw_jvp=raw_jvp,
+                regressor=one_minus_u,
+            )
 
         estimates[spec.name] = coeff  # type: ignore[assignment]
         true_values[spec.name] = spec.true_value
 
-    return JacobianResults(estimates=estimates, true_values=true_values)
+    return JacobianResults(estimates=estimates, true_values=true_values, regressions=regressions)
