@@ -26,7 +26,6 @@ import torch.nn.functional as F
 
 from .task_loader import PDETask, MetaLearningDataLoader
 from .spectral_loss import compute_spectral_loss
-from .maml import MeTALModule
 
 
 # ---------------------------------------------------------------------------
@@ -98,9 +97,6 @@ class iMAMLTrainer:
         self.config = t  # TrainingSection — all self.config.* reads come from here
         self.train_loader = train_loader
         self.val_loader = val_loader
-
-
-        self.metal: Optional[MeTALModule] = None
 
         # Move model to device and store
         self.device = cfg.experiment.device
@@ -197,29 +193,6 @@ class iMAMLTrainer:
         elif t.first_order:
             self._cg_steps_active = 0  # Permanent FOMAML equivalent
             print(f"  first_order=True: CG=0 (FOMAML equivalent)")
-
-        # MeTAL for iMAML: one loss network (not per-step) in inner objective
-        # Bound at init — no conditionals in hot loop (same pattern as MAML)
-        self.metal: Optional[MeTALModule] = None
-        if t.metal.enabled:
-            n_base_params = sum(1 for _ in model.parameters())
-            output_dim = list(model.parameters())[-1].shape[0]
-            self.metal = MeTALModule(
-                n_steps=1,
-                n_base_params=n_base_params,
-                output_dim=output_dim,
-                hidden_dim=t.metal.hidden_dim,
-            ).to(self.device)
-            n_metal_params = sum(p.numel() for p in self.metal.parameters())
-            print(f"  MeTAL enabled (iMAML mode): 1 loss network, {n_metal_params:,} params")
-            opt_params += list(self.metal.parameters())
-
-        # Bind inner cost function — no conditionals in the hot loop
-        self._inner_cost = (
-            self._inner_cost_metal
-            if self.metal is not None
-            else self._inner_cost_standard
-        )
 
         # Bind compute_task
         self.compute_task = self._compute_task_imaml
@@ -389,34 +362,6 @@ class iMAMLTrainer:
         return pw + spec
 
     # ------------------------------------------------------------------
-    # Inner cost functions (bound in __init__, no conditionals in hot loop)
-    # ------------------------------------------------------------------
-
-    def _inner_cost_standard(
-        self,
-        model: nn.Module,
-        pred: torch.Tensor,
-        targets: torch.Tensor,
-        coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
-    ) -> torch.Tensor:
-        """Standard inner cost: task loss only."""
-        return self.cost_function(pred, targets, coords)
-
-    def _inner_cost_metal(
-        self,
-        model: nn.Module,
-        pred: torch.Tensor,
-        targets: torch.Tensor,
-        coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
-    ) -> torch.Tensor:
-        """MeTAL inner cost: task loss + learned loss network."""
-        task_loss = self.cost_function(pred, targets, coords)
-        meta_support = self.metal.support_step(  # type: ignore[union-attr]
-            0, model, pred, targets, self._pointwise_loss
-        )
-        return task_loss + meta_support
-
-    # ------------------------------------------------------------------
     # Parameter vector helpers
     # ------------------------------------------------------------------
 
@@ -465,7 +410,7 @@ class iMAMLTrainer:
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
             pred = fast_model(support_x)
-            task_loss = self._inner_cost(fast_model, pred, support_y, support_coords)
+            task_loss = self.cost_function(pred, support_y, support_coords)
             prox = self._regularization_loss(fast_model, theta, self.lam)
             total = task_loss + prox
             total.backward()
@@ -486,7 +431,7 @@ class iMAMLTrainer:
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
             pred = fast_model(support_x)
-            task_loss = self._inner_cost(fast_model, pred, support_y, support_coords)
+            task_loss = self.cost_function(pred, support_y, support_coords)
             task_loss.backward()
             if self.config.max_grad_norm > 0:
                 torch.nn.utils.clip_grad_norm_(fast_model.parameters(), self.config.max_grad_norm)
@@ -518,7 +463,7 @@ class iMAMLTrainer:
         def closure():
             opt.zero_grad()
             pred = fast_model(support_x)
-            task_loss = self._inner_cost(fast_model, pred, support_y, support_coords)
+            task_loss = self.cost_function(pred, support_y, support_coords)
             prox = self._regularization_loss(fast_model, theta, self.lam)
             total = task_loss + prox
             total.backward()
@@ -545,7 +490,7 @@ class iMAMLTrainer:
         is λI, already accounted for in the matrix evaluator.
         """
         pred = model(support_x)
-        task_loss = self._inner_cost(model, pred, support_y, support_coords)
+        task_loss = self.cost_function(pred, support_y, support_coords)
         grad_ft = torch.autograd.grad(task_loss, list(model.parameters()), create_graph=True)
         flat_grad = torch.cat([g.contiguous().view(-1) for g in grad_ft])
         h = torch.sum(flat_grad * vector)
@@ -609,7 +554,7 @@ class iMAMLTrainer:
 
     def _compute_task_imaml(
         self, task: PDETask, seed: int
-    ) -> Tuple[torch.Tensor, float, Optional[torch.Tensor]]:
+    ) -> Tuple[torch.Tensor, float]:
         """One task: copy θ → inner solve → query grad → CG correct.
 
         Returns (corrected_grad, query_loss_value). Unlike MAML, the meta-gradient
@@ -628,13 +573,7 @@ class iMAMLTrainer:
             with torch.no_grad():
                 pre_pred = fast_model(support_x)
                 pre_loss = self.cost_function(pre_pred, support_y, support_coords)
-                pre_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.support_step(  # type: ignore[union-attr]
-                        0, fast_model, pre_pred, support_y, self._pointwise_loss
-                    )
-                    pre_metal = f", metal_loss={ml.item():.6f}"
-                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
+                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}")
 
         # Inner solve: minimize task_loss + λ/2 ||φ - θ||²
         self._inner_solve(fast_model, theta, support_x, support_y, support_coords)
@@ -643,13 +582,7 @@ class iMAMLTrainer:
             with torch.no_grad():
                 post_pred = fast_model(support_x)
                 post_loss = self.cost_function(post_pred, support_y, support_coords)
-                post_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.support_step(  # type: ignore[union-attr]
-                        0, fast_model, post_pred, support_y, self._pointwise_loss
-                    )
-                    post_metal = f", metal_loss={ml.item():.6f}"
-                print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
+                print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}"
                       f" ({self.config.inner_steps} steps)")
 
         # Query gradient: v_i = ∇φ L_query(φ*)
@@ -669,31 +602,10 @@ class iMAMLTrainer:
             )
             corrected_grad = cg_solve(evaluator, flat_grad.detach(), cg)
 
-        # MeTAL param gradients via cross-Hessian IFT (if MeTAL enabled)
-        # dF/dψ = -g_i^T · ∇²φψ [metal_loss]
-        # where g_i = corrected_grad (already computed by CG above)
-        metal_grad: Optional[torch.Tensor] = None
-        if self.metal is not None:
-            # ∇φ metal_loss at adapted point (create_graph=True for second derivatives)
-            metal_pred = fast_model(support_x)
-            ml = self.metal.support_step(  # type: ignore[union-attr]
-                0, fast_model, metal_pred, support_y, self._pointwise_loss
-            )
-            grad_phi_metal = torch.autograd.grad(
-                ml, list(fast_model.parameters()), create_graph=True
-            )
-            flat_grad_metal = torch.cat([g.contiguous().view(-1) for g in grad_phi_metal])
-            # Project through corrected_grad (constant vector) to get cross-Hessian
-            dot = torch.sum(flat_grad_metal * corrected_grad)
-            cross_grads = torch.autograd.grad(dot, list(self.metal.parameters()))
-            metal_grad = -torch.cat([
-                g.contiguous().view(-1) for g in cross_grads
-            ]).detach() / self.lam
-
         if verbose:
             print(f"\t\t\tloss={query_loss_val:.2f}")
 
-        return corrected_grad, query_loss_val, metal_grad
+        return corrected_grad, query_loss_val
 
     def _compute_meta_gradient(self, tasks: List[PDETask]) -> float:
         """Compute CG-corrected meta-gradient and set .grad on model params.
@@ -704,19 +616,15 @@ class iMAMLTrainer:
 
         n_params = sum(p.numel() for p in self.model.parameters())
         meta_grad = torch.zeros(n_params, device=self.device)
-        n_metal_params = sum(p.numel() for p in self.metal.parameters()) if self.metal is not None else 0
-        metal_meta_grad = torch.zeros(n_metal_params, device=self.device) if n_metal_params > 0 else None
         total_loss = 0.0
         self._lam_grad = 0.0
 
         for i, task in enumerate(tasks):
             print(f"\ttask [{i}/{len(tasks)}]: {task.task_name}")
             seed = self.iteration * len(tasks) + i
-            corrected_grad, loss_val, task_metal_grad = self.compute_task(task, seed)
+            corrected_grad, loss_val = self.compute_task(task, seed)
             meta_grad += corrected_grad / len(tasks)
             total_loss += loss_val / len(tasks)
-            if metal_meta_grad is not None and task_metal_grad is not None:
-                metal_meta_grad += task_metal_grad / len(tasks)
 
             # Optional lambda meta-learning
             if self.lam_lr > 0:
@@ -743,20 +651,11 @@ class iMAMLTrainer:
             p.grad = meta_grad[offset:offset + numel].view(p.size()).clone()
             offset += numel
 
-        # Set .grad on MeTAL params if enabled
-        if self.metal is not None and metal_meta_grad is not None:
-            offset = 0
-            for p in self.metal.parameters():
-                numel = p.numel()
-                p.grad = metal_meta_grad[offset:offset + numel].view(p.size()).clone()
-                offset += numel
-
         # Gradient clipping
         if self.config.max_grad_norm > 0:
-            clip_params = list(self.model.parameters())
-            if self.metal is not None:
-                clip_params += list(self.metal.parameters())
-            torch.nn.utils.clip_grad_norm_(clip_params, self.config.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(
+                list(self.model.parameters()), self.config.max_grad_norm
+            )
 
         return avg_loss
 
@@ -826,7 +725,7 @@ class iMAMLTrainer:
         for i, task in enumerate(tasks):
             task_seed = seed + i
             with torch.enable_grad():
-                _, task_loss_val, _ = self.compute_task(task, task_seed)
+                _, task_loss_val = self.compute_task(task, task_seed)
             total_loss += task_loss_val
 
         return total_loss / len(tasks)
@@ -1246,10 +1145,6 @@ class iMAMLTrainer:
             path,
         )
 
-        # MeTAL: save module state alongside main checkpoint
-        if self.metal is not None:
-            torch.save(self.metal.state_dict(), path.parent / "metal_state.pt")
-
     def load_checkpoint(self, path: Path) -> None:
         """
         Load model checkpoint.
@@ -1292,14 +1187,6 @@ class iMAMLTrainer:
         if saved_lam is not None:
             self.lam = saved_lam.to(self.device)
             print(f"  Loaded λ={self.lam.item():.4f}")
-
-        # MeTAL: load module state if it exists
-        metal_state_path = path.parent / "metal_state.pt"
-        if self.metal is not None and metal_state_path.exists():
-            self.metal.load_state_dict(
-                torch.load(metal_state_path, map_location=self.device, weights_only=True)
-            )
-            print(f"  Loaded MeTAL module from {metal_state_path}")
 
         print(f"Loaded checkpoint from {path}")
         print(f"  Iteration: {self.iteration}")

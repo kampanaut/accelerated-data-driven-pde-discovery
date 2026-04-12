@@ -38,7 +38,7 @@ import numpy as np
 from src.config import ExperimentConfig
 from src.networks.pde_operator_network import NetworkConfig, PDEOperatorNetwork
 from src.training.task_loader import MetaLearningDataLoader, PDETask, TASK_REGISTRY
-from src.training.maml import MeTALModule, LSLRSchedule
+from src.training.maml import LSLRSchedule
 from src.training.spectral_loss import compute_spectral_loss
 from src.evaluation.jacobian import analyze_jacobian, JacobianResults
 from src.evaluation.metrics import compress_step_ranges
@@ -100,7 +100,6 @@ def fine_tune(
     holdout_targets: torch.Tensor,
     fixed_steps: Optional[List[int]] = None,
     on_step: Optional[Callable[[torch.nn.Module, int], None]] = None,
-    metal: Optional[MeTALModule] = None,
     lslr: Optional["LSLRSchedule"] = None,
     loss_type: str = "normalized_mse",
     coords: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
@@ -126,7 +125,6 @@ def fine_tune(
         holdout_targets: Holdout targets tensor for generalization eval
         fixed_steps: Steps at which to call on_step (0 = pre-training, e.g. [0, 1, 10, 50])
         on_step: Callback called at each fixed_step with (model, step_number)
-        metal: Frozen MeTALModule (None = standard loss)
         loss_type: Loss function — 'mse', 'normalized_mse', or 'mae'
 
     Returns:
@@ -173,9 +171,6 @@ def fine_tune(
             phi = torch.cat([p.view(-1) for p in model.parameters()])
             return 0.5 * proximal_lam * (phi - proximal_theta).pow(2).sum()
         return torch.tensor(0.0, device=features.device)
-
-    if metal is not None:
-        metal.eval()
 
     # Resolve pointwise loss once — no string dispatch per call
     if loss_type == "mse":
@@ -261,23 +256,6 @@ def fine_tune(
         opt.step()
         _holdout_and_callback(step_idx)
 
-    def _step_sgd_with_metal(step_idx: int, grad_loss: torch.Tensor) -> None:
-        """SGD step with MeTAL: backward, clip, LSLR override, optimize."""
-        total_loss = grad_loss + _proximal_loss()
-        opt.zero_grad()
-        total_loss.backward()
-        if max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        if lr_schedule is not None and param_names is not None:
-            if step_idx < lslr.n_steps:  # type: ignore[union-attr]
-                for pg, name in zip(opt.param_groups, param_names):
-                    pg["lr"] = lr_schedule[name][step_idx]
-            else:
-                for pg in opt.param_groups:
-                    pg["lr"] = lr
-        opt.step()
-        _holdout_and_callback(step_idx)
-
     if use_lbfgs:
         # Single .step() — L-BFGS runs max_steps iterations internally.
         # Override fixed_steps: only step 0 (already done) and max_steps (after).
@@ -308,25 +286,12 @@ def fine_tune(
         )
     else:
         # SGD path
-        _step = _step_sgd_with_metal if metal is not None else _step_sgd
-
-        # Phase 1: MeTAL-shaped inner steps (if MeTAL provided)
-        metal_steps = metal.n_steps if metal is not None else 0
-        for i in range(min(metal_steps, max_steps)):
+        for i in range(max_steps):
             pred = model(x)
             train_losses.append(metric_fn(pred, y).item())
 
             grad_loss = cost_fn(pred, y)
-            meta_support = metal.support_step(i, model, pred, y, cost_fn)  # type: ignore[union-attr]
-            _step(i, grad_loss + meta_support)
-
-        # Phase 2: Standard loss for remaining steps
-        for i in range(metal_steps, max_steps):
-            pred = model(x)
-            train_losses.append(metric_fn(pred, y).item())
-
-            grad_loss = cost_fn(pred, y)
-            _step(i, grad_loss)
+            _step_sgd(i, grad_loss)
 
         return FineTuneResult(
             train_losses=np.array(train_losses),
@@ -346,7 +311,6 @@ def evaluate_task(
     seed: int,
     fixed_steps: List[int],
     holdout_size: int = 1000,
-    metal: Optional[MeTALModule] = None,
     lslr: Optional["LSLRSchedule"] = None,
     loss_type: str = "normalized_mse",
     spectral_mode_size: int = 0,
@@ -464,7 +428,7 @@ def evaluate_task(
 
                     return on_step
 
-                # Fine-tune from θ* (MAML) — uses MeTAL loss if networks provided
+                # Fine-tune from θ* (MAML)
                 maml_model = copy.deepcopy(theta_star)
                 maml_result = fine_tune(
                     maml_model,
@@ -483,7 +447,6 @@ def evaluate_task(
                         maml_weight_snapshots if log_weights else None,
                         method_label="MAML",
                     ),
-                    metal=metal,
                     lslr=lslr,
                     loss_type=loss_type,
                     coords=support_coords,
@@ -497,7 +460,7 @@ def evaluate_task(
                     anil=anil,
                 )
 
-                # Fine-tune from θ₀ (baseline) — same loss, no MeTAL, no LSLR
+                # Fine-tune from θ₀ (baseline) — same loss, no LSLR
                 baseline_model = copy.deepcopy(theta_0)
                 baseline_result = fine_tune(
                     baseline_model,
@@ -675,7 +638,6 @@ def evaluate_task(
             holdout_targets=bc_h_targets,
             fixed_steps=fixed_steps,
             on_step=_pred_on_step,
-            metal=metal,
             lslr=lslr,
             loss_type=loss_type,
             coords=s_coords,
@@ -822,47 +784,7 @@ def main():
     print(f"θ* loaded from: {theta_star_path}")
     print(f"θ₀ loaded from: {theta_0_path}")
 
-    # Load MeTAL module if it exists (frozen for evaluation)
-    metal_module: Optional[MeTALModule] = None
-
     checkpoint_dir = theta_star_path.parent
-    metal_state_path = checkpoint_dir / "metal_state.pt"
-
-    if metal_state_path.exists():
-        metal_state = torch.load(metal_state_path, map_location=device, weights_only=True)
-
-        # NaN guard: poisoned MeTAL state contaminates all MAML evaluations
-        has_nan = any(
-            torch.isnan(v).any().item()
-            for v in metal_state.values()
-            if isinstance(v, torch.Tensor)
-        )
-        if has_nan:
-            print(f"FATAL: MeTAL state contains NaN: {metal_state_path}")
-            print(f"Cleaning up evaluation directory...")
-            eval_dir = exp_dir / "evaluation"
-            if eval_dir.exists():
-                shutil.rmtree(eval_dir)
-                print(f"Deleted: {eval_dir}")
-            sys.exit(1)
-
-        n_base_params = sum(1 for _ in theta_star.parameters())
-        output_dim = net_config.output_dim
-        inner_steps = cfg.training.inner_steps
-        metal_hidden_dim = cfg.training.metal.hidden_dim
-
-        # iMAML uses n_steps=1 (one network), MAML uses n_steps=inner_steps
-        metal_n_steps = 1 if cfg.training.imaml.enabled else inner_steps
-        metal_module = MeTALModule(
-            n_steps=metal_n_steps,
-            n_base_params=n_base_params,
-            output_dim=output_dim,
-            hidden_dim=metal_hidden_dim,
-        ).to(device)
-        metal_module.load_state_dict(metal_state)
-        metal_module.eval()
-
-        print(f"MeTAL module loaded from: {metal_state_path}")
 
     # Load LSLR module if it exists (frozen for evaluation)
     lslr_module: Optional[LSLRSchedule] = None
@@ -903,8 +825,6 @@ def main():
         ]).clone()
         eval_inner_optimizer = im.inner_optimizer
         print(f"  iMAML eval: proximal_lam={proximal_lam}, inner_optimizer={eval_inner_optimizer}")
-
-        # MeTAL already loaded with n_steps=1 above (iMAML detection at load time)
 
     print()
 
@@ -1012,7 +932,6 @@ def main():
             seed=seed + task_idx * 10000,
             holdout_size=holdout_size,
             fixed_steps=fixed_steps,
-            metal=metal_module,
             lslr=lslr_module,
             loss_type=loss_type,
             spectral_mode_size=spectral_mode_size,

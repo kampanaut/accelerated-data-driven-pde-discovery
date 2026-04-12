@@ -44,12 +44,6 @@ class DataSection:
 
 
 @dataclass
-class MetalSection:
-    enabled: bool = False
-    hidden_dim: int = 64
-
-
-@dataclass
 class SpectralLossSection:
     enabled: bool = False
     mode_size: int = 32
@@ -141,9 +135,8 @@ class TrainingSection:
     # Weight initialization (optional: "zeros", "expected", or None for default)
     weight_init: Optional[str] = None
 
-    # Nested sections (spectral_loss before metal to match old YAML order)
+    # Nested sections
     spectral_loss: SpectralLossSection = field(default_factory=SpectralLossSection)
-    metal: MetalSection = field(default_factory=MetalSection)
     imaml: IMAMLSection = field(default_factory=IMAMLSection)
 
 
@@ -201,12 +194,11 @@ class ExperimentConfig:
 
         # Training: pop nested dicts before spreading flat fields
         train_raw = dict(d.get("training", {}))
-        metal = MetalSection(**train_raw.pop("metal", {}))
+        train_raw.pop("metal", None)  # legacy key, silently discarded
         spectral = SpectralLossSection(**train_raw.pop("spectral_loss", {}))
         imaml = IMAMLSection(**train_raw.pop("imaml", {}))
         training = TrainingSection(
             **_filter_fields(TrainingSection, train_raw),
-            metal=metal,
             spectral_loss=spectral,
             imaml=imaml,
         )
@@ -231,7 +223,6 @@ class ExperimentConfig:
 
         # Build training dict from flat fields in dataclass field order
         train_dict: dict[str, Any] = {}
-        _nested = {"metal", "spectral_loss", "imaml"}
         # Network fields that are mutually exclusive (layers XOR hidden_dims+friends)
         _layers_format = {"hidden_dims", "activation", "input_dim", "output_dim"}
         _conv = {"conv_filters", "conv_kernel_size"}
@@ -241,10 +232,6 @@ class ExperimentConfig:
             val = getattr(t, name)
 
             # Nested sections — emit inline if enabled
-            if name == "metal":
-                if t.metal.enabled:
-                    train_dict["metal"] = {"enabled": t.metal.enabled, "hidden_dim": t.metal.hidden_dim}
-                continue
             if name == "spectral_loss":
                 if t.spectral_loss.enabled:
                     train_dict["spectral_loss"] = {"enabled": t.spectral_loss.enabled, "mode_size": t.spectral_loss.mode_size}

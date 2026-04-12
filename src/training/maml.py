@@ -10,7 +10,7 @@ References:
 """
 
 from pathlib import Path
-from typing import Callable, List, Optional, Dict, Tuple, TYPE_CHECKING
+from typing import List, Optional, Dict, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..config import ExperimentConfig
@@ -25,217 +25,6 @@ import higher
 
 from .task_loader import PDETask, MetaLearningDataLoader
 from .spectral_loss import compute_spectral_loss
-
-
-# ---------------------------------------------------------------------------
-# MeTAL: Task-Adaptive Loss (Baik et al., ICCV 2021)
-#
-# Per-step loss networks + adapters for support and query.
-# Reference: https://github.com/baiksung/MeTAL
-# ---------------------------------------------------------------------------
-
-
-def _z_normalize(x: torch.Tensor) -> torch.Tensor:
-    """Z-normalize a tensor (matches reference implementation)."""
-    return (x - x.mean()) / (x.std() + 1e-12)
-
-
-class StepLossNetwork(nn.Module):
-    """
-    Per-step loss network L_φ^j.
-
-    2-layer MLP: input_dim → hidden → 1.
-    Parameters get affine-transformed by StepLossAdapter; the transformed
-    version is used via functional_forward().
-    """
-
-    def __init__(self, input_dim: int, hidden_dim: int = 0):
-        super().__init__()
-        h = hidden_dim if hidden_dim > 0 else input_dim
-        self.fc1 = nn.Linear(input_dim, h)
-        self.fc2 = nn.Linear(h, 1)
-
-    def functional_forward(
-        self, x: torch.Tensor, params: List[torch.Tensor]
-    ) -> torch.Tensor:
-        """Forward with affine-transformed params [W1', b1', W2', b2']."""
-        out = F.relu(F.linear(x, params[0], params[1]))
-        out = F.linear(out, params[2], params[3])
-        return out.squeeze(-1)
-
-
-class StepAffineAdapter(nn.Module):
-    """
-    Per-step adapter g_ψ^j.
-
-    Takes aggregate task state → affine transform coefficients for loss network.
-    Identity at initialization (multiplier_bias, offset_bias = 0).
-    """
-
-    def __init__(self, tau_dim: int, n_loss_params: int, hidden_dim: int = 0):
-        super().__init__()
-        h = hidden_dim if hidden_dim > 0 else tau_dim
-        self.fc1 = nn.Linear(tau_dim, h)
-        self.fc2 = nn.Linear(h, n_loss_params * 2)
-        self.multiplier_bias = nn.Parameter(torch.zeros(n_loss_params))
-        self.offset_bias = nn.Parameter(torch.zeros(n_loss_params))
-
-    def forward(
-        self, tau: torch.Tensor, loss_params: List[torch.Tensor]
-    ) -> List[torch.Tensor]:
-        """Produce affine-transformed loss network params."""
-        h = F.relu(self.fc1(tau))
-        out = self.fc2(h)
-        gen_mult, gen_offset = torch.chunk(out, 2, dim=-1)
-
-        return [
-            (
-                (1 + self.multiplier_bias[i] * gen_mult[i]) * p
-                + self.offset_bias[i] * gen_offset[i]
-            )
-            for i, p in enumerate(loss_params)
-        ]
-
-
-class MeTALModule(nn.Module):
-    """
-    MeTAL: Task-Adaptive Loss (Baik et al. 2021).
-
-    Per-step loss networks + affine adapters for support and query.
-    Inner loop gradient = standard_support_loss + meta_support_loss + meta_query_loss.
-    Outer loop loss stays standard (no MeTAL involved).
-
-    Call support_step() and query_step() from the inner loop — they handle
-    all internal wiring (task state, normalization, adapter, functional forward).
-    """
-
-    def __init__(
-        self,
-        n_steps: int,
-        n_base_params: int,
-        output_dim: int,
-        hidden_dim: int = 64,
-    ):
-        super().__init__()
-        self.n_steps = n_steps
-
-        # Dimensions: 1 + L + N (Baik et al. 2021, Supplementary §F)
-        # 1 = loss scalar, L = n_base_params (layer-wise means), N = output_dim
-        tau_dim = 1 + n_base_params + output_dim
-        n_loss_params = 4  # W1, b1, W2, b2 per StepLossNetwork
-
-        # Per-step networks (stored as typed lists, registered via add_module)
-        self._support_loss: List[StepLossNetwork] = []
-        self._support_affine: List[StepAffineAdapter] = []
-
-        for i in range(n_steps):
-            sl = StepLossNetwork(tau_dim, hidden_dim)
-            sa = StepAffineAdapter(tau_dim, n_loss_params, hidden_dim)
-
-            self.add_module(f"support_loss_{i}", sl)
-            self.add_module(f"support_affine_{i}", sa)
-
-            self._support_loss.append(sl)
-            self._support_affine.append(sa)
-
-    def support_step(
-        self,
-        step_idx: int,
-        fmodel: nn.Module,
-        support_pred: torch.Tensor,
-        support_y: torch.Tensor,
-        cost_function: Callable,
-    ) -> torch.Tensor:
-        """
-        Compute meta support loss for one inner step.
-
-        τ = [L, θ_means, f(x)] (Baik et al. 2021, Algorithm 2 line 5, Supplementary §F)
-        Adapter: batch-wise mean of input → one set of affine params for the task
-        Loss network: per-sample τ → scalar per sample → batch-wise mean of output
-        """
-        # Task state components
-        loss = cost_function(support_pred, support_y)
-        param_means = torch.stack([p.mean() for p in fmodel.parameters()])
-        pred_mean = support_pred.mean(dim=0)  # batch-wise mean of predictions
-
-        # Adapter: aggregate τ = [loss, param_means, mean(predictions)]  shape: (1+L+N,)
-        tau_aggregate = torch.cat(
-            [loss.unsqueeze(0), param_means, pred_mean], dim=0
-        )
-        # backpropagation trace, from support_loss[step_idx].functional_forward(), updates
-        # support_affine[step_idx] in terms of the loss network output
-        # support_loss[step_idx].functional_forward()
-        adapted_params = self._support_affine[step_idx](
-            _z_normalize(tau_aggregate),
-            list(self._support_loss[step_idx].parameters()),
-        )
-
-        # Loss network: per-sample τ = [loss, param_means, predictions]  shape: (K, 1+L+N)
-        tau_per_sample = torch.cat(
-            [
-                loss.unsqueeze(0).unsqueeze(0).expand(support_pred.size(0), -1),
-                param_means.unsqueeze(0).expand(support_pred.size(0), -1),
-                support_pred,
-            ],
-            dim=-1,
-        )
-
-        # Batch-wise mean of output (Supplementary §F)
-        return (
-            self._support_loss[step_idx]
-            .functional_forward(_z_normalize(tau_per_sample), adapted_params)
-            .mean()
-        )
-
-    def query_step(
-        self,
-        step_idx: int,
-        fmodel: nn.Module,
-        query_pred: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Compute meta query loss for one inner step.
-
-        Per-sample query state → normalize → mean for adapter
-        → adapter → transform loss params → loss net on per-sample → mean
-        """
-        # Per-sample query state: [param_means expanded, predictions, pred_norm²]
-        param_means = torch.stack([p.mean() for p in fmodel.parameters()])
-        pred_norm_sq = (query_pred**2).sum(dim=-1, keepdim=True)
-        query_state = torch.cat(
-            [
-                param_means.unsqueeze(0).expand(query_pred.size(0), -1),
-                query_pred,
-                pred_norm_sq,
-            ],
-            dim=-1,
-        )
-        query_state_norm = _z_normalize(query_state)
-
-        # Adapter on aggregate (mean across samples)
-        adapted_params = self._query_affine[step_idx](
-            query_state_norm.mean(dim=0),
-            list(self._query_loss[step_idx].parameters()),
-        )
-
-        return (
-            self._query_loss[step_idx]
-            .functional_forward(query_state_norm, adapted_params)
-            .mean()
-        )
-
-    def log_loss(
-        self,
-        step_idx: int,
-        fmodel: nn.Module,
-        support_pred: torch.Tensor,
-        support_y: torch.Tensor,
-        cost_function: Callable,
-    ) -> float:
-        """Compute meta support loss for logging (no grad)."""
-        step_idx = min(step_idx, self.n_steps - 1)
-        ms = self.support_step(step_idx, fmodel, support_pred, support_y, cost_function)
-        return ms.item()
 
 
 # ---------------------------------------------------------------------------
@@ -341,27 +130,6 @@ class MAMLTrainer:
         self._current_Lx: float = 0.0
         self._current_Ly: float = 0.0
 
-        # MeTAL: per-step task-adaptive loss (Baik et al. 2021)
-        self.metal: Optional[MeTALModule] = None
-
-        if t.metal.enabled:
-            n_base_params = sum(1 for _ in model.parameters())
-            output_dim = list(model.parameters())[-1].shape[0]
-
-            self.metal = MeTALModule(
-                n_steps=t.inner_steps,
-                n_base_params=n_base_params,
-                output_dim=output_dim,
-                hidden_dim=t.metal.hidden_dim,
-            ).to(self.device)
-
-            n_metal_params = sum(p.numel() for p in self.metal.parameters())
-            print(
-                f"  MeTAL enabled: {t.inner_steps} steps × (support + query) networks"
-            )
-            print(f"  Base model params: {n_base_params}, output_dim: {output_dim}")
-            print(f"  MeTAL total params: {n_metal_params:,}")
-
         # Bind cost function — no conditionals in the hot loop
         self.cost_function = (
             self._spectral_cost
@@ -370,11 +138,7 @@ class MAMLTrainer:
         )
 
         # Bind inner step function — no conditionals in the hot loop
-        self._inner_step = (
-            self._metal_inner_step
-            if self.metal is not None
-            else self._standard_inner_step
-        )
+        self._inner_step = self._standard_inner_step
 
         # Inner-loop gradient clipping callback (Qin & Beatson 2022)
         # Norm-based: differentiable, safe for second-order MAML
@@ -410,10 +174,8 @@ class MAMLTrainer:
             n_lslr_params = sum(p.numel() for p in self.lslr.parameters())
             print(f"  LSLR enabled: {n_lslr_params} learnable LR params")
 
-        # Outer loop optimizer (meta-update) — includes MeTAL + LSLR params
+        # Outer loop optimizer (meta-update) — includes LSLR params
         opt_params = list(self.model.parameters())
-        if self.metal is not None:
-            opt_params += list(self.metal.parameters())
         if self.lslr is not None:
             opt_params += list(self.lslr.parameters())
         self.outer_opt = torch.optim.Adam(opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas))
@@ -572,42 +334,6 @@ class MAMLTrainer:
         support_loss = self.cost_function(support_pred, support_y, support_coords)
         diffopt.step(support_loss, override=lr_override, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
 
-    def _metal_inner_step(
-        self,
-        fmodel: nn.Module,
-        diffopt: object,
-        support_x: torch.Tensor,
-        support_y: torch.Tensor,
-        support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
-        query_x: torch.Tensor,
-        step_idx: int,
-        lr_override: Optional[Dict] = None,
-    ) -> None:
-        """MeTAL inner step: support_loss + meta_support_loss."""
-        assert self.metal is not None
-
-        support_pred = fmodel(support_x)
-        support_loss = self.cost_function(support_pred, support_y, support_coords)
-        meta_support = self.metal.support_step(
-            step_idx, fmodel, support_pred, support_y, self._pointwise_loss
-        )
-
-        # θ_{i,j+1} = θ_{i,j} - α ∇_{θ_{i,j}} (support_loss + L_{φ'_{i,j}}(τ_{i,j}))
-        # Only fmodel (θ) is updated. MeTAL weights (φ, ψ) are constants here —
-        # they only get gradients from the outer loop via query_loss.backward().
-        # The gradient is taken on a composite landscape: support_loss (standard MSE)
-        # + meta_support (learned surface from _support_loss[step_idx]). Each step
-        # has a different loss network with different weights, so the learned landscape
-        # changes at every step — the sequence of landscapes is the adaptation strategy.
-        #
-        # Distinction: "learned landscape" vs "provided landscape via reaction".
-        # - Learned landscape: the learned distribution of all possible ways to react —
-        #   encoded in the MeTAL network weights (φ, ψ) from meta-training.
-        # - Provided landscape via reaction: at inference, applying what was learned to
-        #   the current task state (τ) and outputting a concrete loss landscape, which
-        #   dictates the gradient update of each parameter of the step_idx model.
-        diffopt.step(support_loss + meta_support, override=lr_override, grad_callback=self._inner_grad_callback)  # type: ignore[attr-defined]
-
     # ------------------------------------------------------------------
     # Core MAML
     # ------------------------------------------------------------------
@@ -668,13 +394,7 @@ class MAMLTrainer:
             with torch.no_grad():
                 pre_pred = fmodel(support_x)
                 pre_loss = self.cost_function(pre_pred, support_y, support_coords)
-                pre_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        0, fmodel, pre_pred, support_y, self._pointwise_loss
-                    )
-                    pre_metal = f", metal_loss={ml:.6f}"
-                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
+                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}")
 
             for j in range(self.config.inner_steps):
                 override = self.lslr.get_override(j) if self.lslr else None
@@ -687,15 +407,8 @@ class MAMLTrainer:
             with torch.no_grad():
                 post_pred = fmodel(support_x)
                 post_loss = self.cost_function(post_pred, support_y, support_coords)
-                post_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        self.config.inner_steps - 1,
-                        fmodel, post_pred, support_y, self._pointwise_loss,
-                    )
-                    post_metal = f", metal_loss={ml:.6f}"
                 print(
-                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
+                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}"
                     f" ({self.config.inner_steps} steps)"
                 )
 
@@ -751,13 +464,7 @@ class MAMLTrainer:
             with torch.no_grad():
                 pre_pred = fmodel(support_x)
                 pre_loss = self.cost_function(pre_pred, support_y, support_coords)
-                pre_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        0, fmodel, pre_pred, support_y, self._pointwise_loss
-                    )
-                    pre_metal = f", metal_loss={ml:.6f}"
-                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}{pre_metal}")
+                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}")
 
             step_losses: List[torch.Tensor] = []
             weights = self._msl_weights()
@@ -777,15 +484,8 @@ class MAMLTrainer:
             with torch.no_grad():
                 post_pred = fmodel(support_x)
                 post_loss = self.cost_function(post_pred, support_y, support_coords)
-                post_metal = ""
-                if self.metal is not None:
-                    ml = self.metal.log_loss(
-                        self.config.inner_steps - 1,
-                        fmodel, post_pred, support_y, self._pointwise_loss,
-                    )
-                    post_metal = f", metal_loss={ml:.6f}"
                 print(
-                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}{post_metal}"
+                    f"\t\tpost-adapt: support_loss={post_loss.item():.6f}"
                     f" ({self.config.inner_steps} steps)"
                 )
 
@@ -827,10 +527,9 @@ class MAMLTrainer:
         avg_loss.backward()
         # Gradient clipping (Qin & Beatson 2022: max_norm=100.0)
         if self.config.max_grad_norm > 0:
-            clip_params = list(self.model.parameters())
-            if self.metal is not None:
-                clip_params += list(self.metal.parameters())
-            torch.nn.utils.clip_grad_norm_(clip_params, self.config.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(
+                list(self.model.parameters()), self.config.max_grad_norm
+            )
         self.outer_opt.step()
 
         return avg_loss.item()
@@ -1229,9 +928,6 @@ class MAMLTrainer:
             path,
         )
 
-        # MeTAL: save entire module as single file alongside main checkpoint
-        if self.metal is not None:
-            torch.save(self.metal.state_dict(), path.parent / "metal_state.pt")
 
         # LSLR: save learned LR parameters
         if self.lslr is not None:
@@ -1273,16 +969,6 @@ class MAMLTrainer:
             "history", {"train_loss": [], "val_loss": [], "iteration": []}
         )
         self._resumed = True
-
-        # MeTAL: load module state if it exists
-        metal_state_path = path.parent / "metal_state.pt"
-        if self.metal is not None and metal_state_path.exists():
-            self.metal.load_state_dict(
-                torch.load(
-                    metal_state_path, map_location=self.device, weights_only=True
-                )
-            )
-            print(f"  Loaded MeTAL module from {metal_state_path}")
 
         # LSLR: load learned LR parameters if they exist
         lslr_state_path = path.parent / "lslr_state.pt"
