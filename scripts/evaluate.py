@@ -111,6 +111,8 @@ def fine_tune(
     proximal_theta: Optional[torch.Tensor] = None,
     inner_optimizer: str = "sgd",
     anil: bool = False,
+    anil_mode: str = "head",
+    slope_recovery_inner: float = 0.0,
 ) -> FineTuneResult:
     """
     Fine-tune model and return train/holdout loss at each step.
@@ -135,8 +137,24 @@ def fine_tune(
     # Inner optimizer: SGD (with optional LSLR) or L-BFGS
     use_lbfgs = (inner_optimizer == "lbfgs")
 
-    # ANIL: only adapt head (last layer) during fine-tuning
-    adapt_params = list(model.parameters())[-2:] if anil else list(model.parameters())
+    # ANIL: use name-based selection via the network's own helpers so fine-tune
+    # matches the training-time `_inner_params` dispatch. Selector is chosen by
+    # (anil, anil_mode) identically to iMAMLTrainer.__init__.
+    if not anil:
+        adapt_params = list(model.parameters())
+    else:
+        head = list(model.head_parameters())  # type: ignore[attr-defined]
+        if anil_mode == "head":
+            adapt_params = head
+        elif anil_mode == "head+scales_all":
+            adapt_params = head + list(model.adaptive_scale_parameters("all"))  # type: ignore[attr-defined]
+        elif anil_mode == "head+scales_last":
+            adapt_params = head + list(model.adaptive_scale_parameters("last"))  # type: ignore[attr-defined]
+        else:
+            raise ValueError(
+                f"Unknown anil_mode={anil_mode!r}. "
+                f"Use 'head', 'head+scales_all', or 'head+scales_last'."
+            )
 
     if use_lbfgs:
         param_names = None
@@ -170,6 +188,14 @@ def fine_tune(
         if proximal_lam > 0 and proximal_theta is not None:
             phi = torch.cat([p.view(-1) for p in model.parameters()])
             return 0.5 * proximal_lam * (phi - proximal_theta).pow(2).sum()
+        return torch.tensor(0.0, device=features.device)
+
+    # N-LAAF slope recovery applied to inner loss during fine-tuning.
+    # Mirrors the training-time inner hook in iMAMLTrainer so θ* is evaluated
+    # under the same inner-loss landscape it was shaped under.
+    def _slope_recovery_loss() -> torch.Tensor:
+        if slope_recovery_inner > 0:
+            return slope_recovery_inner * model.slope_recovery()  # type: ignore[attr-defined]
         return torch.tensor(0.0, device=features.device)
 
     # Resolve pointwise loss once — no string dispatch per call
@@ -241,7 +267,7 @@ def fine_tune(
 
     def _step_sgd(step_idx: int, grad_loss: torch.Tensor) -> None:
         """SGD step: backward, clip, LSLR override, optimize."""
-        total_loss = grad_loss + _proximal_loss()
+        total_loss = grad_loss + _proximal_loss() + _slope_recovery_loss()
         opt.zero_grad()
         total_loss.backward()
         if max_grad_norm > 0:
@@ -263,7 +289,7 @@ def fine_tune(
         def lbfgs_closure():
             opt.zero_grad()
             p = model(x)
-            gl = cost_fn(p, y) + _proximal_loss()
+            gl = cost_fn(p, y) + _proximal_loss() + _slope_recovery_loss()
             gl.backward()
             return gl
 
@@ -321,6 +347,8 @@ def evaluate_task(
     proximal_theta: Optional[torch.Tensor] = None,
     inner_optimizer: str = "sgd",
     anil: bool = False,
+    anil_mode: str = "head",
+    slope_recovery_inner: float = 0.0,
 ) -> TaskResult:
     """
     Evaluate one task across all (K, noise) combinations.
@@ -458,6 +486,8 @@ def evaluate_task(
                     proximal_theta=proximal_theta,
                     inner_optimizer=inner_optimizer,
                     anil=anil,
+                    anil_mode=anil_mode,
+                    slope_recovery_inner=slope_recovery_inner,
                 )
 
                 # Fine-tune from θ₀ (baseline) — same loss, no LSLR
@@ -648,6 +678,9 @@ def evaluate_task(
             proximal_lam=proximal_lam,
             proximal_theta=proximal_theta,
             inner_optimizer=inner_optimizer,
+            anil=anil,
+            anil_mode=anil_mode,
+            slope_recovery_inner=slope_recovery_inner,
         )
 
         step_errors = best.maml.coefficient_recovery.error_pct  # type: ignore[union-attr]
@@ -942,6 +975,10 @@ def main():
             proximal_theta=proximal_theta,
             inner_optimizer=eval_inner_optimizer,
             anil=cfg.training.imaml.anil if cfg.training.imaml.enabled else False,
+            anil_mode=cfg.training.imaml.anil_mode if cfg.training.imaml.enabled else "head",
+            slope_recovery_inner=(
+                cfg.training.imaml.slope_recovery_inner if cfg.training.imaml.enabled else 0.0
+            ),
         )
 
         # Serialize to NPZ
