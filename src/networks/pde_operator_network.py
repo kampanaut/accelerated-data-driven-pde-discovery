@@ -32,6 +32,8 @@ class HiddenLayerSpec:
     hidden: int
     activation: str | None = None
     bias: bool = True
+    adaptive_scale: bool = False
+    adaptive_scale_n: float = 1.0
 
 
 @dataclass
@@ -59,6 +61,34 @@ ACTIVATION_MAP: dict[str, type[nn.Module]] = {
     "mish": nn.Mish,
     "sin": Sin,
 }
+
+
+class ScaledActivation(nn.Module):
+    """N-LAAF wrapper from Jagtap, Kawaguchi, Karniadakis (Proc. R. Soc. A, 2020).
+
+    Applies σ(n · a · preact) where:
+      - preact is the affine preactivation (W·z + b) of a hidden layer
+      - a is a per-neuron trainable scale of shape [num_features]
+      - n is a fixed (non-trainable) scaling factor that controls the
+        reachable slope range per unit movement of a
+
+    Paper init rule: n · a = 1 at iteration 0, so the effective slope is
+    identical to a vanilla activation. With fixed n, that means
+    a_init = 1/n.
+    """
+
+    n: torch.Tensor  # registered buffer
+
+    def __init__(self, base: nn.Module, num_features: int, n: float = 1.0):
+        super().__init__()
+        if n <= 0:
+            raise ValueError(f"ScaledActivation requires n > 0, got {n}")
+        self.base = base
+        self.register_buffer("n", torch.tensor(float(n)))
+        self.a = nn.Parameter(torch.full((num_features,), 1.0 / float(n)))
+
+    def forward(self, preact: torch.Tensor) -> torch.Tensor:
+        return self.base(self.n * self.a * preact)
 
 
 # ── Network config ──────────────────────────────────────────────────────────
@@ -163,6 +193,8 @@ class NetworkConfig:
                 hidden=layer["hidden"],
                 activation=act,
                 bias=layer.get("bias", True),
+                adaptive_scale=layer.get("adaptive_scale", False),
+                adaptive_scale_n=layer.get("adaptive_scale_n", 1.0),
             ))
 
         return cls(input_spec, hidden_specs, output_spec, conv_filters, conv_kernel_size)
@@ -179,10 +211,18 @@ class NetworkConfig:
                 f"Unknown activation '{activation}'. Use one of: {list(ACTIVATION_MAP.keys())}"
             )
 
+        adaptive_scales = d.get("adaptive_scales", False)
+        adaptive_scale_n = d.get("adaptive_scale_n", 1.0)
+
         input_spec = InputLayerSpec(input=input_dim)
         output_spec = OutputLayerSpec(output=output_dim)
         hidden_specs = [
-            HiddenLayerSpec(hidden=h, activation=activation)
+            HiddenLayerSpec(
+                hidden=h,
+                activation=activation,
+                adaptive_scale=adaptive_scales,
+                adaptive_scale_n=adaptive_scale_n,
+            )
             for h in hidden_dims
         ]
 
@@ -197,6 +237,9 @@ class NetworkConfig:
                 entry["activation"] = h.activation
             if not h.bias:
                 entry["bias"] = False
+            if h.adaptive_scale:
+                entry["adaptive_scale"] = True
+                entry["adaptive_scale_n"] = h.adaptive_scale_n
             layers.append(entry)
 
         out_entry: dict[str, Any] = {"output": self.output_spec.output}
@@ -281,7 +324,11 @@ class PDEOperatorNetwork(nn.Module):
         for spec in config.hidden_specs:
             layers.append(nn.Linear(prev_dim, spec.hidden, bias=spec.bias))
             if spec.activation is not None:
-                layers.append(ACTIVATION_MAP[spec.activation]())
+                base_act = ACTIVATION_MAP[spec.activation]()
+                if spec.adaptive_scale:
+                    layers.append(ScaledActivation(base_act, spec.hidden, spec.adaptive_scale_n))
+                else:
+                    layers.append(base_act)
             prev_dim = spec.hidden
 
         # Input bypass: head receives body output + raw input
@@ -302,6 +349,50 @@ class PDEOperatorNetwork(nn.Module):
             self.network = None  # type: ignore[assignment]
         else:
             self.network = nn.Sequential(*layers)
+
+        # Cache ScaledActivation references. These are already registered as
+        # children via self.body / self.network, so storing them in a plain
+        # list (not a ModuleList) avoids double-registration.
+        self._scale_modules: list[ScaledActivation] = [
+            m for m in self.modules() if isinstance(m, ScaledActivation)
+        ]
+
+    def head_parameters(self) -> list[nn.Parameter]:
+        """Parameters of the output linear layer. Used for ANIL inner-loop selection."""
+        if self._input_bypass:
+            return list(self.head.parameters())
+        assert self.network is not None
+        return list(self.network[-1].parameters())
+
+    def slope_recovery(self) -> torch.Tensor:
+        """N-LAAF slope recovery term S(a) per Jagtap et al. 2020.
+
+        Paper:  S(a) = 1 / [(1/L) · Σ_k exp(mean_i(a_i^k))]
+        Here L counts ScaledActivation modules actually present in the network
+        (may be fewer than D-1 if some hidden layers have adaptive_scale=False).
+
+        Returns a scalar tensor on the network's device. Returns 0 if the
+        network has no ScaledActivation modules.
+        """
+        if not self._scale_modules:
+            return torch.zeros((), device=next(self.parameters()).device)
+        layer_exps = torch.stack([torch.exp(m.a.mean()) for m in self._scale_modules])
+        return layer_exps.numel() / layer_exps.sum()
+
+    def adaptive_scale_parameters(self, mode: str = "all") -> list[nn.Parameter]:
+        """Per-neuron N-LAAF scale parameters.
+
+        Args:
+            mode: "all"  → every ScaledActivation's `a` in the network.
+                  "last" → only the last ScaledActivation's `a` (if any).
+        """
+        if mode not in ("all", "last"):
+            raise ValueError(f"mode must be 'all' or 'last', got {mode!r}")
+        if not self._scale_modules:
+            return []
+        if mode == "all":
+            return [m.a for m in self._scale_modules]
+        return [self._scale_modules[-1].a]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

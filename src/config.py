@@ -61,7 +61,10 @@ class IMAMLSection:
     outer_optimizer: str = "adam"  # "adam", "lbfgs", or "adam+lbfgs"
     outer_lbfgs_after: int = 0  # for "adam+lbfgs": switch to L-BFGS after this many iters
     anil: bool = False  # True = only adapt last layer during inner loop (ANIL)
+    anil_mode: str = "head"  # "head" | "head+scales_all" | "head+scales_last"
     proximal_every_step: bool = False  # True = paper Eq.3, False = reference code (prox at end only)
+    slope_recovery_inner: float = 0.0  # weight on S(φ_a) in inner task loss
+    slope_recovery_outer: float = 0.0  # weight on S(θ_a) added to outer gradient (bypasses CG)
 
 
 @dataclass
@@ -97,6 +100,8 @@ class TrainingSection:
     output_dim: Optional[int] = None
     layers: Optional[list] = None
     input_bypass: bool = False
+    adaptive_scales: bool = False
+    adaptive_scale_n: float = 1.0
     conv_filters: int = 0
     conv_kernel_size: int = 3
 
@@ -238,7 +243,7 @@ class ExperimentConfig:
                 continue
             if name == "imaml":
                 if t.imaml.enabled:
-                    train_dict["imaml"] = {
+                    imaml_dict = {
                         "enabled": True,
                         "lam": t.imaml.lam,
                         "lam_lr": t.imaml.lam_lr,
@@ -249,8 +254,14 @@ class ExperimentConfig:
                         "outer_optimizer": t.imaml.outer_optimizer,
                         "outer_lbfgs_after": t.imaml.outer_lbfgs_after,
                         "anil": t.imaml.anil,
+                        "anil_mode": t.imaml.anil_mode,
                         "proximal_every_step": t.imaml.proximal_every_step,
                     }
+                    if t.imaml.slope_recovery_inner > 0:
+                        imaml_dict["slope_recovery_inner"] = t.imaml.slope_recovery_inner
+                    if t.imaml.slope_recovery_outer > 0:
+                        imaml_dict["slope_recovery_outer"] = t.imaml.slope_recovery_outer
+                    train_dict["imaml"] = imaml_dict
                 continue
 
             # layers XOR old-format: only emit the format that was provided
@@ -268,6 +279,16 @@ class ExperimentConfig:
             # Conv only if non-default
             if name in _conv:
                 if t.conv_filters > 0:
+                    train_dict[name] = val
+                continue
+
+            # Adaptive scales only when enabled
+            if name == "adaptive_scales":
+                if t.adaptive_scales:
+                    train_dict[name] = True
+                continue
+            if name == "adaptive_scale_n":
+                if t.adaptive_scales:
                     train_dict[name] = val
                 continue
 
@@ -322,7 +343,20 @@ class ExperimentConfig:
         t = self.training
         d: dict[str, Any] = {}
         if t.layers is not None:
-            d["layers"] = t.layers
+            # Training-level adaptive_scales is a shortcut that also applies
+            # to layers format: inject the flag into every hidden-layer entry
+            # that doesn't already set one explicitly.
+            if t.adaptive_scales:
+                layers_list = [dict(entry) for entry in t.layers]
+                for i, entry in enumerate(layers_list):
+                    if i == 0 or i == len(layers_list) - 1:
+                        continue  # skip input / output entries
+                    if "hidden" in entry and "adaptive_scale" not in entry:
+                        entry["adaptive_scale"] = True
+                        entry["adaptive_scale_n"] = t.adaptive_scale_n
+                d["layers"] = layers_list
+            else:
+                d["layers"] = t.layers
         else:
             if t.hidden_dims is not None:
                 d["hidden_dims"] = t.hidden_dims
@@ -332,6 +366,9 @@ class ExperimentConfig:
                 d["input_dim"] = t.input_dim
             if t.output_dim is not None:
                 d["output_dim"] = t.output_dim
+            if t.adaptive_scales:
+                d["adaptive_scales"] = True
+                d["adaptive_scale_n"] = t.adaptive_scale_n
         if t.conv_filters > 0:
             d["conv_filters"] = t.conv_filters
             d["conv_kernel_size"] = t.conv_kernel_size

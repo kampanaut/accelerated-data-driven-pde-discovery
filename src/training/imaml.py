@@ -137,6 +137,8 @@ class iMAMLTrainer:
         self.lam_min = im.lam_min
         self.cg_steps = im.cg_steps
         self.cg_damping = im.cg_damping
+        self.slope_recovery_inner = im.slope_recovery_inner
+        self.slope_recovery_outer = im.slope_recovery_outer
 
         # Bind inner solver — SGD (prox every step or at end) or L-BFGS
         if im.inner_optimizer == "lbfgs":
@@ -145,8 +147,24 @@ class iMAMLTrainer:
             self._inner_solve = self._inner_solve_sgd
         else:
             self._inner_solve = self._inner_solve_sgd_prox_end
+
+        # Bind ANIL inner-param selector — one callable per (anil, anil_mode) combo.
+        if not im.anil:
+            self._inner_params = self._inner_params_all
+        elif im.anil_mode == "head":
+            self._inner_params = self._inner_params_head
+        elif im.anil_mode == "head+scales_all":
+            self._inner_params = self._inner_params_head_scales_all
+        elif im.anil_mode == "head+scales_last":
+            self._inner_params = self._inner_params_head_scales_last
+        else:
+            raise ValueError(
+                f"Unknown anil_mode={im.anil_mode!r}. "
+                f"Use 'head', 'head+scales_all', or 'head+scales_last'."
+            )
+
         prox_mode = "every_step" if im.proximal_every_step else "end_only"
-        anil_str = ", ANIL (head-only adaptation)" if im.anil else ""
+        anil_str = f", ANIL ({im.anil_mode})" if im.anil else ""
         print(f"  iMAML: lam={im.lam}, cg_steps={im.cg_steps}, "
               f"cg_damping={im.cg_damping}, inner_optimizer={im.inner_optimizer}, "
               f"proximal={prox_mode}{anil_str}")
@@ -365,15 +383,26 @@ class iMAMLTrainer:
     # Parameter vector helpers
     # ------------------------------------------------------------------
 
-    def _inner_params(self, model: nn.Module) -> List[nn.Parameter]:
-        """Return parameters for inner loop optimization.
+    # ANIL inner-param selectors (one is bound to self._inner_params in __init__).
+    # Full ANIL off → everything. ANIL on → head, optionally plus adaptive scales.
 
-        ANIL: only last layer (weight + bias). Otherwise: all params.
-        """
-        params = list(model.parameters())
-        if self.config.imaml.anil:
-            return params[-2:]  # output layer weight + bias
-        return params
+    def _inner_params_all(self, model: nn.Module) -> List[nn.Parameter]:
+        return list(model.parameters())
+
+    def _inner_params_head(self, model: nn.Module) -> List[nn.Parameter]:
+        return list(model.head_parameters())  # type: ignore[attr-defined]
+
+    def _inner_params_head_scales_all(self, model: nn.Module) -> List[nn.Parameter]:
+        return (
+            list(model.head_parameters())  # type: ignore[attr-defined]
+            + list(model.adaptive_scale_parameters("all"))  # type: ignore[attr-defined]
+        )
+
+    def _inner_params_head_scales_last(self, model: nn.Module) -> List[nn.Parameter]:
+        return (
+            list(model.head_parameters())  # type: ignore[attr-defined]
+            + list(model.adaptive_scale_parameters("last"))  # type: ignore[attr-defined]
+        )
 
     def _get_flat_params(self, model: nn.Module) -> torch.Tensor:
         """Return flattened parameter vector (detached clone)."""
@@ -411,6 +440,8 @@ class iMAMLTrainer:
             opt.zero_grad()
             pred = fast_model(support_x)
             task_loss = self.cost_function(pred, support_y, support_coords)
+            if self.slope_recovery_inner > 0:
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.slope_recovery()  # type: ignore[attr-defined]
             prox = self._regularization_loss(fast_model, theta, self.lam)
             total = task_loss + prox
             total.backward()
@@ -432,6 +463,8 @@ class iMAMLTrainer:
             opt.zero_grad()
             pred = fast_model(support_x)
             task_loss = self.cost_function(pred, support_y, support_coords)
+            if self.slope_recovery_inner > 0:
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.slope_recovery()  # type: ignore[attr-defined]
             task_loss.backward()
             if self.config.max_grad_norm > 0:
                 torch.nn.utils.clip_grad_norm_(fast_model.parameters(), self.config.max_grad_norm)
@@ -464,6 +497,8 @@ class iMAMLTrainer:
             opt.zero_grad()
             pred = fast_model(support_x)
             task_loss = self.cost_function(pred, support_y, support_coords)
+            if self.slope_recovery_inner > 0:
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.slope_recovery()  # type: ignore[attr-defined]
             prox = self._regularization_loss(fast_model, theta, self.lam)
             total = task_loss + prox
             total.backward()
@@ -486,12 +521,15 @@ class iMAMLTrainer:
         """Compute H·v where H = ∇²φ L̂(φ) at current model params.
 
         Uses double autograd.grad trick (Rajeswaran et al. 2019).
-        The Hessian is of the task loss only — the proximal term's Hessian
-        is λI, already accounted for in the matrix evaluator.
+        The Hessian is of the task loss (plus inner slope recovery if enabled)
+        — the proximal term's Hessian is λI, already accounted for in the
+        matrix evaluator.
         """
         pred = model(support_x)
-        task_loss = self.cost_function(pred, support_y, support_coords)
-        grad_ft = torch.autograd.grad(task_loss, list(model.parameters()), create_graph=True)
+        inner_obj = self.cost_function(pred, support_y, support_coords)
+        if self.slope_recovery_inner > 0:
+            inner_obj = inner_obj + self.slope_recovery_inner * model.slope_recovery()  # type: ignore[attr-defined]
+        grad_ft = torch.autograd.grad(inner_obj, list(model.parameters()), create_graph=True)
         flat_grad = torch.cat([g.contiguous().view(-1) for g in grad_ft])
         h = torch.sum(flat_grad * vector)
         hvp = torch.autograd.grad(h, list(model.parameters()))
@@ -643,6 +681,22 @@ class iMAMLTrainer:
         avg_loss = total_loss
         if not torch.tensor(avg_loss).isfinite():
             return float("nan")
+
+        # Outer slope recovery on θ_a: direct gradient injection, bypasses CG.
+        # S is a function of θ alone (not of φ*), so its correct treatment is
+        # to add ∇_θ S(θ_a) to the meta-gradient vector directly.
+        if self.slope_recovery_outer > 0:
+            s_theta = self.slope_recovery_outer * self.model.slope_recovery()  # type: ignore[attr-defined]
+            if s_theta.requires_grad:
+                s_grads = torch.autograd.grad(
+                    s_theta, list(self.model.parameters()), allow_unused=True
+                )
+                offset = 0
+                for g, p in zip(s_grads, self.model.parameters()):
+                    numel = p.numel()
+                    if g is not None:
+                        meta_grad[offset:offset + numel] += g.contiguous().view(-1)
+                    offset += numel
 
         # Set .grad on model params from flat meta_grad vector
         offset = 0
