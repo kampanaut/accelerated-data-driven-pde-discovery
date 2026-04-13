@@ -69,7 +69,7 @@ training:
     anil_mode: head+scales_all
     proximal_every_step: false
     slope_recovery_inner: 0.01
-    slope_recovery_outer: 0.01
+    slope_recovery_outer: 0.0
 evaluation:
   k_values:
   - 1000
