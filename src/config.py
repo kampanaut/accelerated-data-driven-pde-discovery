@@ -49,6 +49,14 @@ class SpectralLossSection:
     mode_size: int = 32
 
 
+# Backward-compat stub for unpickling old checkpoints that contain a
+# MetalSection in their training-section pickle. MeTAL was removed in
+# commit 2f494c6; this stub lets torch.load reconstruct old files.
+class MetalSection:
+    def __init__(self, *args, **kwargs):
+        self.enabled = False
+
+
 @dataclass
 class IMAMLSection:
     enabled: bool = False
