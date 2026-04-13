@@ -2,7 +2,7 @@ experiment:
   name: nl_heat-52-100x150x450-anil-2epoch
   pde_type: nl_heat
   seed: 42
-  device: cuda
+  device: cpu
 output:
   base_dir: data/models/the-finals-sobol/nl_heat
 data:

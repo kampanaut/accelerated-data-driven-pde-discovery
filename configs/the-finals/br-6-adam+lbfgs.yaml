@@ -19,6 +19,7 @@ training:
   meta_batch_size: 8
   k_shot: 1000
   query_size: 10000
+  epochs: 1
   max_iterations: 2100
   patience: 0
   checkpoint_interval: 100
