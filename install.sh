@@ -54,6 +54,8 @@ export MPI_PATH=/usr/lib/x86_64-linux-gnu/openmpi
 export FFTW_PATH=/usr/lib/x86_64-linux-gnu
 export C_INCLUDE_PATH=/usr/include/x86_64-linux-gnu/openmpi:${C_INCLUDE_PATH:-}
 
+export UV_CACHE_DIR=/root/.cache/uv
+
 # Python packages
 uv sync
 
