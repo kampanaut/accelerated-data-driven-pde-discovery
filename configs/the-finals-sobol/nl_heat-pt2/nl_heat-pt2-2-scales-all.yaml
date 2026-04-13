@@ -85,10 +85,8 @@ evaluation:
   log_weights: false
 visualization:
   dpi: 300
-  only: scatter[0,1,2,3,4,16,16],jacobian[0,16,16],generalization,best-combo
+  only: scatter[0,1,2,3,4,16,16]
   compare_experiments:
-  - nl_heat-pt2-1-baseline
   - nl_heat-pt2-2-scales-all
-  - nl_heat-pt2-3-scales-last
   exclude_suffixes_append: []
   exclude_max_iteration: 20
