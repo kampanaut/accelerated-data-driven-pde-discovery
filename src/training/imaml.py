@@ -578,8 +578,13 @@ class iMAMLTrainer:
         if self.config.inner_steps == 0:
             raise ValueError("You cannot run training with inner_steps == 0")
 
-        support_x, support_y = support
-        query_x, query_y = query
+        support_x_list, support_y = support
+        query_x_list, query_y = query
+        # M2a transition: extract mixer-0 tensor from the per-mixer list.
+        # Works for n_outputs=1 PDEs (NLHeat, Heat, NS-vorticity).
+        # Multi-mixer handling arrives with the composite network in M3.
+        support_x = support_x_list[0]
+        query_x = query_x_list[0]
 
         self._current_Lx = task.Lx
         self._current_Ly = task.Ly

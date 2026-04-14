@@ -157,9 +157,8 @@ class PDETask(ABC):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Evaluate features and targets for all collocation points across snapshots.
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Produce structural features and targets at collocation points.
 
         Args:
             snap_idx_list: Unique snapshot indices, shape (n_unique,)
@@ -167,7 +166,17 @@ class PDETask(ABC):
             E_y: Masked y phase matrix, shape (n_unique, n_points, ny)
 
         Returns:
-            (features, targets): float32 tensors, shapes (n_points, n_features) and (n_points, n_targets)
+            A tuple (features_list, targets):
+              - features_list: list of float32 tensors, one per mixer
+                (length equals n_outputs). Each tensor has shape
+                (n_unique, n_points, n_features_for_that_mixer).
+              - targets: float32 tensor of shape
+                (n_unique, n_points, n_outputs) stacking per-mixer targets.
+
+        The list-based feature output means each PDE owns its structural
+        feature layout per mixer. There is no separate raw → structural
+        transform step; subclasses compute structural features directly
+        via their Fourier plumbing.
         """
         pass
 
@@ -215,9 +224,124 @@ class PDETask(ABC):
     def rhs_feature_mask(self) -> list[bool]:
         """Boolean mask over input features: True = feature appears in PDE RHS.
 
-        Length must equal n_features. Features where mask is False are
-        structurally irrelevant to the PDE and can be zeroed to prevent
-        the MLP from using them as absorption routes.
+        Length must equal n_features. Retained for documentation — the
+        runtime masking path was deleted along with raw/zeroed mode.
+        """
+        pass
+
+    # ── Mixer method API ─────────────────────────────────────────────
+    # Abstract methods for the structural feature library + amortised
+    # coefficient recovery framework. See docs/mixer_method.md.
+
+    @property
+    @abstractmethod
+    def n_outputs(self) -> int:
+        """Number of output fields the mixer produces.
+
+        Returns 1 for scalar PDEs (Heat, NLHeat, NS-vorticity) and 2 for
+        paired PDEs (BR, FHN, λ-ω). Determines whether the composite
+        operator network uses the one-head or two-head iMAML branch.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def structural_feature_names(self) -> list[list[str]]:
+        """Human-readable names for the structural features, per mixer.
+
+        Outer list length equals n_outputs. Each inner list names the
+        feature columns that mixer i consumes as input. For NLHeat:
+            [['1-u', 'u_xx+u_yy']]
+        For BR:
+            [['u', 'u²v', 'u_xx+u_yy'],
+             ['u', 'u²v', 'v_xx+v_yy']]
+        """
+        pass
+
+    @abstractmethod
+    def extract_coefficients(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        """Extract recovered coefficient values from the adapted mixer.
+
+        Runs Jacobian probes, regression slopes, and/or residual
+        subtractions on the adapted composite network to recover the
+        task-varying coefficients associated with this mixer.
+
+        Args:
+            mixer_idx: which output the mixer corresponds to (0 for u,
+                       1 for v in paired PDEs).
+            fast_model: the adapted composite operator network, exposes
+                        forward_one(i, feats) for per-mixer forward.
+            features: structural feature tensor for this mixer, shape
+                      (N, len(structural_feature_names[mixer_idx])).
+
+        Returns:
+            {coeff_name: {'mean': scalar_tensor, 'std': scalar_tensor}, ...}
+            One entry per task-varying coefficient recovered by this
+            mixer. The 'std' is per-point dispersion (how linear the
+            mixer is on the relevant feature, or regression residual
+            std, depending on recovery type).
+        """
+        pass
+
+    @abstractmethod
+    def auxiliary_losses(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Return auxiliary loss terms for the given mixer's equation.
+
+        Used during training and evaluation inner loops (training-eval
+        consistency). Each value is a normalized-MSE loss between a
+        mixer-derived quantity and the task's ground-truth coefficient.
+        Thin wrapper over extract_coefficients — uses the same JVP /
+        regression / residual machinery, then wraps the extracted
+        quantities against known truths from task metadata.
+
+        Args:
+            mixer_idx: which mixer (0 or 1).
+            fast_model: the adapted composite operator network.
+            features: structural feature tensor for this mixer.
+            targets: ground-truth target tensor for this mixer's output.
+
+        Returns:
+            {coeff_name: tensor_loss, ...}. Empty dict if the PDE has no
+            aux losses for this mixer (e.g., NLHeat clean run).
+        """
+        pass
+
+    @abstractmethod
+    def inject_noise_at_source(
+        self,
+        hat_tensors: dict[str, torch.Tensor],
+        noise_level: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Inject source-level Gaussian noise into Fourier coefficients.
+
+        Applied inside evaluate_collocations BEFORE derivative
+        computation, so the derivatives inherit correlated noise from
+        the source state. Matches SINDy's noise protocol and deployment
+        reality.
+
+        Args:
+            hat_tensors: dict of hat tensors sliced to the current
+                         batch, e.g. {'u_hat': shape (n_unique, ny, nx),
+                         'v_hat': ...}.
+            noise_level: proportional noise scale in [0, 1]. 0.0 is a
+                         no-op and returns the inputs unchanged.
+            generator: optional seeded torch.Generator for
+                       reproducibility.
+
+        Returns:
+            Dict with the same keys and noisy versions of the tensors.
         """
         pass
 
@@ -228,8 +352,8 @@ class PDETask(ABC):
         k_seed: Optional[int] = None,
         snapshot_seed: Optional[int] = None,
     ) -> Tuple[
-        Tuple[torch.Tensor, torch.Tensor],
-        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[list[torch.Tensor], torch.Tensor],
+        Tuple[list[torch.Tensor], torch.Tensor],
         Tuple[torch.Tensor, torch.Tensor],
         Tuple[torch.Tensor, torch.Tensor],
     ]:
@@ -239,10 +363,15 @@ class PDETask(ABC):
         Everything stays on GPU — no numpy, no host transfers.
 
         Returns:
-            (support_feats, support_tgts),
-            (query_feats, query_tgts),
+            (support_feats_list, support_tgts),
+            (query_feats_list, query_tgts),
             (support_x_pts, support_y_pts),
             (query_x_pts, query_y_pts)
+
+        support_feats_list and query_feats_list are per-mixer lists, with
+        length n_outputs. Each list element is a (N, n_features_for_that_mixer)
+        tensor. Callers should index by mixer_idx to get a specific
+        mixer's support/query features.
         """
         n_total = K_shot + query_size
 
@@ -303,26 +432,28 @@ class PDETask(ABC):
             list(chunks_y), batch_first=True
         )  # (len(unique_snaps), max(counts), ny)
 
-        feats, tgts = self.evaluate_collocations(
+        feats_list, tgts = self.evaluate_collocations(
             unique_snaps, E_x_compact, E_y_compact
         )
 
         mask_idx = torch.arange(0, E_x_compact.shape[1], device=self.device).unsqueeze(
             0
         ) < counts.unsqueeze(1)
-        feats = feats[mask_idx]
+        feats_list = [f[mask_idx] for f in feats_list]
         tgts = tgts[mask_idx]
 
         unsort = torch.argsort(sort_order)
-        feats = feats[unsort]
+        feats_list = [f[unsort] for f in feats_list]
         tgts = tgts[unsort]
 
         # Unsort coordinates the same way as features/targets
         x_pts = x_pts[unsort].float()
         y_pts = y_pts[unsort].float()
 
-        support = (feats[:K_shot], tgts[:K_shot])
-        query = (feats[K_shot:], tgts[K_shot:])
+        support_feats = [f[:K_shot] for f in feats_list]
+        query_feats = [f[K_shot:] for f in feats_list]
+        support = (support_feats, tgts[:K_shot])
+        query = (query_feats, tgts[K_shot:])
         support_coords = (x_pts[:K_shot], y_pts[:K_shot])
         query_coords = (x_pts[K_shot:], y_pts[K_shot:])
 
@@ -1021,9 +1152,12 @@ class NLHeatEquationTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Produce structural features and targets for NLHeat.
+
+        Library: [1-u, u_xx+u_yy] for the single mixer.
+        Target:  u_t = K * (1-u) * (u_xx+u_yy) (analytical, from self.K).
+        """
         neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
@@ -1032,22 +1166,26 @@ class NLHeatEquationTask(PDETask):
         coeff_batch = torch.stack(
             [
                 u_hat,
-                ikx * u_hat,
-                iky * u_hat,
-                neg_kx2 * u_hat,
-                neg_ky2 * u_hat,
+                neg_kx2 * u_hat,  # u_xx
+                neg_ky2 * u_hat,  # u_yy
             ],
             dim=0,
-        )  # (5, len(snap_idx_list), nx, ny)
+        )  # (3, n_unique, ny, nx)
 
-        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
+        u, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
 
-        u_t = self.K * (1 - u) * (u_xx + u_yy)
+        lap_u = u_xx + u_yy
+        one_minus_u = 1.0 - u
 
-        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2)  # (n_unique, n_pts, 5)
+        # Structural features for the single NLHeat mixer: [1-u, u_xx+u_yy]
+        mixer_0_features = torch.stack(
+            [one_minus_u, lap_u], dim=2
+        )  # (n_unique, n_pts, 2)
+
+        u_t = self.K * one_minus_u * lap_u
         targets = torch.stack([u_t], dim=2)  # (n_unique, n_pts, 1)
 
-        return features.float(), targets.float()
+        return [mixer_0_features.float()], targets.float()
 
     def inject_noise(
         self,
@@ -1056,6 +1194,12 @@ class NLHeatEquationTask(PDETask):
         noise_level: float,
         generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Legacy post-feature noise injection (scheduled for deletion).
+
+        Still required by PDETask abstract interface; will be removed
+        when the source-level noise hook is wired into the training
+        loop in Milestone 5.
+        """
         feat_std = features.std(dim=0, keepdim=True)
         noise = torch.randn(
             features.shape,
@@ -1064,13 +1208,6 @@ class NLHeatEquationTask(PDETask):
             generator=generator,
         ) * (noise_level * feat_std)
         features = features + noise
-
-        # Recompute targets from noisy features
-        u = features[:, 0]
-        u_xx, u_yy = features[:, 3], features[:, 4]
-        u_t = self.K * (1 - u) * (u_xx + u_yy)
-        targets = u_t.unsqueeze(1)
-
         return features, targets
 
     @property
@@ -1079,13 +1216,17 @@ class NLHeatEquationTask(PDETask):
 
     @property
     def rhs_feature_mask(self) -> list[bool]:
-        # NLHeat RHS: K * (1 - u) * (u_xx + u_yy)
-        # Uses: u, u_xx, u_yy. NOT: u_x, u_y
+        # Legacy (pre-structural) mask, 5-column raw layout.
+        # Kept for documentation only.
         return [True, False, False, True, True]
 
     @staticmethod
     def _extract_K(jvp_per_point: np.ndarray, features: np.ndarray) -> np.ndarray:
-        """Recover K via least-squares regression: JVP = K*(1-u), solve for K."""
+        """Legacy K recovery via least-squares (pre-structural API).
+
+        Kept for backward compat with existing coefficient_specs path.
+        Superseded by extract_coefficients under the mixer method.
+        """
         one_minus_u = 1.0 - features[:, 0]
         K = np.dot(jvp_per_point, one_minus_u) / np.dot(one_minus_u, one_minus_u)
         return np.full_like(jvp_per_point, K)
@@ -1098,6 +1239,109 @@ class NLHeatEquationTask(PDETask):
                 post_extract=self._extract_K,
             ),
         ]
+
+    # ── Mixer method implementations ─────────────────────────────────
+
+    @property
+    def n_outputs(self) -> int:
+        return 1
+
+    @property
+    def structural_feature_names(self) -> list[list[str]]:
+        return [["1-u", "u_xx+u_yy"]]
+
+    def extract_coefficients(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        """Recover K via regression slope on the mixer's per-point partials.
+
+        The mixer ideally learns `f(a, b) ≈ K·a·b` where a = 1-u and
+        b = u_xx+u_yy. The partial ∂f/∂a equals K·b at every point. A
+        least-squares slope of (∂f/∂a) against b recovers K.
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=False,
+            retain_graph=False,
+        )[0]  # (N, 2)
+        jvp_1_minus_u = grads[:, 0].detach()  # ≈ K * (u_xx+u_yy) per point
+        lap = features[:, 1].detach()  # (u_xx+u_yy) per point
+        numer = (jvp_1_minus_u * lap).sum()
+        denom = (lap * lap).sum().clamp(min=1e-12)
+        K_slope = numer / denom
+        K_std = jvp_1_minus_u.std()  # per-point dispersion (linearity check)
+        return {"K": {"mean": K_slope.detach(), "std": K_std.detach()}}
+
+    def auxiliary_losses(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Form 1 per-point JVP target for K.
+
+        Pushes ∂(mixer)/∂(1-u) toward K·(u_xx+u_yy) at every collocation
+        point. Differentiable — contributes gradient to the mixer's
+        weights via create_graph=True on the inner autograd.grad call.
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=True,
+            retain_graph=True,
+        )[0]  # (N, 2)
+        jvp_1_minus_u = grads[:, 0]  # (N,)
+        lap = features[:, 1]
+        target_per_point = self.K * lap
+        diff = jvp_1_minus_u - target_per_point
+        mse = (diff * diff).mean()
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        aux_K = mse / denom
+        return {"K": aux_K}
+
+    def inject_noise_at_source(
+        self,
+        hat_tensors: dict[str, torch.Tensor],
+        noise_level: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Inject real-space Gaussian noise into u via the Fourier round-trip.
+
+        Generates white noise in real space scaled to noise_level * std(u),
+        FFTs it, and adds to u_hat. The result is that derivatives computed
+        from the noisy u_hat inherit correlated noise through the spectral
+        operators — matching the way real-world noise would propagate.
+        """
+        if noise_level <= 0.0:
+            return hat_tensors
+        u_hat = hat_tensors["u_hat"]
+        u_real = torch.fft.ifft2(u_hat).real  # (*, ny, nx)
+        u_std = u_real.std()
+        noise_real = torch.randn(
+            u_real.shape,
+            dtype=u_real.dtype,
+            device=u_hat.device,
+            generator=generator,
+        ) * (noise_level * u_std)
+        noise_hat = torch.fft.fft2(noise_real.to(dtype=u_hat.dtype))
+        return {"u_hat": u_hat + noise_hat}
 
 
 TASK_REGISTRY: dict[str, type[PDETask]] = {

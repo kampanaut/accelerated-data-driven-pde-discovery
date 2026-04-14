@@ -373,12 +373,17 @@ def evaluate_task(
         available_for_holdout = task.n_samples - k
         actual_holdout = min(holdout_size, available_for_holdout)
 
-        support_clean, holdout_clean, support_coords, holdout_coords = task.get_support_query_split(
+        support_clean_list, holdout_clean_list, support_coords, holdout_coords = task.get_support_query_split(
             K_shot=k,
             query_size=actual_holdout,
             k_seed=k_seed,
             snapshot_seed=seed,
         )
+        # M2a: unwrap the per-mixer list to a single tensor for the old
+        # single-tensor evaluation flow. Works for n_outputs=1 PDEs.
+        # Multi-mixer evaluation arrives with the composite network in M3.
+        support_clean = (support_clean_list[0][0], support_clean_list[1])
+        holdout_clean = (holdout_clean_list[0][0], holdout_clean_list[1])
 
         for noise_idx, noise in enumerate(noise_levels):
             print(f"    K={k:4d}, noise={noise:.0%}...", end=" ", flush=True)
@@ -619,12 +624,15 @@ def evaluate_task(
         # Re-create the same split (deterministic seed)
         available_for_holdout = task.n_samples - best_k
         actual_holdout = min(holdout_size, available_for_holdout)
-        s_clean, h_clean, s_coords, h_coords = task.get_support_query_split(
+        s_clean_list, h_clean_list, s_coords, h_coords = task.get_support_query_split(
             K_shot=best_k,
             query_size=actual_holdout,
             k_seed=best_k_seed,
             snapshot_seed=seed
         )
+        # M2a: unwrap the per-mixer list to a single tensor (n_outputs=1 path).
+        s_clean = (s_clean_list[0][0], s_clean_list[1])
+        h_clean = (h_clean_list[0][0], h_clean_list[1])
 
         # Apply noise if needed
         if best_noise == 0.0:
