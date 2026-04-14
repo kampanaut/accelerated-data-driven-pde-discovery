@@ -142,9 +142,6 @@ class TrainingSection:
     # Gradient clipping
     max_grad_norm: float = 0.0
 
-    # Weight initialization (optional: "zeros", "expected", or None for default)
-    weight_init: Optional[str] = None
-
     # Nested sections
     spectral_loss: SpectralLossSection = field(default_factory=SpectralLossSection)
     imaml: IMAMLSection = field(default_factory=IMAMLSection)

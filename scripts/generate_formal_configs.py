@@ -1108,7 +1108,6 @@ def _build_config(
             loss_function=flat["loss_function"],
             max_grad_norm=flat["max_grad_norm"],
             input_bypass=flat.get("input_bypass", False),
-            weight_init=flat.get("weight_init"),
             metal=metal,
             spectral_loss=spectral,
             imaml=imaml,

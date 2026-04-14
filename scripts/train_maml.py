@@ -198,50 +198,12 @@ def main():
     net_config = cfg.to_network_config()
     model = PDEOperatorNetwork(net_config)
 
-    weight_init = cfg.training.weight_init
-    if weight_init == "zeros":
-        with torch.no_grad():
-            for p in model.parameters():
-                p.zero_()
-        print(f"Weight init: zeros ({sum(p.numel() for p in model.parameters())} params zeroed)")
-    elif weight_init == "expected":
-        # Compute E[coeff] from training tasks, set weights to match PDE structure
-        # For Heat: weights = [0, 0, 0, E[D], E[D]] (features are [u, u_x, u_y, u_xx, u_yy])
-        specs = train_loader.tasks[0].coefficient_specs
-        coeff_means = {}
-        for spec in specs:
-            values = [t.coefficient_specs[i].true_value
-                      for t in train_loader.tasks
-                      for i, s in enumerate(t.coefficient_specs)
-                      if s.name == spec.name]
-            coeff_means[spec.name] = sum(values) / len(values)
-
-        with torch.no_grad():
-            for p in model.parameters():
-                p.zero_()
-            # Set weights at perturb_indices to E[coeff] for each spec
-            for spec in specs:
-                mean_val = coeff_means[spec.name]
-                for p in model.parameters():
-                    if p.dim() >= 2:  # weight matrix (out, in)
-                        for idx in spec.perturb_indices:
-                            p[spec.output_index, idx] = mean_val
-                    elif p.dim() == 1 and len(spec.perturb_indices) == 0:
-                        # bias case — skip for now
-                        pass
-
-        weight_vec = torch.cat([p.flatten() for p in model.parameters()])
-        coeff_str = ", ".join(f"{k}={v:.4f}" for k, v in coeff_means.items())
-        print(f"Weight init: expected ({coeff_str})")
-        print(f"  Weights: {weight_vec.tolist()}")
-
     # Xavier init (Raissi 2018 — DeepHPM uses Xavier with sin activation)
-    if weight_init is None:
-        with torch.no_grad():
-            for p in model.parameters():
-                if p.dim() >= 2:
-                    nn.init.xavier_uniform_(p)
-        print("Weight init: xavier_uniform (Raissi 2018)")
+    with torch.no_grad():
+        for p in model.parameters():
+            if p.dim() >= 2:
+                nn.init.xavier_uniform_(p)
+    print("Weight init: xavier_uniform (Raissi 2018)")
 
     print(model)
     print()
