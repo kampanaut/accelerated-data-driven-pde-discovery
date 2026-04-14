@@ -11,13 +11,13 @@ data:
   meta_test_dir: data/datasets/nl_heat_test-1
 training:
   inner_lr: 0.01
-  outer_lr: 0.007
+  outer_lr: 0.003
   adam_betas:
   - 0.9
   - 0.999
   inner_steps: 16
   meta_batch_size: 25
-  k_shot: 1000
+  k_shot: 3500
   query_size: 10000
   epochs: 1
   max_iterations: 2000

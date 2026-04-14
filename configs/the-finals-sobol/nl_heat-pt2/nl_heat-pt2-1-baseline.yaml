@@ -17,7 +17,7 @@ training:
   - 0.999
   inner_steps: 16
   meta_batch_size: 25
-  k_shot: 1000
+  k_shot: 3500
   query_size: 10000
   epochs: 1
   max_iterations: 2000
