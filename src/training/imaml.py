@@ -140,6 +140,19 @@ class iMAMLTrainer:
         self.slope_recovery_inner = im.slope_recovery_inner
         self.slope_recovery_outer = im.slope_recovery_outer
 
+        # Mixer method: Kendall-weighted aux losses (M4a+)
+        self.aux_losses_enabled: bool = t.aux_losses_enabled
+        # Holds the current task during per-task computation so
+        # _kendall_total_loss can call task.auxiliary_losses without
+        # threading the task through every inner-loop closure.
+        self._current_task: Optional[PDETask] = None
+        # Inner-loop parameter list for the CURRENT fast_model. Refreshed
+        # once per task at the top of _compute_task_imaml, so the inner
+        # solvers don't re-walk model.parameters() on every call. The
+        # entries are references to fast_model's Parameter objects (live
+        # pointers), so the inner optimizer steps them in place.
+        self._current_inner_params: List[nn.Parameter] = []
+
         # Bind inner solver — SGD (prox every step or at end) or L-BFGS
         if im.inner_optimizer == "lbfgs":
             self._inner_solve = self._inner_solve_lbfgs
@@ -386,23 +399,45 @@ class iMAMLTrainer:
     # ANIL inner-param selectors (one is bound to self._inner_params in __init__).
     # Full ANIL off → everything. ANIL on → head, optionally plus adaptive scales.
 
+    @staticmethod
+    def _kendall_param_ids(model: nn.Module) -> set[int]:
+        """Return id()s of Kendall log-variance parameters (if any).
+
+        Used by the inner-params selectors to exclude log-variances from
+        the inner-loop adapted set — log-variances are outer-only
+        meta-parameters and must never be adapted by the inner loop,
+        regardless of ANIL mode.
+        """
+        log_vars = getattr(model, "log_variances", None)
+        if log_vars is None:
+            return set()
+        return {id(p) for p in log_vars.parameters()}
+
     def _inner_params_all(self, model: nn.Module) -> List[nn.Parameter]:
-        return list(model.parameters())
+        """All model params EXCLUDING Kendall log-variances.
+
+        With ANIL off, the inner loop adapts body + head + (N-LAAF scales
+        if present), but never the Kendall log-variances.
+        """
+        log_var_ids = self._kendall_param_ids(model)
+        return [p for p in model.parameters() if id(p) not in log_var_ids]
 
     def _inner_params_head(self, model: nn.Module) -> List[nn.Parameter]:
+        # head_parameters() on MixerNetwork already excludes log-variances
+        # and on legacy PDEOperatorNetwork there are no log-variances.
         return list(model.head_parameters())  # type: ignore[attr-defined]
 
     def _inner_params_head_scales_all(self, model: nn.Module) -> List[nn.Parameter]:
-        return (
-            list(model.head_parameters())  # type: ignore[attr-defined]
-            + list(model.adaptive_scale_parameters("all"))  # type: ignore[attr-defined]
-        )
+        log_var_ids = self._kendall_param_ids(model)
+        head = list(model.head_parameters())  # type: ignore[attr-defined]
+        scales = list(model.adaptive_scale_parameters("all"))  # type: ignore[attr-defined]
+        return [p for p in head + scales if id(p) not in log_var_ids]
 
     def _inner_params_head_scales_last(self, model: nn.Module) -> List[nn.Parameter]:
-        return (
-            list(model.head_parameters())  # type: ignore[attr-defined]
-            + list(model.adaptive_scale_parameters("last"))  # type: ignore[attr-defined]
-        )
+        log_var_ids = self._kendall_param_ids(model)
+        head = list(model.head_parameters())  # type: ignore[attr-defined]
+        scales = list(model.adaptive_scale_parameters("last"))  # type: ignore[attr-defined]
+        return [p for p in head + scales if id(p) not in log_var_ids]
 
     def _get_flat_params(self, model: nn.Module) -> torch.Tensor:
         """Return flattened parameter vector (detached clone)."""
@@ -422,6 +457,62 @@ class iMAMLTrainer:
         phi = torch.cat([p.view(-1) for p in model.parameters()])
         return 0.5 * lam * (phi - theta).pow(2).sum()
 
+    def _kendall_total_loss(
+        self,
+        fast_model: nn.Module,
+        mixer_idx: int,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
+    ) -> torch.Tensor:
+        """Main MSE plus Kendall-weighted aux losses for one mixer.
+
+        Formula per Kendall et al. 2018, eq 7:
+            L = ½·exp(-s_mse)·mse + ½·s_mse
+                + Σᵢ [½·exp(-s_i)·aux_i + ½·s_i]
+
+        When `aux_losses_enabled` is False, returns just the main MSE —
+        no Kendall weighting, matching the pre-mixer legacy path.
+
+        The log-variances `s_*` are read from `fast_model`'s ParameterDict.
+        They're held constant during the inner loop (not adapted), but
+        they're still part of `fast_model.parameters()` so their gradient
+        flow into the meta-update is handled by the existing autograd
+        path on the query loss.
+        """
+        pred = fast_model.forward_one(mixer_idx, features)  # type: ignore[attr-defined]
+        mse = self.cost_function(pred, targets, coords)
+
+        if not self.aux_losses_enabled:
+            return mse
+
+        assert self._current_task is not None, (
+            "_current_task must be set before calling _kendall_total_loss "
+            "(set in _compute_task_imaml at the start of each task)"
+        )
+
+        # Kendall per-loss contribution: 0.5·exp(-s)·L + 0.5·s
+        #
+        # Both 0.5 factors come from the Gaussian NLL derivation:
+        #   -log p(y|f) = (y-f)²/(2σ²) + log σ + const
+        # With s := log σ²:
+        #   1/(2σ²) = 0.5·exp(-s)   → coefficient on L
+        #   log σ   = 0.5·s          → regularizer
+        # Kept symmetric per the paper (eq 7). Dropping both 0.5s is
+        # optimization-equivalent (constant global scaling) but the
+        # explicit factors match Kendall et al. 2018 line-for-line.
+        s_mse = fast_model.get_log_sigma(mixer_idx, "mse")  # type: ignore[attr-defined]
+        total = 0.5 * torch.exp(-s_mse) * mse + 0.5 * s_mse
+
+        aux_losses = self._current_task.auxiliary_losses(
+            mixer_idx, fast_model, features, targets
+        )
+        for name, loss in aux_losses.items():
+            s_i = fast_model.get_log_sigma(mixer_idx, name)  # type: ignore[attr-defined]
+            total = total + 0.5 * torch.exp(-s_i) * loss + 0.5 * s_i
+
+        return total
+
     # ------------------------------------------------------------------
     # Inner solvers (bound in __init__)
     # ------------------------------------------------------------------
@@ -435,13 +526,14 @@ class iMAMLTrainer:
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> None:
         """Inner loop: SGD on inner_cost + proximal for inner_steps steps (Eq. 3)."""
-        opt = torch.optim.SGD(self._inner_params(fast_model), lr=self.config.inner_lr)
+        opt = torch.optim.SGD(self._current_inner_params, lr=self.config.inner_lr)
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
-            pred = fast_model(support_x)
-            task_loss = self.cost_function(pred, support_y, support_coords)
+            task_loss = self._kendall_total_loss(
+                fast_model, 0, support_x, support_y, support_coords
+            )
             if self.slope_recovery_inner > 0:
-                task_loss = task_loss + self.slope_recovery_inner * fast_model.slope_recovery()  # type: ignore[attr-defined]
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
             prox = self._regularization_loss(fast_model, theta, self.lam)
             total = task_loss + prox
             total.backward()
@@ -458,13 +550,14 @@ class iMAMLTrainer:
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> None:
         """Inner loop: plain SGD with inner_cost then one proximal step at end."""
-        opt = torch.optim.SGD(self._inner_params(fast_model), lr=self.config.inner_lr)
+        opt = torch.optim.SGD(self._current_inner_params, lr=self.config.inner_lr)
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
-            pred = fast_model(support_x)
-            task_loss = self.cost_function(pred, support_y, support_coords)
+            task_loss = self._kendall_total_loss(
+                fast_model, 0, support_x, support_y, support_coords
+            )
             if self.slope_recovery_inner > 0:
-                task_loss = task_loss + self.slope_recovery_inner * fast_model.slope_recovery()  # type: ignore[attr-defined]
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
             task_loss.backward()
             if self.config.max_grad_norm > 0:
                 torch.nn.utils.clip_grad_norm_(fast_model.parameters(), self.config.max_grad_norm)
@@ -485,7 +578,7 @@ class iMAMLTrainer:
     ) -> None:
         """Inner loop: L-BFGS on task_loss + proximal (Raissi 2018 style)."""
         opt = torch.optim.LBFGS(
-            self._inner_params(fast_model),
+            self._current_inner_params,
             lr=1.0,
             max_iter=self.config.inner_steps,
             tolerance_grad=1e-15,
@@ -495,10 +588,11 @@ class iMAMLTrainer:
 
         def closure():
             opt.zero_grad()
-            pred = fast_model(support_x)
-            task_loss = self.cost_function(pred, support_y, support_coords)
+            task_loss = self._kendall_total_loss(
+                fast_model, 0, support_x, support_y, support_coords
+            )
             if self.slope_recovery_inner > 0:
-                task_loss = task_loss + self.slope_recovery_inner * fast_model.slope_recovery()  # type: ignore[attr-defined]
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
             prox = self._regularization_loss(fast_model, theta, self.lam)
             total = task_loss + prox
             total.backward()
@@ -521,19 +615,33 @@ class iMAMLTrainer:
         """Compute H·v where H = ∇²φ L̂(φ) at current model params.
 
         Uses double autograd.grad trick (Rajeswaran et al. 2019).
-        The Hessian is of the task loss (plus inner slope recovery if enabled)
-        — the proximal term's Hessian is λI, already accounted for in the
-        matrix evaluator.
+        The Hessian is of the task loss (Kendall-weighted total plus
+        inner slope recovery if enabled) — the proximal term's Hessian
+        is λI, already accounted for in the matrix evaluator.
         """
-        pred = model(support_x)
-        inner_obj = self.cost_function(pred, support_y, support_coords)
+        inner_obj = self._kendall_total_loss(
+            model, 0, support_x, support_y, support_coords
+        )
         if self.slope_recovery_inner > 0:
-            inner_obj = inner_obj + self.slope_recovery_inner * model.slope_recovery()  # type: ignore[attr-defined]
-        grad_ft = torch.autograd.grad(inner_obj, list(model.parameters()), create_graph=True)
-        flat_grad = torch.cat([g.contiguous().view(-1) for g in grad_ft])
+            inner_obj = inner_obj + self.slope_recovery_inner * model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
+        # allow_unused=True for the Kendall log-variances that aren't in
+        # the graph when aux_losses_enabled=False. Zeros fill in for None.
+        params = list(model.parameters())
+        grad_ft = torch.autograd.grad(
+            inner_obj, params, create_graph=True, allow_unused=True
+        )
+        flat_grad = torch.cat([
+            g.contiguous().view(-1) if g is not None
+            else torch.zeros(p.numel(), device=p.device)
+            for g, p in zip(grad_ft, params)
+        ])
         h = torch.sum(flat_grad * vector)
-        hvp = torch.autograd.grad(h, list(model.parameters()))
-        return torch.cat([g.contiguous().view(-1) for g in hvp])
+        hvp = torch.autograd.grad(h, params, allow_unused=True)
+        return torch.cat([
+            g.contiguous().view(-1) if g is not None
+            else torch.zeros(p.numel(), device=p.device)
+            for g, p in zip(hvp, params)
+        ])
 
     def _matrix_evaluator(
         self,
@@ -599,36 +707,59 @@ class iMAMLTrainer:
         Returns (corrected_grad, query_loss_value). Unlike MAML, the meta-gradient
         is not computed via backprop — it's a flat vector from CG.
         """
+        # Make the task visible to _kendall_total_loss without threading it
+        # through every inner-loop closure signature.
+        self._current_task = task
+
         support_x, support_y, query_x, query_y, support_coords, query_coords = (
             self._task_setup(task, seed)
         )
 
         theta = self._get_flat_params(self.model)
         fast_model = copy.deepcopy(self.model)
+        # Cache the inner-loop parameter list for this task's fast_model.
+        # Built once here, reused by every _inner_solve_* call below.
+        self._current_inner_params = self._inner_params(fast_model)
 
         verbose = not getattr(sys.stdout, 'quiet', False)
 
         if verbose:
-            with torch.no_grad():
-                pre_pred = fast_model(support_x)
-                pre_loss = self.cost_function(pre_pred, support_y, support_coords)
-                print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}")
+            # No no_grad() context — _kendall_total_loss may call
+            # task.auxiliary_losses which uses torch.autograd.grad
+            # internally, and that fails inside no_grad.
+            pre_loss = self._kendall_total_loss(
+                fast_model, 0, support_x, support_y, support_coords
+            )
+            print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}")
+            del pre_loss
 
         # Inner solve: minimize task_loss + λ/2 ||φ - θ||²
         self._inner_solve(fast_model, theta, support_x, support_y, support_coords)
 
         if verbose:
-            with torch.no_grad():
-                post_pred = fast_model(support_x)
-                post_loss = self.cost_function(post_pred, support_y, support_coords)
-                print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}"
-                      f" ({self.config.inner_steps} steps)")
+            post_loss = self._kendall_total_loss(
+                fast_model, 0, support_x, support_y, support_coords
+            )
+            print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}"
+                  f" ({self.config.inner_steps} steps)")
+            del post_loss
 
         # Query gradient: v_i = ∇φ L_query(φ*)
-        query_pred = fast_model(query_x)
-        query_loss = self.cost_function(query_pred, query_y, query_coords)
-        query_grad = torch.autograd.grad(query_loss, list(fast_model.parameters()))
-        flat_grad = torch.cat([g.contiguous().view(-1) for g in query_grad])
+        query_loss = self._kendall_total_loss(
+            fast_model, 0, query_x, query_y, query_coords
+        )
+        # allow_unused=True: when aux_losses_enabled=False, Kendall
+        # log-variances are not used in the loss graph — autograd would
+        # otherwise raise. None entries are replaced with zero tensors
+        # of the right shape so the flat vector matches parameter count.
+        query_grad = torch.autograd.grad(
+            query_loss, list(fast_model.parameters()), allow_unused=True
+        )
+        flat_grad = torch.cat([
+            g.contiguous().view(-1) if g is not None
+            else torch.zeros(p.numel(), device=p.device)
+            for g, p in zip(query_grad, fast_model.parameters())
+        ])
         query_loss_val = query_loss.item()
 
         # CG solve: g_i = (I + 1/λ H)⁻¹ v_i

@@ -15,7 +15,7 @@ Example PDEs:
 import torch
 import torch.nn as nn
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 
 # ── Layer spec dataclasses ──────────────────────────────────────────────────
@@ -497,13 +497,9 @@ class MixerNetwork(nn.Module):
 
         # Per-output mixers as a ModuleList. Each mixer has output_dim=1
         # (each composite output is one scalar field).
-        mixer_list = [PDEOperatorNetwork(cfg) for cfg in mixer_configs]
-        self.mixers = nn.ModuleList(mixer_list)
-        # Parallel typed list — same instances as self.mixers, but typed
-        # so that Pyright sees PDEOperatorNetwork instead of nn.Module.
-        # The ModuleList handles parameter registration; this list is for
-        # typed access only.
-        self._typed_mixers: list[PDEOperatorNetwork] = mixer_list
+        self.mixers = nn.ModuleList(
+            [PDEOperatorNetwork(cfg) for cfg in mixer_configs]
+        )
 
         # Validate that each mixer is single-output (the composite stacks them)
         for i, m in enumerate(self._typed_mixers):
@@ -586,6 +582,19 @@ class MixerNetwork(nn.Module):
             mixer_configs=mixer_configs,
             aux_loss_names_per_mixer=aux_names,
         )
+
+    @property
+    def _typed_mixers(self) -> list["PDEOperatorNetwork"]:
+        """Typed view over `self.mixers` that always reflects current state.
+
+        Returns a fresh list of the per-mixer PDEOperatorNetwork instances.
+        Computed on every access so it stays in sync with `self.mixers`
+        even after `copy.deepcopy` (which would break a cached instance
+        attribute because Python's default deepcopy walks the ModuleList
+        and any parallel list independently, creating duplicate copies
+        with drifted identities).
+        """
+        return [cast("PDEOperatorNetwork", m) for m in self.mixers]
 
     def forward(self, features: list[torch.Tensor]) -> torch.Tensor:
         """Run all mixers and stack their outputs.

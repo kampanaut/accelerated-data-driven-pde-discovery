@@ -142,6 +142,11 @@ class TrainingSection:
     # Gradient clipping
     max_grad_norm: float = 0.0
 
+    # Mixer method: enable auxiliary losses (per task.auxiliary_losses)
+    # When True, the inner and outer losses become a Kendall-weighted sum
+    # of mse_main + aux losses. When False, only mse_main is used.
+    aux_losses_enabled: bool = False
+
     # Nested sections
     spectral_loss: SpectralLossSection = field(default_factory=SpectralLossSection)
     imaml: IMAMLSection = field(default_factory=IMAMLSection)

@@ -195,8 +195,18 @@ def main():
     print("Creating model...")
     print("-" * 60)
 
-    net_config = cfg.to_network_config()
-    model = PDEOperatorNetwork(net_config)
+    # Build a MixerNetwork sized to the task's structural feature library.
+    # The first training task is used as the sizing reference; all tasks in
+    # the distribution share the same structural feature shape.
+    from src.networks.pde_operator_network import MixerNetwork
+    first_task = train_loader.tasks[0]
+    training = cfg.training
+    model = MixerNetwork.from_task(
+        first_task,
+        hidden_dims=training.hidden_dims,
+        activation=training.activation,
+        input_bypass=training.input_bypass,
+    )
 
     # Xavier init (Raissi 2018 — DeepHPM uses Xavier with sin activation)
     with torch.no_grad():
@@ -231,7 +241,8 @@ def main():
         torch.save(
             {
                 "model_state_dict": model.state_dict(),
-                "config": net_config.to_dict(),
+                "mixer_configs": [c.to_dict() for c in model.mixer_configs],
+                "n_outputs": model.n_outputs,
                 "timestamp": datetime.now().isoformat(),
             },
             initial_checkpoint_path,
