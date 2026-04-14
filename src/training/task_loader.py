@@ -258,6 +258,25 @@ class PDETask(ABC):
         """
         pass
 
+    @property
+    @abstractmethod
+    def aux_loss_names(self) -> list[list[str]]:
+        """Per-mixer aux loss coefficient names (matches auxiliary_losses keys).
+
+        Outer list length equals n_outputs. Each inner list names the
+        coefficients for which this mixer's `auxiliary_losses` returns a
+        loss term. Empty inner list means that mixer has no aux losses.
+
+        Used by `MixerNetwork.from_task` to pre-allocate Kendall
+        log-variance parameters with the right keys.
+
+        Examples:
+            NLHeat: [['K']]
+            Heat:   [['D_from_uxx', 'D_from_uyy']]
+            BR:     [['D_u', 'k2', 'k1'], ['D_v', 'k2']]
+        """
+        pass
+
     @abstractmethod
     def extract_coefficients(
         self,
@@ -616,6 +635,13 @@ class BrusselatorTask(PDETask):
             ["u", "u²v", "v_xx+v_yy"],
         ]
 
+    @property
+    def aux_loss_names(self) -> list[list[str]]:
+        return [
+            ["D_u", "k2", "k1"],
+            ["D_v", "k2"],
+        ]
+
     def extract_coefficients(
         self,
         mixer_idx: int,
@@ -934,6 +960,13 @@ class FitzHughNagumoTask(PDETask):
         return [
             ["u_xx+u_yy", "u", "u³", "v"],
             ["v_xx+v_yy", "u", "v"],
+        ]
+
+    @property
+    def aux_loss_names(self) -> list[list[str]]:
+        return [
+            ["D_u"],
+            ["D_v", "eps", "eps_a", "eps_b"],
         ]
 
     def extract_coefficients(
@@ -1274,6 +1307,13 @@ class LambdaOmegaTask(PDETask):
             ["v_xx+v_yy", "v", "u³", "u·v²", "u²·v", "v³"],
         ]
 
+    @property
+    def aux_loss_names(self) -> list[list[str]]:
+        return [
+            ["D_u", "a_from_u", "c_from_u2v", "c_from_v3"],
+            ["D_v", "a_from_v", "c_from_u3", "c_from_uv2"],
+        ]
+
     def extract_coefficients(
         self,
         mixer_idx: int,
@@ -1587,6 +1627,10 @@ class NavierStokesTask(PDETask):
     def structural_feature_names(self) -> list[list[str]]:
         return [["u·ω_x+v·ω_y", "ω_xx+ω_yy"]]
 
+    @property
+    def aux_loss_names(self) -> list[list[str]]:
+        return [["nu"]]
+
     def extract_coefficients(
         self,
         mixer_idx: int,
@@ -1776,6 +1820,10 @@ class HeatEquationTask(PDETask):
     @property
     def structural_feature_names(self) -> list[list[str]]:
         return [["u_xx", "u_yy"]]
+
+    @property
+    def aux_loss_names(self) -> list[list[str]]:
+        return [["D_from_uxx", "D_from_uyy"]]
 
     def extract_coefficients(
         self,
@@ -2011,6 +2059,10 @@ class NLHeatEquationTask(PDETask):
     @property
     def structural_feature_names(self) -> list[list[str]]:
         return [["1-u", "u_xx+u_yy"]]
+
+    @property
+    def aux_loss_names(self) -> list[list[str]]:
+        return [["K"]]
 
     def extract_coefficients(
         self,

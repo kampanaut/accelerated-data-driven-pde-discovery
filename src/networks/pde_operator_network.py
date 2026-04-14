@@ -451,3 +451,286 @@ class PDEOperatorNetwork(nn.Module):
         lines.append(f"  total_params={sum(p.numel() for p in self.parameters()):,}")
         lines.append(")")
         return "\n".join(lines)
+
+
+# ── Mixer Network (composite, mixer-method) ─────────────────────────────────
+
+
+class MixerNetwork(nn.Module):
+    """Composite operator network — one mixer per output, with Kendall log-variances.
+
+    Each mixer is an independent MLP (a `PDEOperatorNetwork`) with its own
+    input dimensionality. Forward accepts a **list** of feature tensors (one
+    per mixer) and produces a stacked output of shape (N, n_outputs). For
+    1-output PDEs (NLHeat, Heat, NS-vorticity) the list has one element. For
+    2-output PDEs (BR, FHN, λ-ω) the list has two elements, potentially with
+    different input dimensionalities.
+
+    Mixers do not share parameters — `forward_one(idx, features)` runs only
+    the i-th mixer and produces gradients that touch only its parameters.
+    Cross-output partials (∂(out_i)/∂(features_j) for i≠j) are structurally
+    zero by construction.
+
+    Kendall uncertainty log-variances live as top-level parameters in
+    `self.log_variances` (an `nn.ParameterDict` keyed by `mse_{i}` and
+    `aux_{i}_{coeff_name}`). They're part of `self.parameters()` and updated
+    by the outer optimizer, but excluded from `head_parameters()` — they are
+    never adapted by the inner loop.
+    """
+
+    def __init__(
+        self,
+        mixer_configs: list[NetworkConfig],
+        aux_loss_names_per_mixer: list[list[str]] | None = None,
+    ):
+        super().__init__()
+        if aux_loss_names_per_mixer is None:
+            aux_loss_names_per_mixer = [[] for _ in mixer_configs]
+        if len(mixer_configs) != len(aux_loss_names_per_mixer):
+            raise ValueError(
+                f"len(mixer_configs)={len(mixer_configs)} != "
+                f"len(aux_loss_names_per_mixer)={len(aux_loss_names_per_mixer)}"
+            )
+
+        self.n_outputs = len(mixer_configs)
+        self.mixer_configs = mixer_configs
+
+        # Per-output mixers as a ModuleList. Each mixer has output_dim=1
+        # (each composite output is one scalar field).
+        mixer_list = [PDEOperatorNetwork(cfg) for cfg in mixer_configs]
+        self.mixers = nn.ModuleList(mixer_list)
+        # Parallel typed list — same instances as self.mixers, but typed
+        # so that Pyright sees PDEOperatorNetwork instead of nn.Module.
+        # The ModuleList handles parameter registration; this list is for
+        # typed access only.
+        self._typed_mixers: list[PDEOperatorNetwork] = mixer_list
+
+        # Validate that each mixer is single-output (the composite stacks them)
+        for i, m in enumerate(self._typed_mixers):
+            if m.output_dim != 1:
+                raise ValueError(
+                    f"MixerNetwork: mixer {i} has output_dim={m.output_dim}, "
+                    f"expected 1 (each composite mixer produces one scalar)"
+                )
+
+        # Kendall uncertainty log-variances. One `mse` per mixer plus one
+        # per aux loss term. All initialized to log(1) = 0 (σ² = 1, weight = 1).
+        self.log_variances = nn.ParameterDict()
+        for i in range(self.n_outputs):
+            self.log_variances[f"mse_{i}"] = nn.Parameter(torch.zeros(()))
+            for name in aux_loss_names_per_mixer[i]:
+                self.log_variances[f"aux_{i}_{name}"] = nn.Parameter(torch.zeros(()))
+
+    @classmethod
+    def from_task(
+        cls,
+        task: Any,
+        **network_config: Any,
+    ) -> "MixerNetwork":
+        """Build a MixerNetwork that's auto-sized to a PDETask.
+
+        Reads `task.structural_feature_names` to determine each mixer's
+        input dimensionality, and `task.aux_loss_names` to pre-allocate
+        Kendall log-variance parameters. Other architecture defaults
+        are passed through `**network_config` and forwarded to
+        `NetworkConfig.from_dict` for each mixer — so any field
+        `NetworkConfig.from_dict` accepts can be passed here.
+
+        The `input_dim` and `output_dim` keys in `network_config` are
+        always overridden per-mixer:
+          - `input_dim` becomes `len(task.structural_feature_names[i])`
+          - `output_dim` is forced to 1 (each composite mixer is scalar)
+
+        Args:
+            task: a PDETask instance (must implement n_outputs,
+                  structural_feature_names, aux_loss_names).
+            **network_config: any NetworkConfig.from_dict-compatible
+                              kwargs — hidden_dims, activation, layers,
+                              input_bypass, conv_filters, etc. Applied
+                              to all mixers identically.
+
+        Returns:
+            A MixerNetwork with one mixer per task output, each sized to
+            the corresponding entry in task.structural_feature_names.
+
+        Example:
+            net = MixerNetwork.from_task(
+                task,
+                hidden_dims=[350, 350],
+                activation="silu",
+            )
+        """
+        feature_names: list[list[str]] = task.structural_feature_names
+        aux_names: list[list[str]] = task.aux_loss_names
+        if len(feature_names) != task.n_outputs:
+            raise ValueError(
+                f"task.structural_feature_names has length {len(feature_names)}, "
+                f"expected n_outputs={task.n_outputs}"
+            )
+        if len(aux_names) != task.n_outputs:
+            raise ValueError(
+                f"task.aux_loss_names has length {len(aux_names)}, "
+                f"expected n_outputs={task.n_outputs}"
+            )
+
+        mixer_configs: list[NetworkConfig] = []
+        for names in feature_names:
+            cfg_dict: dict[str, Any] = {
+                **network_config,
+                "input_dim": len(names),  # always derived from the task
+                "output_dim": 1,           # always 1 per mixer
+            }
+            mixer_configs.append(NetworkConfig.from_dict(cfg_dict))
+
+        return cls(
+            mixer_configs=mixer_configs,
+            aux_loss_names_per_mixer=aux_names,
+        )
+
+    def forward(self, features: list[torch.Tensor]) -> torch.Tensor:
+        """Run all mixers and stack their outputs.
+
+        Args:
+            features: list of length n_outputs. features[i] has shape
+                (N, input_dim_i) and feeds mixer i.
+
+        Returns:
+            Stacked output tensor of shape (N, n_outputs).
+        """
+        if len(features) != self.n_outputs:
+            raise ValueError(
+                f"forward expects {self.n_outputs} feature tensors, got {len(features)}"
+            )
+        outputs = [
+            self._typed_mixers[i](features[i]).squeeze(-1)
+            for i in range(self.n_outputs)
+        ]
+        return torch.stack(outputs, dim=-1)
+
+    def forward_one(self, output_idx: int, features: torch.Tensor) -> torch.Tensor:
+        """Run only the i-th mixer.
+
+        Returns a tensor of shape (N,). Gradients through this call only
+        touch the i-th mixer's parameters — cross-output partials are
+        structurally zero. This is the linchpin for split L-BFGS efficiency
+        and for clean per-mixer Jacobian extraction.
+        """
+        if output_idx < 0 or output_idx >= self.n_outputs:
+            raise ValueError(
+                f"output_idx must be in [0, {self.n_outputs}), got {output_idx}"
+            )
+        return self._typed_mixers[output_idx](features).squeeze(-1)
+
+    def head_parameters(self) -> list[nn.Parameter]:
+        """Union of per-mixer last-layer parameters (ANIL inner-loop set).
+
+        Excludes Kendall log-variances — they are outer-only parameters
+        and are never adapted by the inner loop.
+        """
+        params: list[nn.Parameter] = []
+        for mixer in self._typed_mixers:
+            params.extend(mixer.head_parameters())
+        return params
+
+    def mixer_parameters(self, mixer_idx: int) -> list[nn.Parameter]:
+        """All parameters of one mixer (body + head)."""
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        return list(self._typed_mixers[mixer_idx].parameters())
+
+    def mixer_head_parameters(self, mixer_idx: int) -> list[nn.Parameter]:
+        """Last-layer parameters of one mixer."""
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        return self._typed_mixers[mixer_idx].head_parameters()
+
+    def adaptive_scale_parameters(self, mode: str = "all") -> list[nn.Parameter]:
+        """Union of N-LAAF scale parameters across all mixers.
+
+        Used by joint optimization paths. For per-mixer split L-BFGS,
+        use `mixer_adaptive_scale_parameters(idx, mode)` instead so
+        each mixer's inner loop only adapts its own scales.
+        """
+        params: list[nn.Parameter] = []
+        for mixer in self._typed_mixers:
+            params.extend(mixer.adaptive_scale_parameters(mode))
+        return params
+
+    def mixer_adaptive_scale_parameters(
+        self, mixer_idx: int, mode: str = "all"
+    ) -> list[nn.Parameter]:
+        """N-LAAF scale parameters of a single mixer."""
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        return self._typed_mixers[mixer_idx].adaptive_scale_parameters(mode)
+
+    def slope_recovery(self) -> torch.Tensor:
+        """Sum of per-mixer N-LAAF slope-recovery terms (joint-loss path).
+
+        Suitable for joint-optimization regimes where the inner loop
+        minimizes a single combined loss across all mixers. For split
+        L-BFGS where each mixer has its own inner loss, use
+        `mixer_slope_recovery(idx)` instead — summing here would
+        double-count the regularization.
+        """
+        device = next(self.parameters()).device
+        total = torch.zeros((), device=device)
+        for mixer in self._typed_mixers:
+            sr = mixer.slope_recovery()
+            if sr.numel() > 0:
+                total = total + sr
+        return total
+
+    def mixer_slope_recovery(self, mixer_idx: int) -> torch.Tensor:
+        """Per-mixer N-LAAF slope-recovery term (split-loss path).
+
+        Returns S(a) computed over a single mixer's ScaledActivation
+        modules only. Use this in split L-BFGS where each mixer has
+        its own inner loss.
+        """
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        return self._typed_mixers[mixer_idx].slope_recovery()
+
+    def get_log_sigma(self, mixer_idx: int, loss_name: str) -> nn.Parameter:
+        """Look up a Kendall log-variance by (mixer_idx, loss_name).
+
+        loss_name == 'mse' for the main MSE; otherwise the coefficient name
+        of the aux loss (e.g., 'D_u', 'k2', 'eps_a').
+        """
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        key = f"mse_{mixer_idx}" if loss_name == "mse" else f"aux_{mixer_idx}_{loss_name}"
+        if key not in self.log_variances:
+            raise KeyError(
+                f"log-variance '{key}' not in this MixerNetwork. "
+                f"Known keys: {list(self.log_variances.keys())}"
+            )
+        return self.log_variances[key]
+
+    def __repr__(self) -> str:
+        lines = [f"MixerNetwork(n_outputs={self.n_outputs}, "]
+        total = sum(p.numel() for p in self.parameters())
+        for i, mixer in enumerate(self._typed_mixers):
+            cfg = mixer.config
+            sub = " → ".join(
+                [str(cfg.input_dim)]
+                + [str(h.hidden) for h in cfg.hidden_specs]
+                + [str(cfg.output_dim)]
+            )
+            mp = sum(p.numel() for p in mixer.parameters())
+            lines.append(f"  mixer_{i}: {sub}  ({mp:,} params)")
+        lines.append(f"  log_variances: {len(self.log_variances)} scalar params")
+        lines.append(f"  total_params: {total:,}")
+        lines.append(")")
+        return "\n".join(lines)
