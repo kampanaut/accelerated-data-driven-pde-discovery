@@ -133,7 +133,6 @@ DEFAULT = {
     # Model (Raissi-faithful)
     "hidden_dims": [100, 100],
     "activation": "sin",
-    "zero_non_rhs_features": True,
 
     # Training (iMAML reference defaults)
     "inner_lr": 0.01,
@@ -208,7 +207,6 @@ _OLD_BASE = {
     "max_iterations": 500,
     "patience": 300,
     "checkpoint_interval": 0,
-    "zero_non_rhs_features": False,
     "noise_levels": [0.0, 0.01, 0.05, 0.10],
     "fine_tune_lr": 0.00001,
 }
@@ -1109,7 +1107,6 @@ def _build_config(
             min_lr=flat["min_lr"],
             loss_function=flat["loss_function"],
             max_grad_norm=flat["max_grad_norm"],
-            zero_non_rhs_features=flat["zero_non_rhs_features"],
             input_bypass=flat.get("input_bypass", False),
             weight_init=flat.get("weight_init"),
             metal=metal,

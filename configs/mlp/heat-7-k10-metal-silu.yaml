@@ -42,7 +42,6 @@ training:
   min_lr: 1.0e-05
   loss_function: normalized_mse
   max_grad_norm: 100.0
-  zero_non_rhs_features: true
   metal:
     enabled: true
     hidden_dim: 0

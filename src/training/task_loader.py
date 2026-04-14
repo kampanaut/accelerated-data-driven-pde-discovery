@@ -221,22 +221,6 @@ class PDETask(ABC):
         """
         pass
 
-    def zero_non_rhs_features(self, features: torch.Tensor) -> torch.Tensor:
-        """Return a clone with non-RHS feature columns zeroed out.
-
-        Args:
-            features: (N, n_features) tensor
-
-        Returns:
-            Clone with columns where rhs_feature_mask is False set to 0.
-        """
-        mask = self.rhs_feature_mask
-        out = features.clone()
-        for i, in_rhs in enumerate(mask):
-            if not in_rhs:
-                out[:, i] = 0.0
-        return out
-
     def get_support_query_split(
         self,
         K_shot: int,

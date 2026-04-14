@@ -51,7 +51,6 @@ training:
   plateau_window: 20
   loss_function: normalized_mse
   max_grad_norm: 0.0
-  zero_non_rhs_features: true
   imaml:
     enabled: true
     lam: 0.1

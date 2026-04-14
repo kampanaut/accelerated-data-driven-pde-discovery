@@ -342,7 +342,6 @@ def evaluate_task(
     spectral_mode_size: int = 0,
     max_grad_norm: float = 0.0,
     log_weights: bool = False,
-    zero_non_rhs_features: bool = False,
     proximal_lam: float = 0.0,
     proximal_theta: Optional[torch.Tensor] = None,
     inner_optimizer: str = "sgd",
@@ -402,11 +401,6 @@ def evaluate_task(
                     )
                     features, targets = feat_s, tgt_s
                     holdout_features, holdout_targets = feat_h, tgt_h
-
-                # Zero non-RHS features (after noise injection)
-                if zero_non_rhs_features:
-                    features = task.zero_non_rhs_features(features)
-                    holdout_features = task.zero_non_rhs_features(holdout_features)
 
                 # --- Build callback for intermediate Jacobian extraction ---
                 maml_jac_snapshots: List[JacobianResults] = []
@@ -645,11 +639,6 @@ def evaluate_task(
             bc_h_features, bc_h_targets = task.inject_noise(
                 h_clean[0].clone(), h_clean[1].clone(), best_noise, generator=noise_gen
             )
-
-        # Zero non-RHS features (after noise injection)
-        if zero_non_rhs_features:
-            bc_features = task.zero_non_rhs_features(bc_features)
-            bc_h_features = task.zero_non_rhs_features(bc_h_features)
 
         bc_model = copy.deepcopy(theta_star)
         pred_snapshots: List[NDArray[np.floating[Any]]] = []
@@ -900,7 +889,6 @@ def main():
     loss_type: str = cfg.training.loss_function
     spectral_mode_size: int = cfg.training.spectral_loss.mode_size if cfg.training.spectral_loss.enabled else 0
     max_grad_norm: float = cfg.training.max_grad_norm
-    zero_non_rhs: bool = cfg.eval_zero_non_rhs_features
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -916,8 +904,6 @@ def main():
         print(f"  Spectral loss: mode_size={spectral_mode_size}")
     if max_grad_norm > 0:
         print(f"  Gradient clipping: max_norm={max_grad_norm}")
-    if zero_non_rhs:
-        print(f"  Zero non-RHS features: True")
     print(f"  Total evaluations: {total_combos}")
     print()
 
@@ -970,7 +956,6 @@ def main():
             spectral_mode_size=spectral_mode_size,
             max_grad_norm=max_grad_norm,
             log_weights=log_weights,
-            zero_non_rhs_features=zero_non_rhs,
             proximal_lam=proximal_lam,
             proximal_theta=proximal_theta,
             inner_optimizer=eval_inner_optimizer,

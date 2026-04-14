@@ -142,9 +142,6 @@ class TrainingSection:
     # Gradient clipping
     max_grad_norm: float = 0.0
 
-    # Feature masking
-    zero_non_rhs_features: bool = False
-
     # Weight initialization (optional: "zeros", "expected", or None for default)
     weight_init: Optional[str] = None
 
@@ -163,7 +160,6 @@ class EvaluationSection:
     fixed_steps: list = field(default_factory=lambda: [0, 1, 5, 10, 25, 50])
     holdout_size: int = 5000
     log_weights: bool = False
-    zero_non_rhs_features: Optional[bool] = None  # None = inherit from training
 
 
 @dataclass
@@ -385,13 +381,6 @@ class ExperimentConfig:
         return NetworkConfig.from_dict(d)
 
     # ── Convenience properties ───────────────────────────────────────
-
-    @property
-    def eval_zero_non_rhs_features(self) -> bool:
-        """Evaluation zero_non_rhs: uses eval override if set, else training value."""
-        if self.evaluation.zero_non_rhs_features is not None:
-            return self.evaluation.zero_non_rhs_features
-        return self.training.zero_non_rhs_features
 
     @property
     def exp_dir(self) -> Path:

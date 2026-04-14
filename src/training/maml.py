@@ -357,11 +357,6 @@ class MAMLTrainer:
         support_x, support_y = support
         query_x, query_y = query
 
-        # Zero non-RHS features to block absorption routes
-        if self.config.zero_non_rhs_features:
-            support_x = task.zero_non_rhs_features(support_x)
-            query_x = task.zero_non_rhs_features(query_x)
-
         # Set domain info for spectral loss
         self._current_Lx = task.Lx
         self._current_Ly = task.Ly
