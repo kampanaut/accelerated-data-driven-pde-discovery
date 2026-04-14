@@ -509,9 +509,13 @@ class BrusselatorTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Produce structural features and targets for Brusselator.
+
+        Mixer_u library: [u, u²v, u_xx+u_yy]
+        Mixer_v library: [u, u²v, v_xx+v_yy]
+        Targets: analytical u_t, v_t from the BR RHS.
+        """
         neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
@@ -522,32 +526,34 @@ class BrusselatorTask(PDETask):
             [
                 u_hat,
                 v_hat,
-                ikx * u_hat,
-                iky * u_hat,
-                neg_kx2 * u_hat,
-                neg_ky2 * u_hat,
-                ikx * v_hat,
-                iky * v_hat,
-                neg_kx2 * v_hat,
-                neg_ky2 * v_hat,
+                neg_kx2 * u_hat,  # u_xx
+                neg_ky2 * u_hat,  # u_yy
+                neg_kx2 * v_hat,  # v_xx
+                neg_ky2 * v_hat,  # v_yy
             ],
             dim=0,
-        )  # (10, len(snap_idx_list), nx, ny)
+        )  # (6, n_unique, ny, nx)
 
-        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
+        u, v, u_xx, u_yy, v_xx, v_yy = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
         )
 
-        u_sq_v = u**2 * v
-        u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + u_sq_v
-        v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - u_sq_v
+        lap_u = u_xx + u_yy
+        lap_v = v_xx + v_yy
+        u_sq_v = u * u * v
 
-        features = torch.stack(
-            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
-        )  # (n_unique, n_pts, 10)
+        mixer_u_features = torch.stack(
+            [u, u_sq_v, lap_u], dim=2
+        )  # (n_unique, n_pts, 3)
+        mixer_v_features = torch.stack(
+            [u, u_sq_v, lap_v], dim=2
+        )  # (n_unique, n_pts, 3)
+
+        u_t = self.D_u * lap_u + self.k1 - (self.k2 + 1) * u + u_sq_v
+        v_t = self.D_v * lap_v + self.k2 * u - u_sq_v
         targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
-        return features.float(), targets.float()
+        return [mixer_u_features.float(), mixer_v_features.float()], targets.float()
 
     def inject_noise(
         self,
@@ -596,6 +602,174 @@ class BrusselatorTask(PDETask):
                 name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v
             ),
         ]
+
+    # ── Mixer method implementations ─────────────────────────────────
+
+    @property
+    def n_outputs(self) -> int:
+        return 2
+
+    @property
+    def structural_feature_names(self) -> list[list[str]]:
+        return [
+            ["u", "u²v", "u_xx+u_yy"],
+            ["u", "u²v", "v_xx+v_yy"],
+        ]
+
+    def extract_coefficients(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        """Recover BR coefficients via JVP, algebra, and residual subtraction.
+
+        mixer_u (idx=0) → {D_u, k2, k1}. mixer_v (idx=1) → {D_v, k2}.
+        Both mixers produce a k2 estimate (cross-check handled downstream).
+        """
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Brusselator has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=False,
+            retain_graph=False,
+        )[0].detach()  # (N, 3)
+
+        if mixer_idx == 0:
+            jvp_u = grads[:, 0]            # ≈ -(k2 + 1)
+            jvp_u_sq_v = grads[:, 1]       # ≈ +1 (fixed)
+            jvp_lap_u = grads[:, 2]        # ≈ D_u
+            D_u_mean = jvp_lap_u.mean()
+            D_u_std = jvp_lap_u.std()
+            k2_vals = -1.0 - jvp_u
+            k2_mean = k2_vals.mean()
+            k2_std = k2_vals.std()
+            # Residual = mixer_output − Σ partial_i · feature_i ≈ k1.
+            feats_det = features.detach()
+            mixer_output = fast_model.forward_one(0, feats_det).detach()
+            lin_combo = (
+                jvp_u * feats_det[:, 0]
+                + jvp_u_sq_v * feats_det[:, 1]
+                + jvp_lap_u * feats_det[:, 2]
+            )
+            residual = mixer_output - lin_combo
+            k1_mean = residual.mean()
+            k1_std = residual.std()
+            return {
+                "D_u": {"mean": D_u_mean, "std": D_u_std},
+                "k2": {"mean": k2_mean, "std": k2_std},
+                "k1": {"mean": k1_mean, "std": k1_std},
+            }
+
+        # mixer_v (idx == 1)
+        jvp_u = grads[:, 0]          # ≈ k2
+        jvp_lap_v = grads[:, 2]      # ≈ D_v
+        D_v_mean = jvp_lap_v.mean()
+        D_v_std = jvp_lap_v.std()
+        k2_mean = jvp_u.mean()
+        k2_std = jvp_u.std()
+        return {
+            "D_v": {"mean": D_v_mean, "std": D_v_std},
+            "k2": {"mean": k2_mean, "std": k2_std},
+        }
+
+    def auxiliary_losses(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Differentiable nMSE aux losses against ground-truth BR coefficients.
+
+        Mirrors extract_coefficients but keeps the autograd graph alive.
+        `targets` is unused — aux targets come from task metadata.
+        """
+        del targets  # unused; aux targets come from self.{D_u,D_v,k1,k2}
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Brusselator has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=True,
+            retain_graph=True,
+        )[0]  # (N, 3)
+
+        def _nmse(quantity: torch.Tensor, target_value: float) -> torch.Tensor:
+            target_per_point = torch.full_like(quantity, target_value)
+            diff = quantity - target_per_point
+            mse = (diff * diff).mean()
+            denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+            return mse / denom
+
+        if mixer_idx == 0:
+            jvp_u = grads[:, 0]
+            jvp_u_sq_v = grads[:, 1]
+            jvp_lap_u = grads[:, 2]
+            aux_D_u = _nmse(jvp_lap_u, self.D_u)
+            aux_k2 = _nmse(-1.0 - jvp_u, self.k2)
+            # Residual for k1 — differentiable version uses features_grad.
+            mixer_output = fast_model.forward_one(0, features_grad)
+            lin_combo = (
+                jvp_u * features_grad[:, 0]
+                + jvp_u_sq_v * features_grad[:, 1]
+                + jvp_lap_u * features_grad[:, 2]
+            )
+            residual = mixer_output - lin_combo
+            aux_k1 = _nmse(residual, self.k1)
+            return {"D_u": aux_D_u, "k2": aux_k2, "k1": aux_k1}
+
+        # mixer_v (idx == 1)
+        jvp_u = grads[:, 0]
+        jvp_lap_v = grads[:, 2]
+        aux_D_v = _nmse(jvp_lap_v, self.D_v)
+        aux_k2 = _nmse(jvp_u, self.k2)
+        return {"D_v": aux_D_v, "k2": aux_k2}
+
+    def inject_noise_at_source(
+        self,
+        hat_tensors: dict[str, torch.Tensor],
+        noise_level: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Real-space Gaussian noise via Fourier round-trip on u_hat and v_hat."""
+        if noise_level <= 0.0:
+            return hat_tensors
+        u_hat = hat_tensors["u_hat"]
+        v_hat = hat_tensors["v_hat"]
+
+        u_real = torch.fft.ifft2(u_hat).real
+        u_std = u_real.std()
+        u_noise_real = torch.randn(
+            u_real.shape,
+            dtype=u_real.dtype,
+            device=u_hat.device,
+            generator=generator,
+        ) * (noise_level * u_std)
+        u_noise_hat = torch.fft.fft2(u_noise_real.to(dtype=u_hat.dtype))
+
+        v_real = torch.fft.ifft2(v_hat).real
+        v_std = v_real.std()
+        v_noise_real = torch.randn(
+            v_real.shape,
+            dtype=v_real.dtype,
+            device=v_hat.device,
+            generator=generator,
+        ) * (noise_level * v_std)
+        v_noise_hat = torch.fft.fft2(v_noise_real.to(dtype=v_hat.dtype))
+
+        return {"u_hat": u_hat + u_noise_hat, "v_hat": v_hat + v_noise_hat}
 
 
 class FitzHughNagumoTask(PDETask):
@@ -656,9 +830,13 @@ class FitzHughNagumoTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Produce structural features and targets for FitzHugh-Nagumo.
+
+        Mixer_u library: [u_xx+u_yy, u, u³, v]
+        Mixer_v library: [v_xx+v_yy, u, v]
+        Targets: analytical u_t, v_t from the FHN RHS.
+        """
         neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
@@ -669,31 +847,34 @@ class FitzHughNagumoTask(PDETask):
             [
                 u_hat,
                 v_hat,
-                ikx * u_hat,
-                iky * u_hat,
-                neg_kx2 * u_hat,
-                neg_ky2 * u_hat,
-                ikx * v_hat,
-                iky * v_hat,
-                neg_kx2 * v_hat,
-                neg_ky2 * v_hat,
+                neg_kx2 * u_hat,  # u_xx
+                neg_ky2 * u_hat,  # u_yy
+                neg_kx2 * v_hat,  # v_xx
+                neg_ky2 * v_hat,  # v_yy
             ],
             dim=0,
-        )  # (10, len(snap_idx_list), nx, ny)
+        )  # (6, n_unique, ny, nx)
 
-        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
+        u, v, u_xx, u_yy, v_xx, v_yy = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
         )
 
-        u_t = self.D_u * (u_xx + u_yy) + u - u**3 - v
-        v_t = self.D_v * (v_xx + v_yy) + self.eps * (u - self.a * v - self.b)
+        lap_u = u_xx + u_yy
+        lap_v = v_xx + v_yy
+        u_cubed = u * u * u
 
-        features = torch.stack(
-            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
-        )  # (n_unique, n_pts, 10)
+        mixer_u_features = torch.stack(
+            [lap_u, u, u_cubed, v], dim=2
+        )  # (n_unique, n_pts, 4)
+        mixer_v_features = torch.stack(
+            [lap_v, u, v], dim=2
+        )  # (n_unique, n_pts, 3)
+
+        u_t = self.D_u * lap_u + u - u_cubed - v
+        v_t = self.D_v * lap_v + self.eps * (u - self.a * v - self.b)
         targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
-        return features.float(), targets.float()
+        return [mixer_u_features.float(), mixer_v_features.float()], targets.float()
 
     def inject_noise(
         self,
@@ -741,6 +922,179 @@ class FitzHughNagumoTask(PDETask):
                 name="D_v", perturb_indices=[8, 9], output_index=1, true_value=self.D_v
             ),
         ]
+
+    # ── Mixer method implementations ─────────────────────────────────
+
+    @property
+    def n_outputs(self) -> int:
+        return 2
+
+    @property
+    def structural_feature_names(self) -> list[list[str]]:
+        return [
+            ["u_xx+u_yy", "u", "u³", "v"],
+            ["v_xx+v_yy", "u", "v"],
+        ]
+
+    def extract_coefficients(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        """Recover FHN coefficients via JVP and residual subtraction.
+
+        mixer_u (idx=0) → {D_u}. mixer_v (idx=1) → {D_v, eps, eps_a, eps_b}
+        using Framing A (compound coefficients); a and b are derived
+        post-hoc at evaluation time.
+        """
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"FitzHugh-Nagumo has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=False,
+            retain_graph=False,
+        )[0].detach()  # (N, n_cols)
+
+        if mixer_idx == 0:
+            jvp_lap_u = grads[:, 0]  # ≈ D_u
+            D_u_mean = jvp_lap_u.mean()
+            D_u_std = jvp_lap_u.std()
+            return {"D_u": {"mean": D_u_mean, "std": D_u_std}}
+
+        # mixer_v (idx == 1); library = [v_xx+v_yy, u, v]
+        jvp_lap_v = grads[:, 0]  # ≈ D_v
+        jvp_u = grads[:, 1]      # ≈ +eps
+        jvp_v = grads[:, 2]      # ≈ -eps·a
+        D_v_mean = jvp_lap_v.mean()
+        D_v_std = jvp_lap_v.std()
+        eps_mean = jvp_u.mean()
+        eps_std = jvp_u.std()
+        eps_a_mean = -jvp_v.mean()
+        eps_a_std = jvp_v.std()
+
+        # Residual = mixer_output − Σ partial_i · feature_i ≈ -eps·b.
+        feats_det = features.detach()
+        mixer_output = fast_model.forward_one(1, feats_det).detach()
+        lin_combo = (
+            jvp_lap_v * feats_det[:, 0]
+            + jvp_u * feats_det[:, 1]
+            + jvp_v * feats_det[:, 2]
+        )
+        residual = mixer_output - lin_combo
+        eps_b_mean = -residual.mean()
+        eps_b_std = residual.std()
+
+        return {
+            "D_v": {"mean": D_v_mean, "std": D_v_std},
+            "eps": {"mean": eps_mean, "std": eps_std},
+            "eps_a": {"mean": eps_a_mean, "std": eps_a_std},
+            "eps_b": {"mean": eps_b_mean, "std": eps_b_std},
+        }
+
+    def auxiliary_losses(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Differentiable nMSE aux losses against ground-truth FHN coefficients.
+
+        Mirrors extract_coefficients but keeps the autograd graph alive.
+        `targets` is unused — aux targets come from task metadata.
+        """
+        del targets  # unused; aux targets come from self.{D_u,D_v,eps,a,b}
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"FitzHugh-Nagumo has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=True,
+            retain_graph=True,
+        )[0]  # (N, n_cols)
+
+        def _nmse(quantity: torch.Tensor, target_value: float) -> torch.Tensor:
+            target_per_point = torch.full_like(quantity, target_value)
+            diff = quantity - target_per_point
+            mse = (diff * diff).mean()
+            denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+            return mse / denom
+
+        if mixer_idx == 0:
+            jvp_lap_u = grads[:, 0]
+            aux_D_u = _nmse(jvp_lap_u, self.D_u)
+            return {"D_u": aux_D_u}
+
+        # mixer_v (idx == 1); Framing A — compound coefficients
+        jvp_lap_v = grads[:, 0]
+        jvp_u = grads[:, 1]
+        jvp_v = grads[:, 2]
+        aux_D_v = _nmse(jvp_lap_v, self.D_v)
+        aux_eps = _nmse(jvp_u, self.eps)
+        aux_eps_a = _nmse(-jvp_v, self.eps * self.a)
+
+        # Residual for eps_b — differentiable version uses features_grad.
+        mixer_output = fast_model.forward_one(1, features_grad)
+        lin_combo = (
+            jvp_lap_v * features_grad[:, 0]
+            + jvp_u * features_grad[:, 1]
+            + jvp_v * features_grad[:, 2]
+        )
+        residual = mixer_output - lin_combo
+        aux_eps_b = _nmse(-residual, self.eps * self.b)
+
+        return {
+            "D_v": aux_D_v,
+            "eps": aux_eps,
+            "eps_a": aux_eps_a,
+            "eps_b": aux_eps_b,
+        }
+
+    def inject_noise_at_source(
+        self,
+        hat_tensors: dict[str, torch.Tensor],
+        noise_level: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Real-space Gaussian noise via Fourier round-trip on u_hat and v_hat."""
+        if noise_level <= 0.0:
+            return hat_tensors
+        u_hat = hat_tensors["u_hat"]
+        v_hat = hat_tensors["v_hat"]
+
+        u_real = torch.fft.ifft2(u_hat).real
+        u_std = u_real.std()
+        u_noise_real = torch.randn(
+            u_real.shape,
+            dtype=u_real.dtype,
+            device=u_hat.device,
+            generator=generator,
+        ) * (noise_level * u_std)
+        u_noise_hat = torch.fft.fft2(u_noise_real.to(dtype=u_hat.dtype))
+
+        v_real = torch.fft.ifft2(v_hat).real
+        v_std = v_real.std()
+        v_noise_real = torch.randn(
+            v_real.shape,
+            dtype=v_real.dtype,
+            device=v_hat.device,
+            generator=generator,
+        ) * (noise_level * v_std)
+        v_noise_hat = torch.fft.fft2(v_noise_real.to(dtype=v_hat.dtype))
+
+        return {"u_hat": u_hat + u_noise_hat, "v_hat": v_hat + v_noise_hat}
 
 
 class LambdaOmegaTask(PDETask):
@@ -793,9 +1147,13 @@ class LambdaOmegaTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Produce structural features and targets for Lambda-Omega.
+
+        Mixer_u library: [u_xx+u_yy, u, u³, u·v², u²·v, v³]
+        Mixer_v library: [v_xx+v_yy, v, u³, u·v², u²·v, v³]
+        Targets: analytical u_t, v_t from the expanded λ-ω RHS.
+        """
         neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
@@ -806,32 +1164,54 @@ class LambdaOmegaTask(PDETask):
             [
                 u_hat,
                 v_hat,
-                ikx * u_hat,
-                iky * u_hat,
-                neg_kx2 * u_hat,
-                neg_ky2 * u_hat,
-                ikx * v_hat,
-                iky * v_hat,
-                neg_kx2 * v_hat,
-                neg_ky2 * v_hat,
+                neg_kx2 * u_hat,  # u_xx
+                neg_ky2 * u_hat,  # u_yy
+                neg_kx2 * v_hat,  # v_xx
+                neg_ky2 * v_hat,  # v_yy
             ],
             dim=0,
-        )  # (10, len(snap_idx_list), nx, ny)
+        )  # (6, n_unique, ny, nx)
 
-        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
+        u, v, u_xx, u_yy, v_xx, v_yy = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
         )
 
-        r2 = u**2 + v**2
-        u_t = self.D_u * (u_xx + u_yy) + self.a * u - (u + self.c * v) * r2
-        v_t = self.D_v * (v_xx + v_yy) + self.a * v + (self.c * u - v) * r2
+        lap_u = u_xx + u_yy
+        lap_v = v_xx + v_yy
+        u3 = u * u * u
+        u_v2 = u * v * v
+        u2_v = u * u * v
+        v3 = v * v * v
 
-        features = torch.stack(
-            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
-        )  # (n_unique, n_pts, 10)
+        mixer_u_features = torch.stack(
+            [lap_u, u, u3, u_v2, u2_v, v3], dim=2
+        )  # (n_unique, n_pts, 6)
+        mixer_v_features = torch.stack(
+            [lap_v, v, u3, u_v2, u2_v, v3], dim=2
+        )  # (n_unique, n_pts, 6)
+
+        # Expanded λ-ω RHS:
+        #   u_t = D_u·∇²u + a·u - u³ - u·v² - c·u²·v - c·v³
+        #   v_t = D_v·∇²v + a·v + c·u³ + c·u·v² - u²·v - v³
+        u_t = (
+            self.D_u * lap_u
+            + self.a * u
+            - u3
+            - u_v2
+            - self.c * u2_v
+            - self.c * v3
+        )
+        v_t = (
+            self.D_v * lap_v
+            + self.a * v
+            + self.c * u3
+            + self.c * u_v2
+            - u2_v
+            - v3
+        )
         targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
-        return features.float(), targets.float()
+        return [mixer_u_features.float(), mixer_v_features.float()], targets.float()
 
     def inject_noise(
         self,
@@ -881,6 +1261,186 @@ class LambdaOmegaTask(PDETask):
             ),
         ]
 
+    # ── Mixer method implementations ─────────────────────────────────
+
+    @property
+    def n_outputs(self) -> int:
+        return 2
+
+    @property
+    def structural_feature_names(self) -> list[list[str]]:
+        return [
+            ["u_xx+u_yy", "u", "u³", "u·v²", "u²·v", "v³"],
+            ["v_xx+v_yy", "v", "u³", "u·v²", "u²·v", "v³"],
+        ]
+
+    def extract_coefficients(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        """Recover λ-ω coefficients via JVP through each mixer.
+
+        mixer_u (idx=0) → {D_u, a_from_u, c_from_u2v, c_from_v3}.
+        mixer_v (idx=1) → {D_v, a_from_v, c_from_u3, c_from_uv2}.
+        """
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Lambda-Omega has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=False,
+            retain_graph=False,
+        )[0].detach()  # (N, 6)
+
+        if mixer_idx == 0:
+            # Library: [lap_u, u, u³, u·v², u²·v, v³]
+            # Weights: (D_u, +a, -1, -1, -c, -c)
+            jvp_lap_u = grads[:, 0]
+            jvp_u = grads[:, 1]
+            jvp_u2v = grads[:, 4]  # ≈ -c
+            jvp_v3 = grads[:, 5]   # ≈ -c
+            D_u_mean = jvp_lap_u.mean()
+            D_u_std = jvp_lap_u.std()
+            a_mean = jvp_u.mean()
+            a_std = jvp_u.std()
+            c_u2v_vals = -jvp_u2v
+            c_u2v_mean = c_u2v_vals.mean()
+            c_u2v_std = jvp_u2v.std()
+            c_v3_vals = -jvp_v3
+            c_v3_mean = c_v3_vals.mean()
+            c_v3_std = jvp_v3.std()
+            return {
+                "D_u": {"mean": D_u_mean, "std": D_u_std},
+                "a_from_u": {"mean": a_mean, "std": a_std},
+                "c_from_u2v": {"mean": c_u2v_mean, "std": c_u2v_std},
+                "c_from_v3": {"mean": c_v3_mean, "std": c_v3_std},
+            }
+
+        # mixer_v (idx == 1)
+        # Library: [lap_v, v, u³, u·v², u²·v, v³]
+        # Weights: (D_v, +a, +c, +c, -1, -1)
+        jvp_lap_v = grads[:, 0]
+        jvp_v = grads[:, 1]
+        jvp_u3 = grads[:, 2]   # ≈ +c
+        jvp_uv2 = grads[:, 3]  # ≈ +c
+        D_v_mean = jvp_lap_v.mean()
+        D_v_std = jvp_lap_v.std()
+        a_mean = jvp_v.mean()
+        a_std = jvp_v.std()
+        c_u3_mean = jvp_u3.mean()
+        c_u3_std = jvp_u3.std()
+        c_uv2_mean = jvp_uv2.mean()
+        c_uv2_std = jvp_uv2.std()
+        return {
+            "D_v": {"mean": D_v_mean, "std": D_v_std},
+            "a_from_v": {"mean": a_mean, "std": a_std},
+            "c_from_u3": {"mean": c_u3_mean, "std": c_u3_std},
+            "c_from_uv2": {"mean": c_uv2_mean, "std": c_uv2_std},
+        }
+
+    def auxiliary_losses(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Differentiable nMSE aux losses against ground-truth λ-ω coefficients."""
+        del targets  # unused; aux targets come from self.{D_u,D_v,a,c}
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Lambda-Omega has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=True,
+            retain_graph=True,
+        )[0]  # (N, 6)
+
+        def _nmse(quantity: torch.Tensor, target_value: float) -> torch.Tensor:
+            target_per_point = torch.full_like(quantity, target_value)
+            diff = quantity - target_per_point
+            mse = (diff * diff).mean()
+            denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+            return mse / denom
+
+        if mixer_idx == 0:
+            jvp_lap_u = grads[:, 0]
+            jvp_u = grads[:, 1]
+            jvp_u2v = grads[:, 4]
+            jvp_v3 = grads[:, 5]
+            aux_D_u = _nmse(jvp_lap_u, self.D_u)
+            aux_a_from_u = _nmse(jvp_u, self.a)
+            aux_c_from_u2v = _nmse(-jvp_u2v, self.c)
+            aux_c_from_v3 = _nmse(-jvp_v3, self.c)
+            return {
+                "D_u": aux_D_u,
+                "a_from_u": aux_a_from_u,
+                "c_from_u2v": aux_c_from_u2v,
+                "c_from_v3": aux_c_from_v3,
+            }
+
+        # mixer_v (idx == 1)
+        jvp_lap_v = grads[:, 0]
+        jvp_v = grads[:, 1]
+        jvp_u3 = grads[:, 2]
+        jvp_uv2 = grads[:, 3]
+        aux_D_v = _nmse(jvp_lap_v, self.D_v)
+        aux_a_from_v = _nmse(jvp_v, self.a)
+        aux_c_from_u3 = _nmse(jvp_u3, self.c)
+        aux_c_from_uv2 = _nmse(jvp_uv2, self.c)
+        return {
+            "D_v": aux_D_v,
+            "a_from_v": aux_a_from_v,
+            "c_from_u3": aux_c_from_u3,
+            "c_from_uv2": aux_c_from_uv2,
+        }
+
+    def inject_noise_at_source(
+        self,
+        hat_tensors: dict[str, torch.Tensor],
+        noise_level: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Real-space Gaussian noise via Fourier round-trip on u_hat and v_hat."""
+        if noise_level <= 0.0:
+            return hat_tensors
+        u_hat = hat_tensors["u_hat"]
+        v_hat = hat_tensors["v_hat"]
+
+        u_real = torch.fft.ifft2(u_hat).real
+        u_std = u_real.std()
+        u_noise_real = torch.randn(
+            u_real.shape,
+            dtype=u_real.dtype,
+            device=u_hat.device,
+            generator=generator,
+        ) * (noise_level * u_std)
+        u_noise_hat = torch.fft.fft2(u_noise_real.to(dtype=u_hat.dtype))
+
+        v_real = torch.fft.ifft2(v_hat).real
+        v_std = v_real.std()
+        v_noise_real = torch.randn(
+            v_real.shape,
+            dtype=v_real.dtype,
+            device=v_hat.device,
+            generator=generator,
+        ) * (noise_level * v_std)
+        v_noise_hat = torch.fft.fft2(v_noise_real.to(dtype=v_hat.dtype))
+
+        return {"u_hat": u_hat + u_noise_hat, "v_hat": v_hat + v_noise_hat}
+
 
 class NavierStokesTask(PDETask):
     """
@@ -911,48 +1471,51 @@ class NavierStokesTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Produce structural features and targets for NS via the vorticity form.
+
+        Library: [u·ω_x + v·ω_y, ω_xx+ω_yy] for the single mixer.
+        Target:  ω_t = -(u·ω_x + v·ω_y) + nu·(ω_xx+ω_yy).
+        """
         ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
         iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
         neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
+        neg_kx2_plus_ky2 = neg_kx2 + neg_ky2  # (ny, nx)
 
         u_hat = self.u_hat[snap_idx_list].to(device=self.device)
         v_hat = self.v_hat[snap_idx_list].to(device=self.device)
-        p_hat = self.p_hat[snap_idx_list].to(device=self.device)
+
+        omega_hat = ikx * v_hat - iky * u_hat
+        omega_x_hat = ikx * omega_hat
+        omega_y_hat = iky * omega_hat
+        lap_omega_hat = neg_kx2_plus_ky2 * omega_hat
 
         coeff_batch = torch.stack(
             [
                 u_hat,
                 v_hat,
-                ikx * u_hat,
-                iky * u_hat,
-                neg_kx2 * u_hat,
-                neg_ky2 * u_hat,
-                ikx * v_hat,
-                iky * v_hat,
-                neg_kx2 * v_hat,
-                neg_ky2 * v_hat,
-                ikx * p_hat,
-                iky * p_hat,
+                omega_x_hat,
+                omega_y_hat,
+                lap_omega_hat,
             ],
             dim=0,
-        )  # (12, len(snap_idx_list), nx, ny)
+        )  # (5, n_unique, ny, nx)
 
-        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy, p_x, p_y = fourier_eval_2d(
+        u, v, omega_x, omega_y, lap_omega = fourier_eval_2d(
             coeff_batch, E_x, E_y, self.device
         )
 
-        # NS momentum equation
-        u_t = -(u * u_x + v * u_y) - p_x + self.nu * (u_xx + u_yy)
-        v_t = -(u * v_x + v * v_y) - p_y + self.nu * (v_xx + v_yy)
+        advection = u * omega_x + v * omega_y  # (n_unique, n_pts)
 
-        features = torch.stack(
-            [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy], dim=2
-        )  # (n_unique, n_pts, 10)
-        targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
+        mixer_0_features = torch.stack(
+            [advection, lap_omega], dim=2
+        )  # (n_unique, n_pts, 2)
 
-        return features.float(), targets.float()
+        omega_t = -advection + self.nu * lap_omega
+        targets = torch.stack([omega_t], dim=2)  # (n_unique, n_pts, 1)
+
+        return [mixer_0_features.float()], targets.float()
 
     def inject_noise(
         self,
@@ -1014,6 +1577,109 @@ class NavierStokesTask(PDETask):
             ),
         ]
 
+    # ── Mixer method implementations ─────────────────────────────────
+
+    @property
+    def n_outputs(self) -> int:
+        return 1
+
+    @property
+    def structural_feature_names(self) -> list[list[str]]:
+        return [["u·ω_x+v·ω_y", "ω_xx+ω_yy"]]
+
+    def extract_coefficients(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        """Recover nu via the direct partial wrt the vorticity Laplacian column.
+
+        The mixer ideally learns `f(a, b) ≈ -a + nu·b` where a is the
+        advection composite and b = ω_xx+ω_yy. Then ∂f/∂b = nu pointwise.
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NS has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=False,
+            retain_graph=False,
+        )[0]  # (N, 2)
+        jvp_lap_omega = grads[:, 1].detach()
+        nu_mean = jvp_lap_omega.mean()
+        nu_std = jvp_lap_omega.std()
+        return {"nu": {"mean": nu_mean, "std": nu_std}}
+
+    def auxiliary_losses(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Form 1 per-point JVP target for nu.
+
+        Pushes ∂(mixer)/∂(ω_xx+ω_yy) toward task.nu at every collocation
+        point. Differentiable via create_graph=True on the autograd.grad call.
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NS has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=True,
+            retain_graph=True,
+        )[0]  # (N, 2)
+        jvp_lap_omega = grads[:, 1]  # (N,)
+        target_per_point = torch.full_like(jvp_lap_omega, float(self.nu))
+        diff = jvp_lap_omega - target_per_point
+        mse = (diff * diff).mean()
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        aux_nu = mse / denom
+        return {"nu": aux_nu}
+
+    def inject_noise_at_source(
+        self,
+        hat_tensors: dict[str, torch.Tensor],
+        noise_level: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Inject real-space Gaussian noise into u and v via the Fourier round-trip.
+
+        p_hat is legacy under the vorticity formulation and is passed through
+        unchanged if present.
+        """
+        if noise_level <= 0.0:
+            return hat_tensors
+        out: dict[str, torch.Tensor] = {}
+        for key in ("u_hat", "v_hat"):
+            if key not in hat_tensors:
+                continue
+            hat = hat_tensors[key]
+            real = torch.fft.ifft2(hat).real
+            std = real.std()
+            noise_real = torch.randn(
+                real.shape,
+                dtype=real.dtype,
+                device=hat.device,
+                generator=generator,
+            ) * (noise_level * std)
+            noise_hat = torch.fft.fft2(noise_real.to(dtype=hat.dtype))
+            out[key] = hat + noise_hat
+        for k, v in hat_tensors.items():
+            if k not in out:
+                out[k] = v
+        return out
+
 
 class HeatEquationTask(PDETask):
     """
@@ -1048,9 +1714,14 @@ class HeatEquationTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        ikx = 1j * self.kx.unsqueeze(0)  # (1, nx)
-        iky = 1j * self.ky.unsqueeze(1)  # (ny, 1)
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Produce structural features and targets for Heat.
+
+        Library: [u_xx, u_yy] for the single mixer — two primitives
+        rather than the pre-summed Laplacian. The mixer learns that both
+        should have weight D, giving two recovery paths for D.
+        Target:  u_t = D * (u_xx + u_yy) (analytical).
+        """
         neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)  # (1, nx)
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
@@ -1058,23 +1729,21 @@ class HeatEquationTask(PDETask):
 
         coeff_batch = torch.stack(
             [
-                u_hat,
-                ikx * u_hat,
-                iky * u_hat,
-                neg_kx2 * u_hat,
-                neg_ky2 * u_hat,
+                neg_kx2 * u_hat,  # u_xx
+                neg_ky2 * u_hat,  # u_yy
             ],
             dim=0,
-        )  # (5, len(snap_idx_list), nx, ny)
+        )  # (2, n_unique, ny, nx)
 
-        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
+        u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
+
+        # Structural features for the single Heat mixer: [u_xx, u_yy]
+        mixer_0_features = torch.stack([u_xx, u_yy], dim=2)  # (n_unique, n_pts, 2)
 
         u_t = self.D * (u_xx + u_yy)
-
-        features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2)  # (n_unique, n_pts, 5)
         targets = torch.stack([u_t], dim=2)  # (n_unique, n_pts, 1)
 
-        return features.float(), targets.float()
+        return [mixer_0_features.float()], targets.float()
 
     def inject_noise(
         self,
@@ -1083,6 +1752,7 @@ class HeatEquationTask(PDETask):
         noise_level: float,
         generator: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Legacy post-feature noise injection (scheduled for deletion in M5)."""
         feat_std = features.std(dim=0, keepdim=True)
         noise = torch.randn(
             features.shape,
@@ -1091,17 +1761,109 @@ class HeatEquationTask(PDETask):
             generator=generator,
         ) * (noise_level * feat_std)
         features = features + noise
-
-        # Recompute targets from noisy features
-        u_xx, u_yy = features[:, 3], features[:, 4]
-        u_t = self.D * (u_xx + u_yy)
-        targets = u_t.unsqueeze(1)
-
         return features, targets
 
     @property
     def diffusion_coeffs(self) -> dict:
         return {"D": self.D}
+
+    # ── Mixer method implementations ─────────────────────────────────
+
+    @property
+    def n_outputs(self) -> int:
+        return 1
+
+    @property
+    def structural_feature_names(self) -> list[list[str]]:
+        return [["u_xx", "u_yy"]]
+
+    def extract_coefficients(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, torch.Tensor]]:
+        """Recover D from both feature columns (two independent paths).
+
+        The mixer ideally learns `f(a, b) ≈ D·(a + b)`. Both partials
+        ∂f/∂a and ∂f/∂b should equal D. We report both means separately
+        as `D_from_uxx` and `D_from_uyy` — they serve as a cross-check
+        on whether the mixer learned symmetric weights on the two
+        Laplacian components.
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"Heat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)  # (N,)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=False,
+            retain_graph=False,
+        )[0]  # (N, 2)
+        jvp_uxx = grads[:, 0].detach()  # ≈ D per point
+        jvp_uyy = grads[:, 1].detach()  # ≈ D per point
+        return {
+            "D_from_uxx": {"mean": jvp_uxx.mean().detach(), "std": jvp_uxx.std().detach()},
+            "D_from_uyy": {"mean": jvp_uyy.mean().detach(), "std": jvp_uyy.std().detach()},
+        }
+
+    def auxiliary_losses(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Push both ∂f/∂u_xx and ∂f/∂u_yy toward D at every point.
+
+        Two aux losses (one per recovery path) — enforces that the
+        mixer learns symmetric weights on the Laplacian components.
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"Heat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(),
+            features_grad,
+            create_graph=True,
+            retain_graph=True,
+        )[0]  # (N, 2)
+        jvp_uxx = grads[:, 0]
+        jvp_uyy = grads[:, 1]
+        target_per_point = torch.full_like(jvp_uxx, self.D)
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        diff_uxx = jvp_uxx - target_per_point
+        diff_uyy = jvp_uyy - target_per_point
+        aux_D_uxx = (diff_uxx * diff_uxx).mean() / denom
+        aux_D_uyy = (diff_uyy * diff_uyy).mean() / denom
+        return {"D_from_uxx": aux_D_uxx, "D_from_uyy": aux_D_uyy}
+
+    def inject_noise_at_source(
+        self,
+        hat_tensors: dict[str, torch.Tensor],
+        noise_level: float,
+        generator: Optional[torch.Generator] = None,
+    ) -> dict[str, torch.Tensor]:
+        """Real-space Gaussian noise via Fourier round-trip (same pattern as NLHeat)."""
+        if noise_level <= 0.0:
+            return hat_tensors
+        u_hat = hat_tensors["u_hat"]
+        u_real = torch.fft.ifft2(u_hat).real
+        u_std = u_real.std()
+        noise_real = torch.randn(
+            u_real.shape,
+            dtype=u_real.dtype,
+            device=u_hat.device,
+            generator=generator,
+        ) * (noise_level * u_std)
+        noise_hat = torch.fft.fft2(noise_real.to(dtype=u_hat.dtype))
+        return {"u_hat": u_hat + noise_hat}
 
     @property
     def rhs_feature_mask(self) -> list[bool]:
