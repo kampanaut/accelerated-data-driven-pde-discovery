@@ -482,6 +482,7 @@ class MixerNetwork(nn.Module):
         self,
         mixer_configs: list[NetworkConfig],
         aux_loss_names_per_mixer: list[list[str]] | None = None,
+        aux_losses_enabled: bool = False,
     ):
         super().__init__()
         if aux_loss_names_per_mixer is None:
@@ -494,6 +495,7 @@ class MixerNetwork(nn.Module):
 
         self.n_outputs = len(mixer_configs)
         self.mixer_configs = mixer_configs
+        self.aux_losses_enabled = aux_losses_enabled
 
         # Per-output mixers as a ModuleList. Each mixer has output_dim=1
         # (each composite output is one scalar field).
@@ -509,18 +511,23 @@ class MixerNetwork(nn.Module):
                     f"expected 1 (each composite mixer produces one scalar)"
                 )
 
-        # Kendall uncertainty log-variances. One `mse` per mixer plus one
-        # per aux loss term. All initialized to log(1) = 0 (σ² = 1, weight = 1).
+        # Kendall uncertainty log-variances — ONLY registered when aux losses
+        # are enabled. Under aux-off mode they're never read, so registering
+        # them as nn.Parameters would leave them "unused" in the loss graph
+        # and force every autograd.grad call to pass allow_unused=True.
+        # Conditional registration keeps the autograd path strict.
         self.log_variances = nn.ParameterDict()
-        for i in range(self.n_outputs):
-            self.log_variances[f"mse_{i}"] = nn.Parameter(torch.zeros(()))
-            for name in aux_loss_names_per_mixer[i]:
-                self.log_variances[f"aux_{i}_{name}"] = nn.Parameter(torch.zeros(()))
+        if aux_losses_enabled:
+            for i in range(self.n_outputs):
+                self.log_variances[f"mse_{i}"] = nn.Parameter(torch.zeros(()))
+                for name in aux_loss_names_per_mixer[i]:
+                    self.log_variances[f"aux_{i}_{name}"] = nn.Parameter(torch.zeros(()))
 
     @classmethod
     def from_task(
         cls,
         task: Any,
+        aux_losses_enabled: bool = False,
         **network_config: Any,
     ) -> "MixerNetwork":
         """Build a MixerNetwork that's auto-sized to a PDETask.
@@ -581,6 +588,7 @@ class MixerNetwork(nn.Module):
         return cls(
             mixer_configs=mixer_configs,
             aux_loss_names_per_mixer=aux_names,
+            aux_losses_enabled=aux_losses_enabled,
         )
 
     @property
@@ -678,6 +686,93 @@ class MixerNetwork(nn.Module):
                 f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
             )
         return self._typed_mixers[mixer_idx].adaptive_scale_parameters(mode)
+
+    def mixer_outer_params(self, mixer_idx: int) -> list[nn.Parameter]:
+        """Full parameter slice the outer optimizer owns for mixer `mixer_idx`.
+
+        Equal to `mixer_parameters(idx) + mixer_log_variance_parameters(idx)`.
+        This is the partition unit used by the per-mixer outer optimizer,
+        the HVP input set, the query-gradient input set, the proximal target
+        snapshot, and the meta-gradient writeback — every outer-loop
+        computation that "belongs to" one mixer operates over this list.
+
+        The union over all mixers equals `list(self.parameters())` exactly.
+        """
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        return (
+            self.mixer_parameters(mixer_idx)
+            + self.mixer_log_variance_parameters(mixer_idx)
+        )
+
+    def mixer_log_variance_parameters(self, mixer_idx: int) -> list[nn.Parameter]:
+        """Kendall log-variance parameters belonging to a single mixer.
+
+        Returns the log-variances whose keys match `mse_{idx}` or
+        `aux_{idx}_*` — all the Kendall meta-parameters that enter
+        mixer `idx`'s loss contribution. Used to build the per-mixer
+        outer optimizer in the split (two-head) path so each Adam owns
+        exactly the log-variances for its own mixer.
+
+        Returns an empty list when aux losses are disabled (the
+        composite's `log_variances` ParameterDict is empty under
+        that mode by construction).
+        """
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        mse_key = f"mse_{mixer_idx}"
+        aux_prefix = f"aux_{mixer_idx}_"
+        out: list[nn.Parameter] = []
+        for name, param in self.log_variances.items():
+            if name == mse_key or name.startswith(aux_prefix):
+                out.append(param)
+        return out
+
+    def mixer_inner_params(
+        self, mixer_idx: int, anil_mode: str
+    ) -> list[nn.Parameter]:
+        """Inner-adapted parameters for one mixer under the given ANIL mode.
+
+        Per-mixer counterpart to the trainer's composite _inner_params_*
+        helpers. Used by split L-BFGS in the two-head branch so each
+        mixer's inner optimizer only sees its own parameters.
+
+        Semantics per mode (matching the composite-level helpers):
+          - "all":              body + head + any N-LAAF scales on this mixer
+          - "head":             last-layer parameters only
+          - "head+scales_all":  head + every N-LAAF scale on this mixer
+          - "head+scales_last": head + last-layer N-LAAF scales only
+
+        Kendall log-variances live on `self.log_variances` at the composite
+        level, not inside individual mixers, so `mixer_parameters(idx)` is
+        already log-variance-free — no filtering needed here.
+        """
+        if mixer_idx < 0 or mixer_idx >= self.n_outputs:
+            raise ValueError(
+                f"mixer_idx must be in [0, {self.n_outputs}), got {mixer_idx}"
+            )
+        if anil_mode == "all":
+            return self.mixer_parameters(mixer_idx)
+        if anil_mode == "head":
+            return self.mixer_head_parameters(mixer_idx)
+        if anil_mode == "head+scales_all":
+            return (
+                self.mixer_head_parameters(mixer_idx)
+                + self.mixer_adaptive_scale_parameters(mixer_idx, "all")
+            )
+        if anil_mode == "head+scales_last":
+            return (
+                self.mixer_head_parameters(mixer_idx)
+                + self.mixer_adaptive_scale_parameters(mixer_idx, "last")
+            )
+        raise ValueError(
+            f"Unknown anil_mode={anil_mode!r}. "
+            f"Expected one of: 'all', 'head', 'head+scales_all', 'head+scales_last'."
+        )
 
     def slope_recovery(self) -> torch.Tensor:
         """Sum of per-mixer N-LAAF slope-recovery terms (joint-loss path).

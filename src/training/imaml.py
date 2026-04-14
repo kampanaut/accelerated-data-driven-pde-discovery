@@ -132,13 +132,18 @@ class iMAMLTrainer:
 
         # iMAML config
         im = t.imaml
-        self.lam = torch.tensor(im.lam, device=self.device, dtype=torch.float32)
+        n_outputs: int = model.n_outputs  # type: ignore[attr-defined]
+        # Per-mixer lambda — all initialized to the same value, but they
+        # diverge independently when lam_lr > 0 (lambda meta-learning).
+        self.lam: List[torch.Tensor] = [
+            torch.tensor(im.lam, device=self.device, dtype=torch.float32)
+            for _ in range(n_outputs)
+        ]
         self.lam_lr = im.lam_lr
         self.lam_min = im.lam_min
         self.cg_steps = im.cg_steps
         self.cg_damping = im.cg_damping
         self.slope_recovery_inner = im.slope_recovery_inner
-        self.slope_recovery_outer = im.slope_recovery_outer
 
         # Mixer method: Kendall-weighted aux losses (M4a+)
         self.aux_losses_enabled: bool = t.aux_losses_enabled
@@ -255,107 +260,130 @@ class iMAMLTrainer:
 
 
     def _reset_for_epoch(self) -> None:
-        """Reset optimizer + scheduler for a new epoch. Model weights unchanged."""
+        """Reset per-mixer optimizers + schedulers for a new epoch. Model weights unchanged.
+
+        Every field is a list of length `n_outputs`. For a 1-output PDE the
+        lists are length 1 and behavior matches the legacy one-head path.
+        For 2-output PDEs each mixer owns an independent optimizer and
+        scheduler over its own parameter slice (body + head + its own
+        Kendall log-variances), with no shared state across mixers.
+        """
         t = self.config
-        opt_params = list(self.model.parameters())
-        self._opt_params = opt_params
         im = t.imaml
+        n_outputs: int = self.model.n_outputs  # type: ignore[attr-defined]
+
+        # Per-mixer parameter lists. Partition is exact and disjoint:
+        # union(mixer_parameters(i) + mixer_log_variance_parameters(i))
+        # == list(self.model.parameters()).
+        self._opt_params_list: List[List[nn.Parameter]] = []
+        for i in range(n_outputs):
+            params_i = (
+                self.model.mixer_parameters(i)  # type: ignore[attr-defined]
+                + self.model.mixer_log_variance_parameters(i)  # type: ignore[attr-defined]
+            )
+            self._opt_params_list.append(params_i)
+
+        # Build per-mixer outer optimizers. All mixers get the same
+        # optimizer type (Adam/LBFGS/adam+lbfgs) — the branch picks the
+        # type once, then instantiates `n_outputs` copies.
+        self.outer_opts: List[torch.optim.Optimizer] = []
         if im.outer_optimizer == "lbfgs":
-            self.outer_opt = torch.optim.LBFGS(
-                opt_params, lr=1.0, max_iter=1, max_eval=20,
-                tolerance_grad=1e-15, tolerance_change=1e-15,
-                line_search_fn="strong_wolfe",
-            )
+            for params_i in self._opt_params_list:
+                self.outer_opts.append(torch.optim.LBFGS(
+                    params_i, lr=1.0, max_iter=1, max_eval=20,
+                    tolerance_grad=1e-15, tolerance_change=1e-15,
+                    line_search_fn="strong_wolfe",
+                ))
             self._outer_step = self._outer_step_lbfgs
-            print(f"  Outer optimizer: L-BFGS (no LR, no scheduler needed)")
+            print(f"  Outer optimizer: {n_outputs}× L-BFGS (no LR, no scheduler needed)")
         elif im.outer_optimizer == "adam+lbfgs":
-            # Phase 1: Adam. Phase 2: L-BFGS (switched in train())
-            self.outer_opt = torch.optim.Adam(
-                opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
-            )
+            for params_i in self._opt_params_list:
+                self.outer_opts.append(torch.optim.Adam(
+                    params_i, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
+                ))
             self._outer_step = self._outer_step_adam
             self._outer_lbfgs_after = im.outer_lbfgs_after
-            print(f"  Outer optimizer: Adam → L-BFGS after iter {im.outer_lbfgs_after}")
+            print(f"  Outer optimizer: {n_outputs}× Adam → {n_outputs}× L-BFGS after iter {im.outer_lbfgs_after}")
         else:
-            self.outer_opt = torch.optim.Adam(
-                opt_params, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
-            )  # eps=1e-3 matches reference (aravindr93/imaml_dev, learner_model.py:17)
+            for params_i in self._opt_params_list:
+                self.outer_opts.append(torch.optim.Adam(
+                    params_i, lr=t.outer_lr, betas=tuple(t.adam_betas), eps=1e-3,
+                ))  # eps=1e-3 matches reference (aravindr93/imaml_dev, learner_model.py:17)
             self._outer_step = self._outer_step_adam
+            print(f"  Outer optimizer: {n_outputs}× Adam")
 
-        # LR scheduler: optional warmup → cosine decay (single or warm restarts)
-        self.scheduler = None
-        if t.use_scheduler or t.warmup_iterations > 0:
-            schedulers = []
-            milestones = []
+        # LR scheduler per optimizer. Each mixer gets its own scheduler
+        # chain so phase transitions (warmup, cosine, plateau, etc.) are
+        # independent across mixers.
+        self.schedulers: List[Optional[torch.optim.lr_scheduler.LRScheduler]] = [None] * n_outputs
+        if t.has_scheduler:
+            for i, opt_i in enumerate(self.outer_opts):
+                self.schedulers[i] = self._build_scheduler_for(opt_i)
 
-            # Phase 1: linear warmup
-            if t.warmup_iterations > 0:
-                warmup = torch.optim.lr_scheduler.LinearLR(
-                    self.outer_opt,
-                    start_factor=1.0 / t.warmup_iterations,
-                    end_factor=1.0,
-                    total_iters=t.warmup_iterations,
-                )
-                schedulers.append(warmup)
-                milestones.append(t.warmup_iterations)
-
-            # Phase 2: cosine decay
-            if t.use_scheduler:
-                post_warmup_iters = (
-                    t.max_iterations - t.warmup_iterations
-                )
-                if t.scheduler_type == "warm_restarts":
-                    decay = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-                        self.outer_opt,
-                        T_0=t.T_0,
-                        T_mult=t.T_mult,
-                        eta_min=t.min_lr,
-                    )
-                elif t.scheduler_type == "exponential":
-                    # gamma from min_lr: min_lr = outer_lr * gamma^max_iters
-                    # gamma = (min_lr / outer_lr) ^ (1 / max_iters)
-                    gamma = (t.min_lr / t.outer_lr) ** (1.0 / post_warmup_iters)
-                    decay = torch.optim.lr_scheduler.ExponentialLR(
-                        self.outer_opt,
-                        gamma=gamma,
-                    )
-                elif t.scheduler_type == "polynomial":
-                    decay = torch.optim.lr_scheduler.PolynomialLR(
-                        self.outer_opt,
-                        total_iters=post_warmup_iters,
-                        power=t.poly_power,
-                    )
-                elif t.scheduler_type == "plateau":
-                    decay = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                        self.outer_opt,
-                        mode="min",
-                        factor=t.plateau_factor,
-                        patience=t.plateau_patience,
-                        threshold=t.plateau_threshold,
-                        cooldown=t.plateau_cooldown,
-                        min_lr=t.min_lr,
-                    )
-                else:
-                    decay = torch.optim.lr_scheduler.CosineAnnealingLR(
-                        self.outer_opt,
-                        T_max=post_warmup_iters,
-                        eta_min=t.min_lr,
-                    )
-                schedulers.append(decay)
-
-            # Chain them
-            if len(schedulers) > 1:
-                self.scheduler = torch.optim.lr_scheduler.SequentialLR(
-                    self.outer_opt,
-                    schedulers=schedulers,
-                    milestones=milestones,
-                )
-            elif schedulers:
-                self.scheduler = schedulers[0]
-
-        # Plateau scheduler state
+        # Plateau scheduler state (shared across all mixers — same task-loss signal)
         self._plateau_mode = (t.use_scheduler and t.scheduler_type == "plateau")
         self._loss_window: List[float] = []
+
+    def _build_scheduler_for(
+        self, optimizer: torch.optim.Optimizer
+    ) -> Optional[torch.optim.lr_scheduler.LRScheduler]:
+        """Build one scheduler chain (warmup → decay) for a single optimizer.
+
+        Mirrors the legacy single-optimizer scheduler construction; the
+        only change is that each mixer's optimizer gets its own chain.
+        """
+        t = self.config
+        schedulers: List[torch.optim.lr_scheduler.LRScheduler] = []
+        milestones: List[int] = []
+
+        # Phase 1: linear warmup
+        if t.warmup_iterations > 0:
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                optimizer,
+                start_factor=1.0 / t.warmup_iterations,
+                end_factor=1.0,
+                total_iters=t.warmup_iterations,
+            )
+            schedulers.append(warmup)
+            milestones.append(t.warmup_iterations)
+
+        # Phase 2: decay
+        if t.use_scheduler:
+            post_warmup_iters = t.max_iterations - t.warmup_iterations
+            if t.scheduler_type == "warm_restarts":
+                decay = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+                    optimizer, T_0=t.T_0, T_mult=t.T_mult, eta_min=t.min_lr,
+                )
+            elif t.scheduler_type == "exponential":
+                gamma = (t.min_lr / t.outer_lr) ** (1.0 / post_warmup_iters)
+                decay = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+            elif t.scheduler_type == "polynomial":
+                decay = torch.optim.lr_scheduler.PolynomialLR(
+                    optimizer, total_iters=post_warmup_iters, power=t.poly_power,
+                )
+            elif t.scheduler_type == "plateau":
+                decay = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                    optimizer,
+                    mode="min",
+                    factor=t.plateau_factor,
+                    patience=t.plateau_patience,
+                    threshold=t.plateau_threshold,
+                    cooldown=t.plateau_cooldown,
+                    min_lr=t.min_lr,
+                )
+            else:
+                decay = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer, T_max=post_warmup_iters, eta_min=t.min_lr,
+                )
+            schedulers.append(decay)  # type: ignore[arg-type]
+
+        if len(schedulers) > 1:
+            return torch.optim.lr_scheduler.SequentialLR(
+                optimizer, schedulers=schedulers, milestones=milestones,
+            )
+        if schedulers:
+            return schedulers[0]
+        return None
 
     # ------------------------------------------------------------------
     # Cost function: pointwise MSE + optional spectral loss
@@ -413,48 +441,61 @@ class iMAMLTrainer:
             return set()
         return {id(p) for p in log_vars.parameters()}
 
-    def _inner_params_all(self, model: nn.Module) -> List[nn.Parameter]:
-        """All model params EXCLUDING Kendall log-variances.
+    def _concat_mixer_inner_params(
+        self, model: nn.Module, anil_mode: str
+    ) -> List[nn.Parameter]:
+        """Concatenate `mixer_inner_params(i, mode)` across all mixers.
 
-        With ANIL off, the inner loop adapts body + head + (N-LAAF scales
-        if present), but never the Kendall log-variances.
+        Thin wrapper over the composite's per-mixer getter. The union
+        equals the composite's inner-adapted set for that ANIL mode with
+        Kendall log-variances excluded by construction (log-variances
+        live on the composite, not inside individual mixers).
         """
-        log_var_ids = self._kendall_param_ids(model)
-        return [p for p in model.parameters() if id(p) not in log_var_ids]
+        n_outputs: int = getattr(model, "n_outputs", 1)
+        params: List[nn.Parameter] = []
+        for i in range(n_outputs):
+            params.extend(model.mixer_inner_params(i, anil_mode))  # type: ignore[attr-defined]
+        return params
+
+    def _inner_params_all(self, model: nn.Module) -> List[nn.Parameter]:
+        return self._concat_mixer_inner_params(model, "all")
 
     def _inner_params_head(self, model: nn.Module) -> List[nn.Parameter]:
-        # head_parameters() on MixerNetwork already excludes log-variances
-        # and on legacy PDEOperatorNetwork there are no log-variances.
-        return list(model.head_parameters())  # type: ignore[attr-defined]
+        return self._concat_mixer_inner_params(model, "head")
 
     def _inner_params_head_scales_all(self, model: nn.Module) -> List[nn.Parameter]:
-        log_var_ids = self._kendall_param_ids(model)
-        head = list(model.head_parameters())  # type: ignore[attr-defined]
-        scales = list(model.adaptive_scale_parameters("all"))  # type: ignore[attr-defined]
-        return [p for p in head + scales if id(p) not in log_var_ids]
+        return self._concat_mixer_inner_params(model, "head+scales_all")
 
     def _inner_params_head_scales_last(self, model: nn.Module) -> List[nn.Parameter]:
-        log_var_ids = self._kendall_param_ids(model)
-        head = list(model.head_parameters())  # type: ignore[attr-defined]
-        scales = list(model.adaptive_scale_parameters("last"))  # type: ignore[attr-defined]
-        return [p for p in head + scales if id(p) not in log_var_ids]
+        return self._concat_mixer_inner_params(model, "head+scales_last")
 
-    def _get_flat_params(self, model: nn.Module) -> torch.Tensor:
-        """Return flattened parameter vector (detached clone)."""
-        return torch.cat([p.data.view(-1) for p in model.parameters()]).clone()
+    def _get_flat_params(self, params: List[nn.Parameter]) -> torch.Tensor:
+        """Return a flattened, detached-clone view of the given parameter list."""
+        return torch.cat([p.data.view(-1) for p in params]).clone()
 
-    def _set_flat_params(self, model: nn.Module, flat: torch.Tensor) -> None:
-        """Write flattened vector back into model parameters."""
+    def _set_flat_params(
+        self, params: List[nn.Parameter], flat: torch.Tensor
+    ) -> None:
+        """Write a flattened vector back into the given parameter list."""
         offset = 0
-        for p in model.parameters():
-            p.data.copy_(flat[offset:offset + p.nelement()].view(p.size()))
-            offset += p.nelement()
+        for p in params:
+            n = p.nelement()
+            p.data.copy_(flat[offset:offset + n].view(p.size()))
+            offset += n
 
     def _regularization_loss(
-        self, model: nn.Module, theta: torch.Tensor, lam: torch.Tensor
+        self,
+        params: List[nn.Parameter],
+        theta: torch.Tensor,
+        lam: torch.Tensor,
     ) -> torch.Tensor:
-        """Proximal term: λ/2 ||φ - θ||² (Eq. 3 in Rajeswaran et al. 2019)."""
-        phi = torch.cat([p.view(-1) for p in model.parameters()])
+        """Proximal term: λ/2 ||φ - θ||² (Eq. 3 in Rajeswaran et al. 2019).
+
+        Operates on a parameter list, not a model, so per-mixer inner loops
+        can pass only their own mixer's full slice. `theta` must be a flat
+        vector sized to match the concatenated `params`.
+        """
+        phi = torch.cat([p.view(-1) for p in params])
         return 0.5 * lam * (phi - theta).pow(2).sum()
 
     def _kendall_total_loss(
@@ -481,7 +522,10 @@ class iMAMLTrainer:
         path on the query loss.
         """
         pred = fast_model.forward_one(mixer_idx, features)  # type: ignore[attr-defined]
-        mse = self.cost_function(pred, targets, coords)
+        # `targets` is the full stacked tensor of shape (N, n_outputs);
+        # slice mixer_idx's column to match `pred`'s (N,) shape.
+        target_i = targets[:, mixer_idx]
+        mse = self.cost_function(pred, target_i, coords)
 
         if not self.aux_losses_enabled:
             return mse
@@ -520,7 +564,10 @@ class iMAMLTrainer:
     def _inner_solve_sgd(
         self,
         fast_model: nn.Module,
+        mixer_idx: int,
+        mixer_outer_params: List[nn.Parameter],
         theta: torch.Tensor,
+        lam: torch.Tensor,
         support_x: torch.Tensor,
         support_y: torch.Tensor,
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
@@ -530,21 +577,24 @@ class iMAMLTrainer:
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
             task_loss = self._kendall_total_loss(
-                fast_model, 0, support_x, support_y, support_coords
+                fast_model, mixer_idx, support_x, support_y, support_coords
             )
             if self.slope_recovery_inner > 0:
-                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
-            prox = self._regularization_loss(fast_model, theta, self.lam)
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(mixer_idx)  # type: ignore[attr-defined]
+            prox = self._regularization_loss(mixer_outer_params, theta, lam)
             total = task_loss + prox
             total.backward()
             if self.config.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(fast_model.parameters(), self.config.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(mixer_outer_params, self.config.max_grad_norm)
             opt.step()
 
     def _inner_solve_sgd_prox_end(
         self,
         fast_model: nn.Module,
+        mixer_idx: int,
+        mixer_outer_params: List[nn.Parameter],
         theta: torch.Tensor,
+        lam: torch.Tensor,
         support_x: torch.Tensor,
         support_y: torch.Tensor,
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
@@ -554,24 +604,27 @@ class iMAMLTrainer:
         for _ in range(self.config.inner_steps):
             opt.zero_grad()
             task_loss = self._kendall_total_loss(
-                fast_model, 0, support_x, support_y, support_coords
+                fast_model, mixer_idx, support_x, support_y, support_coords
             )
             if self.slope_recovery_inner > 0:
-                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(mixer_idx)  # type: ignore[attr-defined]
             task_loss.backward()
             if self.config.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(fast_model.parameters(), self.config.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(mixer_outer_params, self.config.max_grad_norm)
             opt.step()
         # One proximal pull-back step
         opt.zero_grad()
-        prox = self._regularization_loss(fast_model, theta, self.lam)
+        prox = self._regularization_loss(mixer_outer_params, theta, lam)
         prox.backward()
         opt.step()
 
     def _inner_solve_lbfgs(
         self,
         fast_model: nn.Module,
+        mixer_idx: int,
+        mixer_outer_params: List[nn.Parameter],
         theta: torch.Tensor,
+        lam: torch.Tensor,
         support_x: torch.Tensor,
         support_y: torch.Tensor,
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
@@ -589,11 +642,11 @@ class iMAMLTrainer:
         def closure():
             opt.zero_grad()
             task_loss = self._kendall_total_loss(
-                fast_model, 0, support_x, support_y, support_coords
+                fast_model, mixer_idx, support_x, support_y, support_coords
             )
             if self.slope_recovery_inner > 0:
-                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
-            prox = self._regularization_loss(fast_model, theta, self.lam)
+                task_loss = task_loss + self.slope_recovery_inner * fast_model.mixer_slope_recovery(mixer_idx)  # type: ignore[attr-defined]
+            prox = self._regularization_loss(mixer_outer_params, theta, lam)
             total = task_loss + prox
             total.backward()
             return total
@@ -607,61 +660,57 @@ class iMAMLTrainer:
     def _hessian_vector_product(
         self,
         model: nn.Module,
+        mixer_idx: int,
+        mixer_outer_params: List[nn.Parameter],
         support_x: torch.Tensor,
         support_y: torch.Tensor,
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
         vector: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute H·v where H = ∇²φ L̂(φ) at current model params.
+        """Compute H·v where H = ∇²φ_i L̂_i(φ_i) for one mixer.
 
-        Uses double autograd.grad trick (Rajeswaran et al. 2019).
-        The Hessian is of the task loss (Kendall-weighted total plus
-        inner slope recovery if enabled) — the proximal term's Hessian
-        is λI, already accounted for in the matrix evaluator.
+        Uses double autograd.grad trick (Rajeswaran et al. 2019). The
+        Hessian is of mixer `mixer_idx`'s task loss (Kendall-weighted
+        total plus inner slope recovery if enabled), taken with respect
+        to that mixer's full outer-parameter slice. The proximal term's
+        Hessian is λI, already accounted for in the matrix evaluator.
         """
         inner_obj = self._kendall_total_loss(
-            model, 0, support_x, support_y, support_coords
+            model, mixer_idx, support_x, support_y, support_coords
         )
         if self.slope_recovery_inner > 0:
-            inner_obj = inner_obj + self.slope_recovery_inner * model.mixer_slope_recovery(0)  # type: ignore[attr-defined]
-        # allow_unused=True for the Kendall log-variances that aren't in
-        # the graph when aux_losses_enabled=False. Zeros fill in for None.
-        params = list(model.parameters())
-        grad_ft = torch.autograd.grad(
-            inner_obj, params, create_graph=True, allow_unused=True
-        )
-        flat_grad = torch.cat([
-            g.contiguous().view(-1) if g is not None
-            else torch.zeros(p.numel(), device=p.device)
-            for g, p in zip(grad_ft, params)
-        ])
+            inner_obj = inner_obj + self.slope_recovery_inner * model.mixer_slope_recovery(mixer_idx)  # type: ignore[attr-defined]
+        grad_ft = torch.autograd.grad(inner_obj, mixer_outer_params, create_graph=True)
+        flat_grad = torch.cat([g.contiguous().view(-1) for g in grad_ft])
         h = torch.sum(flat_grad * vector)
-        hvp = torch.autograd.grad(h, params, allow_unused=True)
-        return torch.cat([
-            g.contiguous().view(-1) if g is not None
-            else torch.zeros(p.numel(), device=p.device)
-            for g, p in zip(hvp, params)
-        ])
+        hvp = torch.autograd.grad(h, mixer_outer_params)
+        return torch.cat([g.contiguous().view(-1) for g in hvp])
 
     def _matrix_evaluator(
         self,
         model: nn.Module,
+        mixer_idx: int,
+        mixer_outer_params: List[nn.Parameter],
+        lam: torch.Tensor,
         support_x: torch.Tensor,
         support_y: torch.Tensor,
         support_coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> Callable[[torch.Tensor], torch.Tensor]:
-        """Build linear operator A for CG: Av = (1 + regu_coef) * v + Hv / (lam + lam_damping).
+        """Build CG operator A_i for mixer `mixer_idx`:
+        A_i v = (1 + regu_coef) * v + H_i v / (lam_i + lam_damping).
 
-        Matches reference implementation (aravindr93/imaml_dev, learner_model.py:143).
+        Matches reference (aravindr93/imaml_dev, learner_model.py:143).
         regu_coef = cg_damping (default 1.0), lam_damping hardcoded at 10.0.
+        Per-mixer lambda lets each mixer pull back at its own strength
+        when lam_lr > 0 makes lambda learnable.
         """
-        lam = self.lam
         regu_coef = self.cg_damping
         lam_damping = 10.0  # hardcoded in reference
 
         def evaluator(v: torch.Tensor) -> torch.Tensor:
             hvp = self._hessian_vector_product(
-                model, support_x, support_y, support_coords, v
+                model, mixer_idx, mixer_outer_params,
+                support_x, support_y, support_coords, v,
             )
             return (1.0 + regu_coef) * v + hvp / (lam + lam_damping)
 
@@ -673,10 +722,14 @@ class iMAMLTrainer:
 
     def _task_setup(
         self, task: PDETask, seed: int
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+    ) -> Tuple[List[torch.Tensor], torch.Tensor, List[torch.Tensor], torch.Tensor,
                Optional[Tuple[torch.Tensor, torch.Tensor]],
                Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        """Common setup: split, zero features, set domain."""
+        """Common setup: split into support/query, return per-mixer feature lists.
+
+        `support_x_list[i]` and `query_x_list[i]` are the structural feature
+        tensors for mixer `i`. For 1-output PDEs the lists are length 1.
+        """
         support, query, support_coords, query_coords = task.get_support_query_split(
             K_shot=self.config.k_shot,
             query_size=self.config.query_size,
@@ -688,204 +741,269 @@ class iMAMLTrainer:
 
         support_x_list, support_y = support
         query_x_list, query_y = query
-        # M2a transition: extract mixer-0 tensor from the per-mixer list.
-        # Works for n_outputs=1 PDEs (NLHeat, Heat, NS-vorticity).
-        # Multi-mixer handling arrives with the composite network in M3.
-        support_x = support_x_list[0]
-        query_x = query_x_list[0]
 
         self._current_Lx = task.Lx
         self._current_Ly = task.Ly
 
-        return support_x, support_y, query_x, query_y, support_coords, query_coords
+        return support_x_list, support_y, query_x_list, query_y, support_coords, query_coords
 
     def _compute_task_imaml(
         self, task: PDETask, seed: int
-    ) -> Tuple[torch.Tensor, float]:
-        """One task: copy θ → inner solve → query grad → CG correct.
+    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], float]:
+        """One task, generalized over n_outputs mixers.
 
-        Returns (corrected_grad, query_loss_value). Unlike MAML, the meta-gradient
-        is not computed via backprop — it's a flat vector from CG.
+        Returns (per-mixer corrected gradients, per-mixer train gradients,
+        average query loss across mixers). Each mixer's iMAML chain runs
+        independently:
+          1. Snapshot per-mixer theta (full mixer slice)
+          2. Inner solve adapts mixer's ANIL subset
+          3. Query loss + query gradient over mixer's full slice
+          4. HVP/CG correction over mixer's full slice
+          5. (Only when lam_lr > 0) train gradient at φ* over mixer's slice,
+             reused by the lambda meta-learning step in _compute_meta_gradient.
+             Returned alongside corrected_grads so the lam_lr branch doesn't
+             have to redo the inner solve to recover φ*.
+        The corrected gradient list has length `n_outputs`; entry `i` is
+        sized to the concatenated parameter count of mixer `i`'s outer slice.
+        The train gradient list is empty when `lam_lr <= 0` (no lambda
+        meta-learning), or has length `n_outputs` matching corrected_grads.
         """
         # Make the task visible to _kendall_total_loss without threading it
         # through every inner-loop closure signature.
         self._current_task = task
 
-        support_x, support_y, query_x, query_y, support_coords, query_coords = (
+        support_x_list, support_y, query_x_list, query_y, support_coords, query_coords = (
             self._task_setup(task, seed)
         )
 
-        theta = self._get_flat_params(self.model)
+        n_outputs: int = self.model.n_outputs  # type: ignore[attr-defined]
+        anil_mode = self.config.imaml.anil_mode if self.config.imaml.anil else "all"
+
+        # Per-mixer pre-adapt theta snapshots, taken on the LIVE model
+        # before deepcopy. Each snapshot is the full mixer slice.
+        theta_list: List[torch.Tensor] = [
+            self._get_flat_params(
+                self.model.mixer_outer_params(i)  # type: ignore[attr-defined]
+            )
+            for i in range(n_outputs)
+        ]
+
         fast_model = copy.deepcopy(self.model)
-        # Cache the inner-loop parameter list for this task's fast_model.
-        # Built once here, reused by every _inner_solve_* call below.
-        self._current_inner_params = self._inner_params(fast_model)
+
+        # Per-mixer fast-model slices and inner-adapted subsets
+        fast_outer: List[List[nn.Parameter]] = [
+            fast_model.mixer_outer_params(i)  # type: ignore[attr-defined]
+            for i in range(n_outputs)
+        ]
+        fast_inner: List[List[nn.Parameter]] = [
+            fast_model.mixer_inner_params(i, anil_mode)  # type: ignore[attr-defined]
+            for i in range(n_outputs)
+        ]
 
         verbose = not getattr(sys.stdout, 'quiet', False)
 
-        if verbose:
-            # No no_grad() context — _kendall_total_loss may call
-            # task.auxiliary_losses which uses torch.autograd.grad
-            # internally, and that fails inside no_grad.
-            pre_loss = self._kendall_total_loss(
-                fast_model, 0, support_x, support_y, support_coords
+        corrected_grads: List[torch.Tensor] = []
+        train_grads: List[torch.Tensor] = []
+        query_loss_total = 0.0
+
+        for mixer_idx in range(n_outputs):
+            mixer_outer = fast_outer[mixer_idx]
+            theta_i = theta_list[mixer_idx]
+            lam_i = self.lam[mixer_idx]
+            support_x_i = support_x_list[mixer_idx]
+            query_x_i = query_x_list[mixer_idx]
+
+            # Reassign the current inner-params cache to this mixer's slice
+            # so the bound _inner_solve_* method picks up the right list.
+            self._current_inner_params = fast_inner[mixer_idx]
+
+            if verbose:
+                # No no_grad() context — _kendall_total_loss may call
+                # task.auxiliary_losses which uses torch.autograd.grad
+                # internally, and that fails inside no_grad.
+                pre_loss = self._kendall_total_loss(
+                    fast_model, mixer_idx, support_x_i, support_y, support_coords
+                )
+                print(f"\t\tmixer {mixer_idx} pre-adapt: support_loss={pre_loss.item():.6f}")
+                del pre_loss
+
+            # Inner solve: minimize task_loss_i + λ_i/2 ||φ_i - θ_i||²
+            self._inner_solve(
+                fast_model, mixer_idx, mixer_outer, theta_i, lam_i,
+                support_x_i, support_y, support_coords,
             )
-            print(f"\t\tpre-adapt: support_loss={pre_loss.item():.6f}")
-            del pre_loss
 
-        # Inner solve: minimize task_loss + λ/2 ||φ - θ||²
-        self._inner_solve(fast_model, theta, support_x, support_y, support_coords)
+            if verbose:
+                post_loss = self._kendall_total_loss(
+                    fast_model, mixer_idx, support_x_i, support_y, support_coords
+                )
+                print(f"\t\tmixer {mixer_idx} post-adapt: support_loss={post_loss.item():.6f}"
+                      f" ({self.config.inner_steps} steps)")
+                del post_loss
 
-        if verbose:
-            post_loss = self._kendall_total_loss(
-                fast_model, 0, support_x, support_y, support_coords
+            # Query gradient: v_i = ∇_{φ_i} L_query(φ_i*) over mixer_i's full slice
+            query_loss_i = self._kendall_total_loss(
+                fast_model, mixer_idx, query_x_i, query_y, query_coords
             )
-            print(f"\t\tpost-adapt: support_loss={post_loss.item():.6f}"
-                  f" ({self.config.inner_steps} steps)")
-            del post_loss
+            query_grad_i = torch.autograd.grad(query_loss_i, mixer_outer)
+            flat_grad_i = torch.cat([g.contiguous().view(-1) for g in query_grad_i])
+            query_loss_val_i = query_loss_i.item()
+            query_loss_total += query_loss_val_i
 
-        # Query gradient: v_i = ∇φ L_query(φ*)
-        query_loss = self._kendall_total_loss(
-            fast_model, 0, query_x, query_y, query_coords
-        )
-        # allow_unused=True: when aux_losses_enabled=False, Kendall
-        # log-variances are not used in the loss graph — autograd would
-        # otherwise raise. None entries are replaced with zero tensors
-        # of the right shape so the flat vector matches parameter count.
-        query_grad = torch.autograd.grad(
-            query_loss, list(fast_model.parameters()), allow_unused=True
-        )
-        flat_grad = torch.cat([
-            g.contiguous().view(-1) if g is not None
-            else torch.zeros(p.numel(), device=p.device)
-            for g, p in zip(query_grad, fast_model.parameters())
-        ])
-        query_loss_val = query_loss.item()
+            # CG correction: g_i = (I + 1/λ_i · H_i)⁻¹ v_i
+            cg = self._cg_steps_active
+            if cg <= 1:
+                corrected_grad_i = flat_grad_i.detach()
+            else:
+                evaluator = self._matrix_evaluator(
+                    fast_model, mixer_idx, mixer_outer, lam_i,
+                    support_x_i, support_y, support_coords,
+                )
+                corrected_grad_i = cg_solve(evaluator, flat_grad_i.detach(), cg)
 
-        # CG solve: g_i = (I + 1/λ H)⁻¹ v_i
-        cg = self._cg_steps_active
-        if cg <= 1:
-            corrected_grad = flat_grad.detach()
-        else:
-            evaluator = self._matrix_evaluator(
-                fast_model, support_x, support_y, support_coords
-            )
-            corrected_grad = cg_solve(evaluator, flat_grad.detach(), cg)
+            corrected_grads.append(corrected_grad_i)
 
-        if verbose:
-            print(f"\t\t\tloss={query_loss_val:.2f}")
+            # Lambda meta-gradient prep — match reference (omniglot_implicit_maml.py):
+            # compute train_grad on the SAME fast_model that just adapted, so the
+            # lam_lr branch in _compute_meta_gradient doesn't redo the inner solve.
+            if self.lam_lr > 0:
+                train_loss_i = self._kendall_total_loss(
+                    fast_model, mixer_idx, support_x_i, support_y, support_coords
+                )
+                train_grad_t = torch.autograd.grad(train_loss_i, mixer_outer)
+                flat_train_grad = torch.cat(
+                    [g.contiguous().view(-1) for g in train_grad_t]
+                ).detach()
+                train_grads.append(flat_train_grad)
 
-        return corrected_grad, query_loss_val
+            if verbose:
+                print(f"\t\t\tmixer {mixer_idx} loss={query_loss_val_i:.2f}")
+
+        avg_query_loss = query_loss_total / n_outputs
+        return corrected_grads, train_grads, avg_query_loss
 
     def _compute_meta_gradient(self, tasks: List[PDETask]) -> float:
-        """Compute CG-corrected meta-gradient and set .grad on model params.
+        """Compute per-mixer CG-corrected meta-gradients and set .grad on params.
 
-        Returns average query loss. Does NOT call optimizer.step().
+        Each mixer accumulates its own meta-gradient vector across tasks; at
+        the end of the meta-batch, that vector is written into the mixer's
+        parameter `.grad` attributes. The per-mixer outer optimizers then
+        each step their own slice with no crosstalk.
+
+        Returns average query loss across tasks (averaged over mixers).
+        Does NOT call optimizer.step().
         """
         self.model.train()
 
-        n_params = sum(p.numel() for p in self.model.parameters())
-        meta_grad = torch.zeros(n_params, device=self.device)
-        total_loss = 0.0
-        self._lam_grad = 0.0
+        n_outputs: int = self.model.n_outputs  # type: ignore[attr-defined]
 
-        for i, task in enumerate(tasks):
-            print(f"\ttask [{i}/{len(tasks)}]: {task.task_name}")
-            seed = self.iteration * len(tasks) + i
-            corrected_grad, loss_val = self.compute_task(task, seed)
-            meta_grad += corrected_grad / len(tasks)
+        # One meta-gradient accumulator per mixer, sized to that mixer's
+        # full outer slice (body + head + log-vars when aux is on).
+        meta_grads: List[torch.Tensor] = [
+            torch.zeros(
+                sum(p.numel() for p in self._opt_params_list[i]),
+                device=self.device,
+            )
+            for i in range(n_outputs)
+        ]
+        total_loss = 0.0
+        self._lam_grad: List[float] = [0.0] * n_outputs
+
+        for task_idx, task in enumerate(tasks):
+            print(f"\ttask [{task_idx}/{len(tasks)}]: {task.task_name}")
+            task_seed = self.iteration * len(tasks) + task_idx
+            corrected_grads, train_grads, loss_val = self.compute_task(task, task_seed)
+            for i in range(n_outputs):
+                meta_grads[i] += corrected_grads[i] / len(tasks)
             total_loss += loss_val / len(tasks)
 
-            # Optional lambda meta-learning
+            # Per-mixer lambda meta-learning. train_grads is populated by
+            # _compute_task_imaml only when self.lam_lr > 0 (no extra inner
+            # solve — fast_model from the main path was reused). Matches the
+            # reference (omniglot_implicit_maml.py:131-141).
             if self.lam_lr > 0:
-                fast_model = copy.deepcopy(self.model)
-                theta = self._get_flat_params(self.model)
-                support_x, support_y, _, _, support_coords, _ = self._task_setup(task, seed)
-                self._inner_solve(fast_model, theta, support_x, support_y, support_coords)
-                train_loss = self.cost_function(fast_model(support_x), support_y, support_coords)
-                train_grad_t = torch.autograd.grad(train_loss, list(fast_model.parameters()))
-                flat_train_grad = torch.cat([g.view(-1) for g in train_grad_t]).detach()
-                inner_prod = flat_train_grad.dot(corrected_grad)
-                task_lam_grad = inner_prod / (self.lam ** 2 + 0.1)
-                self._lam_grad += task_lam_grad / len(tasks)
+                for i in range(n_outputs):
+                    inner_prod = train_grads[i].dot(corrected_grads[i])
+                    task_lam_grad = (inner_prod / (self.lam[i] ** 2 + 0.1)).item()
+                    self._lam_grad[i] += task_lam_grad / len(tasks)
 
-        # Check for NaN
         avg_loss = total_loss
         if not torch.tensor(avg_loss).isfinite():
             return float("nan")
 
-        # Outer slope recovery on θ_a: direct gradient injection, bypasses CG.
-        # S is a function of θ alone (not of φ*), so its correct treatment is
-        # to add ∇_θ S(θ_a) to the meta-gradient vector directly.
-        if self.slope_recovery_outer > 0:
-            s_theta = self.slope_recovery_outer * self.model.slope_recovery()  # type: ignore[attr-defined]
-            if s_theta.requires_grad:
-                s_grads = torch.autograd.grad(
-                    s_theta, list(self.model.parameters()), allow_unused=True
-                )
-                offset = 0
-                for g, p in zip(s_grads, self.model.parameters()):
-                    numel = p.numel()
-                    if g is not None:
-                        meta_grad[offset:offset + numel] += g.contiguous().view(-1)
-                    offset += numel
+        # Per-mixer .grad writeback. For each mixer, walk its outer slice
+        # and copy the corresponding meta_grad slice into p.grad.
+        for i in range(n_outputs):
+            offset = 0
+            for p in self._opt_params_list[i]:
+                numel = p.numel()
+                p.grad = meta_grads[i][offset:offset + numel].view(p.size()).clone()
+                offset += numel
 
-        # Set .grad on model params from flat meta_grad vector
-        offset = 0
-        for p in self.model.parameters():
-            numel = p.numel()
-            p.grad = meta_grad[offset:offset + numel].view(p.size()).clone()
-            offset += numel
-
-        # Gradient clipping
+        # Per-mixer gradient clipping
         if self.config.max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(
-                list(self.model.parameters()), self.config.max_grad_norm
-            )
+            for i in range(n_outputs):
+                torch.nn.utils.clip_grad_norm_(
+                    self._opt_params_list[i], self.config.max_grad_norm
+                )
 
         return avg_loss
 
     def _outer_step_adam(self, tasks: List[PDETask]) -> float:
-        """Adam outer step: compute gradient, then step."""
+        """Adam outer step: compute gradient, then step each mixer's optimizer."""
         avg_loss = self._compute_meta_gradient(tasks)
-        self.outer_opt.step()  # type: ignore[call-arg]
+        for opt_i in self.outer_opts:
+            opt_i.step()  # type: ignore[call-arg]
         return avg_loss
 
     def _outer_step_lbfgs(self, tasks: List[PDETask]) -> float:
-        """L-BFGS outer step: closure recomputes gradient at trial points."""
+        """L-BFGS outer step: per-mixer sequential line searches.
+
+        Each mixer's L-BFGS runs its own line search against the same
+        task batch. The closure recomputes the full meta-gradient at
+        each probe; L-BFGS reads only its own parameter slice's grads
+        so other mixers' gradients are ignored within one optimizer's
+        step. Mixers run sequentially, so mixer_{i+1} sees parameters
+        already moved by mixer_i's step.
+        """
         result = 0.0
-        probe = 0
+        for i, opt_i in enumerate(self.outer_opts):
+            probe = 0
 
-        def closure():
-            nonlocal result, probe
-            probe += 1
-            print(f"\t[L-BFGS outer probe {probe}]")
-            self.outer_opt.zero_grad()
-            result = self._compute_meta_gradient(tasks)
-            return torch.tensor(result, device=self.device)
+            def closure(mixer_idx: int = i) -> float:
+                nonlocal result, probe
+                probe += 1
+                print(f"\t[L-BFGS outer mixer {mixer_idx} probe {probe}]")
+                self.model.zero_grad()
+                result = self._compute_meta_gradient(tasks)
+                return result
 
-        self.outer_opt.step(closure)
+            opt_i.step(closure)  # type: ignore[arg-type]
         return result
 
     def outer_step(self, tasks: List[PDETask]) -> float:
         """
         Perform one iMAML meta-update step.
 
-        For Adam: compute gradient, then Adam.step().
-        For L-BFGS: closure recomputes gradient at trial points during line search.
-        Same task batch used across all closure calls within one .step().
+        For Adam: compute gradient, then Adam.step() per mixer.
+        For L-BFGS: per-mixer sequential line searches, closure recomputes
+        gradient at trial points. Same task batch used across all closure
+        calls within one .step().
 
         Returns:
             Average query loss across tasks
         """
-        self.outer_opt.zero_grad()
+        self.model.zero_grad()
 
         avg_loss = self._outer_step(tasks)
 
-        # Lambda update
+        # Per-mixer lambda update — each mixer's lambda is independent.
         if self.lam_lr > 0:
-            lam_delta = -self.lam_lr * self._lam_grad
-            self.lam = torch.clamp(self.lam + lam_delta, self.lam_min, 5000.0)
+            for i in range(len(self.lam)):
+                lam_delta = -self.lam_lr * self._lam_grad[i]
+                self.lam[i] = torch.clamp(
+                    self.lam[i] + lam_delta, self.lam_min, 5000.0
+                )
 
         return avg_loss
 
@@ -911,7 +1029,7 @@ class iMAMLTrainer:
         for i, task in enumerate(tasks):
             task_seed = seed + i
             with torch.enable_grad():
-                _, task_loss_val = self.compute_task(task, task_seed)
+                _, _, task_loss_val = self.compute_task(task, task_seed)
             total_loss += task_loss_val
 
         return total_loss / len(tasks)
@@ -931,13 +1049,15 @@ class iMAMLTrainer:
         else:
             self.patience_counter += 1
 
+        lrs = [f"{opt_i.param_groups[0]['lr']:.2e}" for opt_i in self.outer_opts]
         lr_str = (
-            f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
-            if self.scheduler
+            f", lr=[{', '.join(lrs)}]"
+            if any(s is not None for s in self.schedulers)
             else ""
         )
+        lam_str = ",".join(f"{l.item():.4f}" for l in self.lam)
         print(
-            f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}, λ={self.lam.item():.4f}"
+            f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}, patience={self.patience_counter}{lr_str}, λ=[{lam_str}]"
         )
 
         if (
@@ -954,12 +1074,14 @@ class iMAMLTrainer:
         self, iteration: int, train_loss: float, log_interval: int, checkpoint_dir: Path
     ) -> bool:
         """Per-iteration logic for interval mode: periodic saves, no best-tracking."""
+        lrs = [f"{opt_i.param_groups[0]['lr']:.2e}" for opt_i in self.outer_opts]
         lr_str = (
-            f", lr={self.outer_opt.param_groups[0]['lr']:.2e}"
-            if self.scheduler
+            f", lr=[{', '.join(lrs)}]"
+            if any(s is not None for s in self.schedulers)
             else ""
         )
-        print(f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}{lr_str}, λ={self.lam.item():.4f}")
+        lam_str = ",".join(f"{l.item():.4f}" for l in self.lam)
+        print(f"Iter {iteration + 1:5d}: train_loss={train_loss:.6f}{lr_str}, λ=[{lam_str}]")
 
         if (
             iteration > 0
@@ -1100,7 +1222,8 @@ class iMAMLTrainer:
         print(f"  Meta batch size: {self.config.meta_batch_size}")
         print(f"  K-shot: {self.config.k_shot}")
         print(f"  Query size: {self.config.query_size}")
-        print(f"  λ (proximal): {self.lam.item():.4f}")
+        lam_init = ",".join(f"{l.item():.4f}" for l in self.lam)
+        print(f"  λ (proximal): [{lam_init}]")
         print(f"  CG steps: {self.cg_steps}")
         print(f"  CG damping: {self.cg_damping}")
         print(f"  Inner optimizer: {self.config.imaml.inner_optimizer}")
@@ -1146,13 +1269,16 @@ class iMAMLTrainer:
             phase2_start = max(start_iteration, switch_at)
             if phase2_start < self.config.max_iterations:
                 print(f"  Phase 2: L-BFGS outer (full batch), iterations {phase2_start}→{self.config.max_iterations}")
-                self.outer_opt = torch.optim.LBFGS(
-                    self._opt_params, lr=1.0, max_iter=1, max_eval=20,
-                    tolerance_grad=1e-15, tolerance_change=1e-15,
-                    line_search_fn="strong_wolfe",
-                )
+                self.outer_opts = [
+                    torch.optim.LBFGS(
+                        params_i, lr=1.0, max_iter=1, max_eval=20,
+                        tolerance_grad=1e-15, tolerance_change=1e-15,
+                        line_search_fn="strong_wolfe",
+                    )
+                    for params_i in self._opt_params_list
+                ]
                 self._outer_step = self._outer_step_lbfgs
-                self.scheduler = None  # L-BFGS doesn't use scheduler
+                self.schedulers = [None] * len(self.outer_opts)  # L-BFGS doesn't use scheduler
                 # Force full batch for L-BFGS (deterministic objective for line search)
                 self.config.meta_batch_size = len(self.train_loader.tasks)
                 result = self._run_phase(phase2_start, self.config.max_iterations, checkpoint_dir, log_interval)
@@ -1263,16 +1389,20 @@ class iMAMLTrainer:
                 print(f"  Saved to {checkpoint_dir / 'final_model.pt'}.")
                 return self.history
 
-            if self.scheduler is not None:
+            if self.config.has_scheduler:
                 if self._plateau_mode:
                     # Feed rolling average to ReduceLROnPlateau
                     self._loss_window.append(train_loss)
                     if len(self._loss_window) > self.config.plateau_window:
                         self._loss_window.pop(0)
                     rolling_avg = sum(self._loss_window) / len(self._loss_window)
-                    self.scheduler.step(rolling_avg)  # type: ignore[call-arg]
+                    for sched_i in self.schedulers:
+                        if sched_i is not None:
+                            sched_i.step(rolling_avg)  # type: ignore[call-arg]
                 else:
-                    self.scheduler.step()
+                    for sched_i in self.schedulers:
+                        if sched_i is not None:
+                            sched_i.step()
 
             self.history["train_loss"].append(train_loss)
             self.history["iteration"].append(iteration)
@@ -1311,15 +1441,16 @@ class iMAMLTrainer:
         torch.save(
             {
                 "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.outer_opt.state_dict(),
+                "optimizer_state_dicts": [opt_i.state_dict() for opt_i in self.outer_opts],
                 "config": self.config,
                 "iteration": self.iteration,
                 "best_train_loss": self.best_train_loss,
                 "best_val_loss": self.best_val_loss,
                 "best_train_state": self.best_train_state,
-                "scheduler_state_dict": self.scheduler.state_dict()
-                if self.scheduler
-                else None,
+                "scheduler_state_dicts": [
+                    sched_i.state_dict() if sched_i is not None else None
+                    for sched_i in self.schedulers
+                ],
                 "rng_state_cpu": torch.random.get_rng_state(),
                 "rng_state_cuda": torch.cuda.get_rng_state()
                 if torch.cuda.is_available()
@@ -1341,17 +1472,44 @@ class iMAMLTrainer:
         path = Path(path)
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
+        # Hard check: aux_losses_enabled must match between the checkpoint
+        # and the current config. The model structure (Kendall log-variances
+        # registered or not) depends on this flag, so mismatched loads would
+        # either crash in load_state_dict or silently skip parameters.
+        ckpt_cfg = checkpoint.get("config")
+        if ckpt_cfg is not None:
+            ckpt_aux = ckpt_cfg.training.aux_losses_enabled
+            if ckpt_aux != self.aux_losses_enabled:
+                raise RuntimeError(
+                    f"aux_losses_enabled mismatch: checkpoint was trained "
+                    f"with aux_losses_enabled={ckpt_aux}, current config "
+                    f"has {self.aux_losses_enabled}. Model structure differs "
+                    f"(Kendall log-variances registered vs not) so the "
+                    f"checkpoint cannot be loaded into this trainer."
+                )
+
         self.model.load_state_dict(checkpoint["model_state_dict"])
-        self.outer_opt.load_state_dict(checkpoint["optimizer_state_dict"])
+        opt_states = checkpoint["optimizer_state_dicts"]
+        if len(opt_states) != len(self.outer_opts):
+            raise RuntimeError(
+                f"optimizer count mismatch: checkpoint has {len(opt_states)} "
+                f"optimizers, current trainer has {len(self.outer_opts)}. "
+                f"This usually means n_outputs differs between checkpoint "
+                f"and current config."
+            )
+        for opt_i, state_i in zip(self.outer_opts, opt_states):
+            opt_i.load_state_dict(state_i)
         self.iteration = checkpoint.get("iteration", 0)
         self.best_train_loss = checkpoint.get("best_train_loss", float("inf"))
         self.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
         self.best_train_state = checkpoint.get("best_train_state", None)
 
-        # Restore scheduler state
-        sched_state = checkpoint.get("scheduler_state_dict")
-        if self.scheduler is not None and sched_state is not None:
-            self.scheduler.load_state_dict(sched_state)
+        # Restore scheduler states
+        sched_states = checkpoint.get("scheduler_state_dicts")
+        if sched_states is not None:
+            for sched_i, state_i in zip(self.schedulers, sched_states):
+                if sched_i is not None and state_i is not None:
+                    sched_i.load_state_dict(state_i)
 
         # Restore RNG states for exact replay
         rng_cpu = checkpoint.get("rng_state_cpu")
@@ -1368,11 +1526,16 @@ class iMAMLTrainer:
         )
         self._resumed = True
 
-        # Restore lambda (may have been meta-learned)
+        # Restore lambda (may have been meta-learned per-mixer)
         saved_lam = checkpoint.get("lam")
         if saved_lam is not None:
-            self.lam = saved_lam.to(self.device)
-            print(f"  Loaded λ={self.lam.item():.4f}")
+            if isinstance(saved_lam, list):
+                self.lam = [l.to(self.device) for l in saved_lam]
+            else:
+                # Legacy single-tensor checkpoint — broadcast to all mixers
+                self.lam = [saved_lam.to(self.device) for _ in range(len(self.lam))]
+            lam_str = ",".join(f"{l.item():.4f}" for l in self.lam)
+            print(f"  Loaded λ=[{lam_str}]")
 
         print(f"Loaded checkpoint from {path}")
         print(f"  Iteration: {self.iteration}")

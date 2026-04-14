@@ -72,7 +72,6 @@ class IMAMLSection:
     anil_mode: str = "head"  # "head" | "head+scales_all" | "head+scales_last"
     proximal_every_step: bool = False  # True = paper Eq.3, False = reference code (prox at end only)
     slope_recovery_inner: float = 0.0  # weight on S(φ_a) in inner task loss
-    slope_recovery_outer: float = 0.0  # weight on S(θ_a) added to outer gradient (bypasses CG)
 
 
 @dataclass
@@ -150,6 +149,17 @@ class TrainingSection:
     # Nested sections
     spectral_loss: SpectralLossSection = field(default_factory=SpectralLossSection)
     imaml: IMAMLSection = field(default_factory=IMAMLSection)
+
+    @property
+    def has_scheduler(self) -> bool:
+        """True when any scheduler is active — decay phase, warmup phase, or both.
+
+        `use_scheduler` controls the decay phase; `warmup_iterations > 0`
+        independently activates a warmup phase. Either is enough for there
+        to be "a scheduler" the training loop needs to step. Consumers
+        should prefer this property over probing the two flags separately.
+        """
+        return self.use_scheduler or self.warmup_iterations > 0
 
 
 @dataclass
@@ -265,8 +275,6 @@ class ExperimentConfig:
                     }
                     if t.imaml.slope_recovery_inner > 0:
                         imaml_dict["slope_recovery_inner"] = t.imaml.slope_recovery_inner
-                    if t.imaml.slope_recovery_outer > 0:
-                        imaml_dict["slope_recovery_outer"] = t.imaml.slope_recovery_outer
                     train_dict["imaml"] = imaml_dict
                 continue
 

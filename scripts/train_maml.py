@@ -203,6 +203,7 @@ def main():
     training = cfg.training
     model = MixerNetwork.from_task(
         first_task,
+        aux_losses_enabled=training.aux_losses_enabled,
         hidden_dims=training.hidden_dims,
         activation=training.activation,
         input_bypass=training.input_bypass,
