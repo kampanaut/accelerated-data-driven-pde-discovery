@@ -12,7 +12,7 @@ References:
 """
 
 from pathlib import Path
-from typing import Callable, List, Optional, Dict, Tuple, TYPE_CHECKING
+from typing import Any, Callable, List, Optional, Dict, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..config import ExperimentConfig
@@ -250,11 +250,11 @@ class iMAMLTrainer:
         self._nan_at: Optional[int] = None
         self._last_train_loss: float = 0.0
         self._early_stopped: bool = False
-        self.history: Dict[str, List] = {
-            "train_loss": [],
-            "val_loss": [],
-            "iteration": [],
-        }
+        self.history: Dict[str, Any] = self._fresh_history()
+        # Side-channel: populated inside _compute_meta_gradient each iter and
+        # appended to history by _run_phase after the NaN check, so history
+        # lists stay length-aligned with train_loss/iteration on NaN rollback.
+        self._last_iter_metrics: Optional[Dict[str, Any]] = None
         self._resumed = False
         self._stop_requested = False
 
@@ -557,6 +557,75 @@ class iMAMLTrainer:
 
         return total
 
+    def _fresh_history(self) -> Dict[str, Any]:
+        """Build an empty expanded-history dict matching the M5a schema.
+
+        Per-mixer sub-dicts carry pre-allocated empty lists for every field
+        that will be appended during training. Aux-related fields are empty
+        dicts when `aux_losses_enabled=false` — no appending happens under
+        that flag, so their emptiness is a post-hoc "not applicable" marker.
+        """
+        n_outputs: int = self.model.n_outputs  # type: ignore[attr-defined]
+        aux_names_per_mixer: List[List[str]] = (
+            self.train_loader.tasks[0].aux_loss_names  # type: ignore[attr-defined]
+        )
+        mixer_history: Dict[str, Any] = {}
+        for i in range(n_outputs):
+            mixer_i: Dict[str, Any] = {
+                "mse_main": [],
+                "aux": {name: [] for name in aux_names_per_mixer[i]}
+                if self.aux_losses_enabled
+                else {},
+                "s_mse": [],
+                "s_aux": {name: [] for name in aux_names_per_mixer[i]}
+                if self.aux_losses_enabled
+                else {},
+                "eff_weight_mse": [],
+                "eff_weight_aux": {name: [] for name in aux_names_per_mixer[i]}
+                if self.aux_losses_enabled
+                else {},
+                "support_pre_adapt": [],
+                "support_post_adapt": [],
+            }
+            mixer_history[str(i)] = mixer_i
+        return {
+            "iteration": [],
+            "train_loss": [],
+            "val_loss": [],
+            "lam": [],   # list of per-iter [lam_0, lam_1, ...] snapshots
+            "lr": [],    # list of per-iter [lr_0, lr_1, ...] snapshots
+            "mixers": mixer_history,
+        }
+
+    def _compute_raw_losses(
+        self,
+        fast_model: nn.Module,
+        mixer_idx: int,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+        coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
+    ) -> Tuple[float, Dict[str, float]]:
+        """Raw unweighted mse_main + per-name aux loss scalars for logging.
+
+        Returns (mse_main_scalar, aux_dict). Detached scalars — no autograd
+        graph retained after the function returns. Intended for history
+        logging only, not for optimization. One extra forward pass per call
+        (plus one aux-loss computation when aux_losses_enabled is true).
+        """
+        pred = fast_model.forward_one(mixer_idx, features)  # type: ignore[attr-defined]
+        target_i = targets[:, mixer_idx]
+        mse_scalar = self.cost_function(pred, target_i, coords).item()
+
+        aux_raw: Dict[str, float] = {}
+        if self.aux_losses_enabled and self._current_task is not None:
+            aux_tensors = self._current_task.auxiliary_losses(
+                mixer_idx, fast_model, features, targets
+            )
+            for name, loss in aux_tensors.items():
+                aux_raw[name] = loss.item()
+
+        return mse_scalar, aux_raw
+
     # ------------------------------------------------------------------
     # Inner solvers (bound in __init__)
     # ------------------------------------------------------------------
@@ -749,24 +818,32 @@ class iMAMLTrainer:
 
     def _compute_task_imaml(
         self, task: PDETask, seed: int
-    ) -> Tuple[List[torch.Tensor], List[torch.Tensor], float]:
+    ) -> Tuple[
+        List[torch.Tensor],
+        List[torch.Tensor],
+        float,
+        List[Dict[str, Any]],
+    ]:
         """One task, generalized over n_outputs mixers.
 
-        Returns (per-mixer corrected gradients, per-mixer train gradients,
-        average query loss across mixers). Each mixer's iMAML chain runs
-        independently:
+        Returns a 4-tuple:
+          - `corrected_grads`: list of CG-corrected meta-gradients, length n_outputs
+          - `train_grads`: list of per-mixer train gradients, populated only
+            when `lam_lr > 0` (empty otherwise)
+          - `avg_query_loss`: scalar, mean query loss across mixers
+          - `task_metrics`: list of dicts, length n_outputs, holding per-mixer
+            logging scalars for this task: `support_pre_adapt`,
+            `support_post_adapt`, `mse_main` (raw, unweighted), `aux` (dict of
+            raw aux-loss scalars). These are averaged across the meta-batch's
+            tasks by `_compute_meta_gradient` before appending to history.
+
+        Each mixer's iMAML chain runs independently:
           1. Snapshot per-mixer theta (full mixer slice)
           2. Inner solve adapts mixer's ANIL subset
           3. Query loss + query gradient over mixer's full slice
           4. HVP/CG correction over mixer's full slice
           5. (Only when lam_lr > 0) train gradient at φ* over mixer's slice,
              reused by the lambda meta-learning step in _compute_meta_gradient.
-             Returned alongside corrected_grads so the lam_lr branch doesn't
-             have to redo the inner solve to recover φ*.
-        The corrected gradient list has length `n_outputs`; entry `i` is
-        sized to the concatenated parameter count of mixer `i`'s outer slice.
-        The train gradient list is empty when `lam_lr <= 0` (no lambda
-        meta-learning), or has length `n_outputs` matching corrected_grads.
         """
         # Make the task visible to _kendall_total_loss without threading it
         # through every inner-loop closure signature.
@@ -804,6 +881,7 @@ class iMAMLTrainer:
 
         corrected_grads: List[torch.Tensor] = []
         train_grads: List[torch.Tensor] = []
+        task_metrics: List[Dict[str, Any]] = []
         query_loss_total = 0.0
 
         for mixer_idx in range(n_outputs):
@@ -817,15 +895,17 @@ class iMAMLTrainer:
             # so the bound _inner_solve_* method picks up the right list.
             self._current_inner_params = fast_inner[mixer_idx]
 
+            # Pre-adapt support loss — always computed (was verbose-only),
+            # captured for logging. No no_grad() wrapper: _kendall_total_loss
+            # may call task.auxiliary_losses which uses torch.autograd.grad
+            # with create_graph=True internally and fails inside no_grad.
+            pre_loss_t = self._kendall_total_loss(
+                fast_model, mixer_idx, support_x_i, support_y, support_coords
+            )
+            pre_loss_val = pre_loss_t.item()
+            del pre_loss_t
             if verbose:
-                # No no_grad() context — _kendall_total_loss may call
-                # task.auxiliary_losses which uses torch.autograd.grad
-                # internally, and that fails inside no_grad.
-                pre_loss = self._kendall_total_loss(
-                    fast_model, mixer_idx, support_x_i, support_y, support_coords
-                )
-                print(f"\t\tmixer {mixer_idx} pre-adapt: support_loss={pre_loss.item():.6f}")
-                del pre_loss
+                print(f"\t\tmixer {mixer_idx} pre-adapt: support_loss={pre_loss_val:.6f}")
 
             # Inner solve: minimize task_loss_i + λ_i/2 ||φ_i - θ_i||²
             self._inner_solve(
@@ -833,13 +913,24 @@ class iMAMLTrainer:
                 support_x_i, support_y, support_coords,
             )
 
+            # Post-adapt support loss + raw unweighted breakdown for logging.
+            post_loss_t = self._kendall_total_loss(
+                fast_model, mixer_idx, support_x_i, support_y, support_coords
+            )
+            post_loss_val = post_loss_t.item()
+            del post_loss_t
+            mse_raw, aux_raw = self._compute_raw_losses(
+                fast_model, mixer_idx, support_x_i, support_y, support_coords
+            )
+            task_metrics.append({
+                "support_pre_adapt": pre_loss_val,
+                "support_post_adapt": post_loss_val,
+                "mse_main": mse_raw,
+                "aux": aux_raw,
+            })
             if verbose:
-                post_loss = self._kendall_total_loss(
-                    fast_model, mixer_idx, support_x_i, support_y, support_coords
-                )
-                print(f"\t\tmixer {mixer_idx} post-adapt: support_loss={post_loss.item():.6f}"
+                print(f"\t\tmixer {mixer_idx} post-adapt: support_loss={post_loss_val:.6f}"
                       f" ({self.config.inner_steps} steps)")
-                del post_loss
 
             # Query gradient: v_i = ∇_{φ_i} L_query(φ_i*) over mixer_i's full slice
             query_loss_i = self._kendall_total_loss(
@@ -880,7 +971,7 @@ class iMAMLTrainer:
                 print(f"\t\t\tmixer {mixer_idx} loss={query_loss_val_i:.2f}")
 
         avg_query_loss = query_loss_total / n_outputs
-        return corrected_grads, train_grads, avg_query_loss
+        return corrected_grads, train_grads, avg_query_loss, task_metrics
 
     def _compute_meta_gradient(self, tasks: List[PDETask]) -> float:
         """Compute per-mixer CG-corrected meta-gradients and set .grad on params.
@@ -909,12 +1000,25 @@ class iMAMLTrainer:
         total_loss = 0.0
         self._lam_grad: List[float] = [0.0] * n_outputs
 
+        # Per-mixer accumulators for M5a logging fields (raw loss scalars,
+        # pre/post adapt support losses). Summed across the batch then
+        # averaged at the end.
+        acc_support_pre: List[float] = [0.0] * n_outputs
+        acc_support_post: List[float] = [0.0] * n_outputs
+        acc_mse_main: List[float] = [0.0] * n_outputs
+        acc_aux: List[Dict[str, float]] = [{} for _ in range(n_outputs)]
+
         for task_idx, task in enumerate(tasks):
             print(f"\ttask [{task_idx}/{len(tasks)}]: {task.task_name}")
             task_seed = self.iteration * len(tasks) + task_idx
-            corrected_grads, train_grads, loss_val = self.compute_task(task, task_seed)
+            corrected_grads, train_grads, loss_val, task_metrics = self.compute_task(task, task_seed)
             for i in range(n_outputs):
                 meta_grads[i] += corrected_grads[i] / len(tasks)
+                acc_support_pre[i] += task_metrics[i]["support_pre_adapt"]
+                acc_support_post[i] += task_metrics[i]["support_post_adapt"]
+                acc_mse_main[i] += task_metrics[i]["mse_main"]
+                for name, aux_val in task_metrics[i]["aux"].items():
+                    acc_aux[i][name] = acc_aux[i].get(name, 0.0) + aux_val
             total_loss += loss_val / len(tasks)
 
             # Per-mixer lambda meta-learning. train_grads is populated by
@@ -929,7 +1033,42 @@ class iMAMLTrainer:
 
         avg_loss = total_loss
         if not torch.tensor(avg_loss).isfinite():
+            self._last_iter_metrics = None
             return float("nan")
+
+        # Build the per-iter logging blob. Averaged across the batch's tasks,
+        # plus end-of-iter snapshots of log-variances / effective weights /
+        # λ / LR. Appended to history by _run_phase after the NaN check so
+        # history lists stay length-aligned with train_loss on NaN rollback.
+        n_tasks = len(tasks)
+        mixer_blobs: Dict[str, Dict[str, Any]] = {}
+        for i in range(n_outputs):
+            mixer_i: Dict[str, Any] = {
+                "support_pre_adapt": acc_support_pre[i] / n_tasks,
+                "support_post_adapt": acc_support_post[i] / n_tasks,
+                "mse_main": acc_mse_main[i] / n_tasks,
+                "aux": {name: v / n_tasks for name, v in acc_aux[i].items()},
+            }
+            if self.aux_losses_enabled:
+                # Snapshot Kendall log-variances for this mixer.
+                s_mse_t = self.model.get_log_sigma(i, "mse")  # type: ignore[attr-defined]
+                mixer_i["s_mse"] = s_mse_t.item()
+                mixer_i["eff_weight_mse"] = torch.exp(-s_mse_t).item()
+                s_aux_map: Dict[str, float] = {}
+                eff_aux_map: Dict[str, float] = {}
+                for name in acc_aux[i].keys():
+                    s_aux_t = self.model.get_log_sigma(i, name)  # type: ignore[attr-defined]
+                    s_aux_map[name] = s_aux_t.item()
+                    eff_aux_map[name] = torch.exp(-s_aux_t).item()
+                mixer_i["s_aux"] = s_aux_map
+                mixer_i["eff_weight_aux"] = eff_aux_map
+            mixer_blobs[str(i)] = mixer_i
+
+        self._last_iter_metrics = {
+            "lam": [l.item() for l in self.lam],
+            "lr": [opt_i.param_groups[0]["lr"] for opt_i in self.outer_opts],
+            "mixers": mixer_blobs,
+        }
 
         # Per-mixer .grad writeback. For each mixer, walk its outer slice
         # and copy the corresponding meta_grad slice into p.grad.
@@ -1029,7 +1168,7 @@ class iMAMLTrainer:
         for i, task in enumerate(tasks):
             task_seed = seed + i
             with torch.enable_grad():
-                _, _, task_loss_val = self.compute_task(task, task_seed)
+                _, _, task_loss_val, _ = self.compute_task(task, task_seed)
             total_loss += task_loss_val
 
         return total_loss / len(tasks)
@@ -1210,7 +1349,7 @@ class iMAMLTrainer:
         # On fresh start, reset loop state. On resume, already loaded from checkpoint.
         if not self._resumed:
             self.patience_counter = 0
-            self.history = {"train_loss": [], "val_loss": [], "iteration": []}
+            self.history = self._fresh_history()
 
         start_iteration = (self.iteration + 1) if self._resumed else 0
 
@@ -1406,6 +1545,27 @@ class iMAMLTrainer:
 
             self.history["train_loss"].append(train_loss)
             self.history["iteration"].append(iteration)
+
+            # M5a expanded logging — append the per-iter metrics blob built
+            # by _compute_meta_gradient. Only appended after the NaN check
+            # so history lists stay length-aligned with train_loss/iteration.
+            if self._last_iter_metrics is not None:
+                self.history["lam"].append(self._last_iter_metrics["lam"])
+                self.history["lr"].append(self._last_iter_metrics["lr"])
+                for mixer_key, mixer_blob in self._last_iter_metrics["mixers"].items():
+                    h_mixer = self.history["mixers"][mixer_key]
+                    h_mixer["support_pre_adapt"].append(mixer_blob["support_pre_adapt"])
+                    h_mixer["support_post_adapt"].append(mixer_blob["support_post_adapt"])
+                    h_mixer["mse_main"].append(mixer_blob["mse_main"])
+                    for name, v in mixer_blob["aux"].items():
+                        h_mixer["aux"][name].append(v)
+                    if self.aux_losses_enabled:
+                        h_mixer["s_mse"].append(mixer_blob["s_mse"])
+                        h_mixer["eff_weight_mse"].append(mixer_blob["eff_weight_mse"])
+                        for name, v in mixer_blob["s_aux"].items():
+                            h_mixer["s_aux"][name].append(v)
+                        for name, v in mixer_blob["eff_weight_aux"].items():
+                            h_mixer["eff_weight_aux"][name].append(v)
 
             early_stopped = self._iteration_hook(iteration, train_loss, log_interval, checkpoint_dir)
             if early_stopped:
