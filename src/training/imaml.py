@@ -66,6 +66,69 @@ def cg_solve(
     return x
 
 
+def kendall_total_loss(
+    fast_model: nn.Module,
+    mixer_idx: int,
+    features: torch.Tensor,
+    targets: torch.Tensor,
+    coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
+    *,
+    cost_function: Callable[
+        [torch.Tensor, torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]],
+        torch.Tensor,
+    ],
+    aux_losses_enabled: bool,
+    task: Optional["PDETask"],
+) -> torch.Tensor:
+    """Main MSE plus Kendall-weighted aux losses for one mixer.
+
+    The single source of truth for the inner-loop objective. Called from
+    both the trainer (via `iMAMLTrainer._kendall_total_loss`, which binds
+    cost_function / aux_losses_enabled / task from trainer state) and from
+    `scripts/evaluate.py`, which needs the same closure at evaluation time
+    for training-eval consistency (see plan doc §"Training-evaluation
+    consistency").
+
+    Formula per Kendall et al. 2018, eq 7:
+        L = ½·exp(-s_mse)·mse + ½·s_mse
+            + Σᵢ [½·exp(-s_aux_i)·aux_i + ½·s_aux_i]
+
+    When `aux_losses_enabled` is False, returns just the main MSE — no
+    Kendall weighting. The log-variances `s_*` are read from `fast_model`'s
+    ParameterDict; they must already be registered (which they are when
+    aux_losses_enabled is True and the model was built via
+    `MixerNetwork.from_task(..., aux_losses_enabled=True)`).
+
+    Both 0.5 factors in the formula come from the Gaussian NLL derivation:
+        -log p(y|f) = (y-f)² / (2σ²) + log σ + const
+    with s := log σ² giving `1/(2σ²) = 0.5·exp(-s)` as the weight on L and
+    `log σ = 0.5·s` as the regularizer. Kept symmetric per the paper.
+    """
+    pred = fast_model.forward_one(mixer_idx, features)  # type: ignore[attr-defined]
+    # `targets` is stacked shape (N, n_outputs); slice this mixer's column
+    # so the shape matches `pred`'s (N,).
+    target_i = targets[:, mixer_idx]
+    mse = cost_function(pred, target_i, coords)
+
+    if not aux_losses_enabled:
+        return mse
+
+    assert task is not None, (
+        "task must be provided when aux_losses_enabled=True "
+        "(needed for task.auxiliary_losses call)"
+    )
+
+    s_mse = fast_model.get_log_sigma(mixer_idx, "mse")  # type: ignore[attr-defined]
+    total = 0.5 * torch.exp(-s_mse) * mse + 0.5 * s_mse
+
+    aux_losses = task.auxiliary_losses(mixer_idx, fast_model, features, targets)
+    for name, loss in aux_losses.items():
+        s_i = fast_model.get_log_sigma(mixer_idx, name)  # type: ignore[attr-defined]
+        total = total + 0.5 * torch.exp(-s_i) * loss + 0.5 * s_i
+
+    return total
+
+
 class iMAMLTrainer:
     """
     iMAML trainer for meta-learning PDE operator initialization.
@@ -506,56 +569,21 @@ class iMAMLTrainer:
         targets: torch.Tensor,
         coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> torch.Tensor:
-        """Main MSE plus Kendall-weighted aux losses for one mixer.
+        """Trainer-side thin wrapper over the module-level `kendall_total_loss`.
 
-        Formula per Kendall et al. 2018, eq 7:
-            L = ½·exp(-s_mse)·mse + ½·s_mse
-                + Σᵢ [½·exp(-s_i)·aux_i + ½·s_i]
-
-        When `aux_losses_enabled` is False, returns just the main MSE —
-        no Kendall weighting, matching the pre-mixer legacy path.
-
-        The log-variances `s_*` are read from `fast_model`'s ParameterDict.
-        They're held constant during the inner loop (not adapted), but
-        they're still part of `fast_model.parameters()` so their gradient
-        flow into the meta-update is handled by the existing autograd
-        path on the query loss.
+        Binds the trainer's `cost_function`, `aux_losses_enabled` flag, and
+        currently-bound `_current_task` into the free module function so the
+        inner-loop closures can call `self._kendall_total_loss(...)` without
+        passing those three every time. The free function is the single
+        source of truth for the formula — `scripts/evaluate.py` imports it
+        directly and passes its own cost_function / aux flag / task.
         """
-        pred = fast_model.forward_one(mixer_idx, features)  # type: ignore[attr-defined]
-        # `targets` is the full stacked tensor of shape (N, n_outputs);
-        # slice mixer_idx's column to match `pred`'s (N,) shape.
-        target_i = targets[:, mixer_idx]
-        mse = self.cost_function(pred, target_i, coords)
-
-        if not self.aux_losses_enabled:
-            return mse
-
-        assert self._current_task is not None, (
-            "_current_task must be set before calling _kendall_total_loss "
-            "(set in _compute_task_imaml at the start of each task)"
+        return kendall_total_loss(
+            fast_model, mixer_idx, features, targets, coords,
+            cost_function=self.cost_function,
+            aux_losses_enabled=self.aux_losses_enabled,
+            task=self._current_task,
         )
-
-        # Kendall per-loss contribution: 0.5·exp(-s)·L + 0.5·s
-        #
-        # Both 0.5 factors come from the Gaussian NLL derivation:
-        #   -log p(y|f) = (y-f)²/(2σ²) + log σ + const
-        # With s := log σ²:
-        #   1/(2σ²) = 0.5·exp(-s)   → coefficient on L
-        #   log σ   = 0.5·s          → regularizer
-        # Kept symmetric per the paper (eq 7). Dropping both 0.5s is
-        # optimization-equivalent (constant global scaling) but the
-        # explicit factors match Kendall et al. 2018 line-for-line.
-        s_mse = fast_model.get_log_sigma(mixer_idx, "mse")  # type: ignore[attr-defined]
-        total = 0.5 * torch.exp(-s_mse) * mse + 0.5 * s_mse
-
-        aux_losses = self._current_task.auxiliary_losses(
-            mixer_idx, fast_model, features, targets
-        )
-        for name, loss in aux_losses.items():
-            s_i = fast_model.get_log_sigma(mixer_idx, name)  # type: ignore[attr-defined]
-            total = total + 0.5 * torch.exp(-s_i) * loss + 0.5 * s_i
-
-        return total
 
     def _fresh_history(self) -> Dict[str, Any]:
         """Build an empty expanded-history dict matching the M5a schema.

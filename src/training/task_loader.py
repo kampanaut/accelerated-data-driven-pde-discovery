@@ -48,6 +48,39 @@ class CoefficientSpec:
             self.coeff_name = self.name
 
 
+@dataclass
+class CoefficientExtraction:
+    """One recovery path's output from `PDETask.extract_coefficients`.
+
+    Produced for each (coefficient, formula_tag) pair by the task's
+    extraction machinery. Carries three things:
+
+    - `mean`: scalar tensor — mean across the holdout collocation points
+      of the per-point extracted value. The "recovered coefficient"
+      reported as the final answer for this path. Used for the
+      `RecoveryPath.mean` entry in the JSON schema.
+    - `std`: scalar tensor — dispersion of the per-point extracted values
+      across the holdout. Tells you "how consistent is this path's
+      estimate across points" — small std = mixer is nearly linear on
+      the relevant feature, clean recovery; large std = per-point noise
+      or nonlinearity. Used for `RecoveryPath.std`.
+    - `values`: per-point tensor shape `(holdout,)` — the raw extracted
+      value at each collocation point, before reduction to mean/std.
+      This is what histogram plots consume. `scripts/evaluate.py` stashes
+      it into `MethodResult.per_path_raw_values[path_key]` for the NPZ
+      side of the results, so the visualizer can reconstruct the full
+      distribution at plot time.
+
+    `mean` and `std` are redundant with `values` (derivable via
+    `values.mean()` and `values.std()`) but are stored explicitly for
+    cheap scalar access at the JSON serialization path without re-running
+    reductions.
+    """
+    mean: torch.Tensor
+    std: torch.Tensor
+    values: torch.Tensor
+
+
 class PDETask(ABC):
     """
     Abstract base class for Fourier-native PDE discovery tasks.
@@ -293,7 +326,7 @@ class PDETask(ABC):
         mixer_idx: int,
         fast_model,
         features: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
         """Extract recovered coefficient values from the adapted mixer.
 
         Runs Jacobian probes, regression slopes, and/or residual
@@ -309,11 +342,45 @@ class PDETask(ABC):
                       (N, len(structural_feature_names[mixer_idx])).
 
         Returns:
-            {coeff_name: {'mean': scalar_tensor, 'std': scalar_tensor}, ...}
-            One entry per task-varying coefficient recovered by this
-            mixer. The 'std' is per-point dispersion (how linear the
-            mixer is on the relevant feature, or regression residual
-            std, depending on recovery type).
+            A two-level nested dict of `CoefficientExtraction` instances:
+
+                {
+                    coeff_name: {
+                        formula_tag: CoefficientExtraction(mean, std, values),
+                        ...
+                    },
+                    ...
+                }
+
+            - `coeff_name` is the physical coefficient as named in task
+              attributes (e.g. "D_u", "k2", "c", "nu"). It may appear in
+              multiple mixers for shared coefficients (BR's k2, λ-ω's c, a).
+            - `formula_tag` is a short string identifying HOW this recovery
+              was derived, unique within this (coefficient, mixer) pair.
+              Examples: "jvp_lap_u", "neg1_minus_jvp_u", "residual",
+              "from_u2v", "from_v3". Most single-formula recoveries have
+              just one formula_tag entry; λ-ω's `c` in mixer_u has two
+              (`from_u2v` and `from_v3`) because the same coefficient
+              appears as the weight on two distinct library columns.
+            - `CoefficientExtraction.mean` is the mean over collocation
+              points of the per-point extracted value (scalar tensor).
+            - `CoefficientExtraction.std` is the per-point dispersion
+              across the holdout — for direct JVPs it's `std(jvp_per_point)`;
+              for regression-based extractions it's the regression residual
+              std; for residual subtraction (BR k1) it's `std(residual)`.
+            - `CoefficientExtraction.values` is the per-point tensor shape
+              `(holdout,)` — the raw extracted value at each point. Used by
+              `scripts/evaluate.py` to populate `per_path_raw_values` for
+              the NPZ side of the results, which downstream histograms /
+              violin plots read.
+
+            `scripts/evaluate.py` merges these outputs across mixers by
+            prefixing each formula_tag with the mixer name:
+                path_key = f"{mixer_name}.{formula_tag}"
+            producing recovery path keys like "u.jvp_lap_u", "v.jvp_u",
+            "u.from_u2v". The per-coefficient cross-path reconciliation
+            (mean, std, abs_error, pct_error) is computed over these path
+            entries to produce the PerStepRecovery entries in results.json.
         """
         pass
 
@@ -676,11 +743,18 @@ class BrusselatorTask(PDETask):
         mixer_idx: int,
         fast_model,
         features: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
         """Recover BR coefficients via JVP, algebra, and residual subtraction.
 
         mixer_u (idx=0) → {D_u, k2, k1}. mixer_v (idx=1) → {D_v, k2}.
         Both mixers produce a k2 estimate (cross-check handled downstream).
+
+        Returns nested dict: {coeff_name: {formula_tag: CoefficientExtraction}}.
+        Each `CoefficientExtraction` carries the scalar `mean`/`std` over the
+        holdout plus the raw per-point `values` tensor shape `(holdout,)` used
+        for downstream histogram plots. The formula_tag identifies which
+        extraction route produced the estimate (e.g. "jvp_lap_u",
+        "neg1_minus_jvp_u", "residual", "jvp_u").
         """
         if mixer_idx not in (0, 1):
             raise ValueError(
@@ -700,11 +774,7 @@ class BrusselatorTask(PDETask):
             jvp_u = grads[:, 0]            # ≈ -(k2 + 1)
             jvp_u_sq_v = grads[:, 1]       # ≈ +1 (fixed)
             jvp_lap_u = grads[:, 2]        # ≈ D_u
-            D_u_mean = jvp_lap_u.mean()
-            D_u_std = jvp_lap_u.std()
             k2_vals = -1.0 - jvp_u
-            k2_mean = k2_vals.mean()
-            k2_std = k2_vals.std()
             # Residual = mixer_output − Σ partial_i · feature_i ≈ k1.
             feats_det = features.detach()
             mixer_output = fast_model.forward_one(0, feats_det).detach()
@@ -714,24 +784,18 @@ class BrusselatorTask(PDETask):
                 + jvp_lap_u * feats_det[:, 2]
             )
             residual = mixer_output - lin_combo
-            k1_mean = residual.mean()
-            k1_std = residual.std()
             return {
-                "D_u": {"mean": D_u_mean, "std": D_u_std},
-                "k2": {"mean": k2_mean, "std": k2_std},
-                "k1": {"mean": k1_mean, "std": k1_std},
+                "D_u": {"jvp_lap_u":        CoefficientExtraction(mean=jvp_lap_u.mean(), std=jvp_lap_u.std(), values=jvp_lap_u.detach())},
+                "k2":  {"neg1_minus_jvp_u": CoefficientExtraction(mean=k2_vals.mean(),   std=k2_vals.std(),   values=k2_vals.detach())},
+                "k1":  {"residual":         CoefficientExtraction(mean=residual.mean(),  std=residual.std(),  values=residual.detach())},
             }
 
         # mixer_v (idx == 1)
         jvp_u = grads[:, 0]          # ≈ k2
         jvp_lap_v = grads[:, 2]      # ≈ D_v
-        D_v_mean = jvp_lap_v.mean()
-        D_v_std = jvp_lap_v.std()
-        k2_mean = jvp_u.mean()
-        k2_std = jvp_u.std()
         return {
-            "D_v": {"mean": D_v_mean, "std": D_v_std},
-            "k2": {"mean": k2_mean, "std": k2_std},
+            "D_v": {"jvp_lap_v": CoefficientExtraction(mean=jvp_lap_v.mean(), std=jvp_lap_v.std(), values=jvp_lap_v.detach())},
+            "k2":  {"jvp_u":     CoefficientExtraction(mean=jvp_u.mean(),     std=jvp_u.std(),     values=jvp_u.detach())},
         }
 
     def auxiliary_losses(
@@ -1014,12 +1078,17 @@ class FitzHughNagumoTask(PDETask):
         mixer_idx: int,
         fast_model,
         features: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
         """Recover FHN coefficients via JVP and residual subtraction.
 
         mixer_u (idx=0) → {D_u}. mixer_v (idx=1) → {D_v, eps, eps_a, eps_b}
         using Framing A (compound coefficients); a and b are derived
         post-hoc at evaluation time.
+
+        Returns a nested dict `{coeff_name: {formula_tag: CoefficientExtraction}}`.
+        Each `CoefficientExtraction` carries the scalar mean/std and the
+        per-point `values` tensor (shape `(holdout,)`) prior to reduction.
+        The formula_tag identifies the extraction method used.
         """
         if mixer_idx not in (0, 1):
             raise ValueError(
@@ -1036,23 +1105,24 @@ class FitzHughNagumoTask(PDETask):
         )[0].detach()  # (N, n_cols)
 
         if mixer_idx == 0:
-            jvp_lap_u = grads[:, 0]  # ≈ D_u
-            D_u_mean = jvp_lap_u.mean()
-            D_u_std = jvp_lap_u.std()
-            return {"D_u": {"mean": D_u_mean, "std": D_u_std}}
+            jvp_lap_u = grads[:, 0]  # ≈ D_u (per-point)
+            D_u_values = jvp_lap_u.detach()
+            return {
+                "D_u": {
+                    "jvp_lap_u": CoefficientExtraction(
+                        mean=D_u_values.mean(),
+                        std=D_u_values.std(),
+                        values=D_u_values,
+                    )
+                },
+            }
 
         # mixer_v (idx == 1); library = [v_xx+v_yy, u, v]
-        jvp_lap_v = grads[:, 0]  # ≈ D_v
-        jvp_u = grads[:, 1]      # ≈ +eps
-        jvp_v = grads[:, 2]      # ≈ -eps·a
-        D_v_mean = jvp_lap_v.mean()
-        D_v_std = jvp_lap_v.std()
-        eps_mean = jvp_u.mean()
-        eps_std = jvp_u.std()
-        eps_a_mean = -jvp_v.mean()
-        eps_a_std = jvp_v.std()
+        jvp_lap_v = grads[:, 0]  # ≈ D_v (per-point)
+        jvp_u = grads[:, 1]      # ≈ +eps (per-point)
+        jvp_v = grads[:, 2]      # ≈ -eps·a (per-point)
 
-        # Residual = mixer_output − Σ partial_i · feature_i ≈ -eps·b.
+        # Residual = mixer_output − Σ partial_i · feature_i ≈ -eps·b (per-point).
         feats_det = features.detach()
         mixer_output = fast_model.forward_one(1, feats_det).detach()
         lin_combo = (
@@ -1061,14 +1131,41 @@ class FitzHughNagumoTask(PDETask):
             + jvp_v * feats_det[:, 2]
         )
         residual = mixer_output - lin_combo
-        eps_b_mean = -residual.mean()
-        eps_b_std = residual.std()
+
+        D_v_values = jvp_lap_v.detach()
+        eps_values = jvp_u.detach()
+        eps_a_values = (-jvp_v).detach()
+        eps_b_values = (-residual).detach()
 
         return {
-            "D_v": {"mean": D_v_mean, "std": D_v_std},
-            "eps": {"mean": eps_mean, "std": eps_std},
-            "eps_a": {"mean": eps_a_mean, "std": eps_a_std},
-            "eps_b": {"mean": eps_b_mean, "std": eps_b_std},
+            "D_v": {
+                "jvp_lap_v": CoefficientExtraction(
+                    mean=D_v_values.mean(),
+                    std=D_v_values.std(),
+                    values=D_v_values,
+                )
+            },
+            "eps": {
+                "jvp_u": CoefficientExtraction(
+                    mean=eps_values.mean(),
+                    std=eps_values.std(),
+                    values=eps_values,
+                )
+            },
+            "eps_a": {
+                "neg_jvp_v": CoefficientExtraction(
+                    mean=eps_a_values.mean(),
+                    std=eps_a_values.std(),
+                    values=eps_a_values,
+                )
+            },
+            "eps_b": {
+                "neg_residual": CoefficientExtraction(
+                    mean=eps_b_values.mean(),
+                    std=eps_b_values.std(),
+                    values=eps_b_values,
+                )
+            },
         }
 
     def auxiliary_losses(
@@ -1370,11 +1467,32 @@ class LambdaOmegaTask(PDETask):
         mixer_idx: int,
         fast_model,
         features: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
         """Recover λ-ω coefficients via JVP through each mixer.
 
-        mixer_u (idx=0) → {D_u, a_from_u, c_from_u2v, c_from_v3}.
-        mixer_v (idx=1) → {D_v, a_from_v, c_from_u3, c_from_uv2}.
+        Returns a nested dict
+        ``{coeff_name: {formula_tag: CoefficientExtraction}}``. Each
+        `CoefficientExtraction` carries the scalar `mean`/`std` along with
+        the per-point `values` tensor (shape `(holdout,)`) — the raw
+        (or signed) JVP evaluated at every collocation point before
+        reduction. The per-point tensor is what downstream histogram
+        plotting consumes.
+
+        mixer_u (idx=0) recoveries:
+            D_u : jvp_wrt_(u_xx+u_yy)       → tag ``jvp_lap_u``
+            a   : jvp_wrt_u                 → tag ``jvp_u``
+            c   : -jvp_wrt_(u²·v)           → tag ``from_u2v``
+            c   : -jvp_wrt_(v³)             → tag ``from_v3``
+
+        mixer_v (idx=1) recoveries:
+            D_v : jvp_wrt_(v_xx+v_yy)       → tag ``jvp_lap_v``
+            a   : jvp_wrt_v                 → tag ``jvp_v``
+            c   : +jvp_wrt_(u³)             → tag ``from_u3``
+            c   : +jvp_wrt_(u·v²)           → tag ``from_uv2``
+
+        The two `c` entries per mixer are kept distinct because they
+        come from different library columns whose sensitivities can
+        diverge during recovery.
         """
         if mixer_idx not in (0, 1):
             raise ValueError(
@@ -1397,21 +1515,35 @@ class LambdaOmegaTask(PDETask):
             jvp_u = grads[:, 1]
             jvp_u2v = grads[:, 4]  # ≈ -c
             jvp_v3 = grads[:, 5]   # ≈ -c
-            D_u_mean = jvp_lap_u.mean()
-            D_u_std = jvp_lap_u.std()
-            a_mean = jvp_u.mean()
-            a_std = jvp_u.std()
             c_u2v_vals = -jvp_u2v
-            c_u2v_mean = c_u2v_vals.mean()
-            c_u2v_std = jvp_u2v.std()
             c_v3_vals = -jvp_v3
-            c_v3_mean = c_v3_vals.mean()
-            c_v3_std = jvp_v3.std()
             return {
-                "D_u": {"mean": D_u_mean, "std": D_u_std},
-                "a_from_u": {"mean": a_mean, "std": a_std},
-                "c_from_u2v": {"mean": c_u2v_mean, "std": c_u2v_std},
-                "c_from_v3": {"mean": c_v3_mean, "std": c_v3_std},
+                "D_u": {
+                    "jvp_lap_u": CoefficientExtraction(
+                        mean=jvp_lap_u.mean(),
+                        std=jvp_lap_u.std(),
+                        values=jvp_lap_u.detach(),
+                    ),
+                },
+                "a": {
+                    "jvp_u": CoefficientExtraction(
+                        mean=jvp_u.mean(),
+                        std=jvp_u.std(),
+                        values=jvp_u.detach(),
+                    ),
+                },
+                "c": {
+                    "from_u2v": CoefficientExtraction(
+                        mean=c_u2v_vals.mean(),
+                        std=c_u2v_vals.std(),
+                        values=c_u2v_vals.detach(),
+                    ),
+                    "from_v3": CoefficientExtraction(
+                        mean=c_v3_vals.mean(),
+                        std=c_v3_vals.std(),
+                        values=c_v3_vals.detach(),
+                    ),
+                },
             }
 
         # mixer_v (idx == 1)
@@ -1421,19 +1553,33 @@ class LambdaOmegaTask(PDETask):
         jvp_v = grads[:, 1]
         jvp_u3 = grads[:, 2]   # ≈ +c
         jvp_uv2 = grads[:, 3]  # ≈ +c
-        D_v_mean = jvp_lap_v.mean()
-        D_v_std = jvp_lap_v.std()
-        a_mean = jvp_v.mean()
-        a_std = jvp_v.std()
-        c_u3_mean = jvp_u3.mean()
-        c_u3_std = jvp_u3.std()
-        c_uv2_mean = jvp_uv2.mean()
-        c_uv2_std = jvp_uv2.std()
         return {
-            "D_v": {"mean": D_v_mean, "std": D_v_std},
-            "a_from_v": {"mean": a_mean, "std": a_std},
-            "c_from_u3": {"mean": c_u3_mean, "std": c_u3_std},
-            "c_from_uv2": {"mean": c_uv2_mean, "std": c_uv2_std},
+            "D_v": {
+                "jvp_lap_v": CoefficientExtraction(
+                    mean=jvp_lap_v.mean(),
+                    std=jvp_lap_v.std(),
+                    values=jvp_lap_v.detach(),
+                ),
+            },
+            "a": {
+                "jvp_v": CoefficientExtraction(
+                    mean=jvp_v.mean(),
+                    std=jvp_v.std(),
+                    values=jvp_v.detach(),
+                ),
+            },
+            "c": {
+                "from_u3": CoefficientExtraction(
+                    mean=jvp_u3.mean(),
+                    std=jvp_u3.std(),
+                    values=jvp_u3.detach(),
+                ),
+                "from_uv2": CoefficientExtraction(
+                    mean=jvp_uv2.mean(),
+                    std=jvp_uv2.std(),
+                    values=jvp_uv2.detach(),
+                ),
+            },
         }
 
     def auxiliary_losses(
@@ -1698,11 +1844,17 @@ class NavierStokesTask(PDETask):
         mixer_idx: int,
         fast_model,
         features: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
         """Recover nu via the direct partial wrt the vorticity Laplacian column.
 
         The mixer ideally learns `f(a, b) ≈ -a + nu·b` where a is the
         advection composite and b = ω_xx+ω_yy. Then ∂f/∂b = nu pointwise.
+
+        Returns nested `{coeff_name: {formula_tag: CoefficientExtraction}}`,
+        where `CoefficientExtraction` carries the scalar mean/std alongside
+        the per-point raw values. The single formula here is tagged
+        `jvp_lap_omega`. The -1 weight on the advection term is a fixed
+        constant and is not extracted.
         """
         if mixer_idx != 0:
             raise ValueError(
@@ -1719,7 +1871,15 @@ class NavierStokesTask(PDETask):
         jvp_lap_omega = grads[:, 1].detach()
         nu_mean = jvp_lap_omega.mean()
         nu_std = jvp_lap_omega.std()
-        return {"nu": {"mean": nu_mean, "std": nu_std}}
+        return {
+            "nu": {
+                "jvp_lap_omega": CoefficientExtraction(
+                    mean=nu_mean,
+                    std=nu_std,
+                    values=jvp_lap_omega,
+                )
+            }
+        }
 
     def auxiliary_losses(
         self,
@@ -1902,14 +2062,18 @@ class HeatEquationTask(PDETask):
         mixer_idx: int,
         fast_model,
         features: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
         """Recover D from both feature columns (two independent paths).
 
         The mixer ideally learns `f(a, b) ≈ D·(a + b)`. Both partials
-        ∂f/∂a and ∂f/∂b should equal D. We report both means separately
-        as `D_from_uxx` and `D_from_uyy` — they serve as a cross-check
-        on whether the mixer learned symmetric weights on the two
-        Laplacian components.
+        ∂f/∂a and ∂f/∂b should equal D. We report them under the single
+        coefficient `D` with two formula tags (`from_uxx`, `from_uyy`),
+        serving as a cross-check on whether the mixer learned symmetric
+        weights on the two Laplacian components.
+
+        Returns nested dict: {coeff_name: {formula_tag: CoefficientExtraction}}.
+        Each `CoefficientExtraction` carries scalar `mean`/`std` plus the
+        per-point `values` tensor of the pre-reduction JVP.
         """
         if mixer_idx != 0:
             raise ValueError(
@@ -1926,8 +2090,18 @@ class HeatEquationTask(PDETask):
         jvp_uxx = grads[:, 0].detach()  # ≈ D per point
         jvp_uyy = grads[:, 1].detach()  # ≈ D per point
         return {
-            "D_from_uxx": {"mean": jvp_uxx.mean().detach(), "std": jvp_uxx.std().detach()},
-            "D_from_uyy": {"mean": jvp_uyy.mean().detach(), "std": jvp_uyy.std().detach()},
+            "D": {
+                "from_uxx": CoefficientExtraction(
+                    mean=jvp_uxx.mean(),
+                    std=jvp_uxx.std(),
+                    values=jvp_uxx.detach(),
+                ),
+                "from_uyy": CoefficientExtraction(
+                    mean=jvp_uyy.mean(),
+                    std=jvp_uyy.std(),
+                    values=jvp_uyy.detach(),
+                ),
+            },
         }
 
     def auxiliary_losses(
@@ -2151,12 +2325,22 @@ class NLHeatEquationTask(PDETask):
         mixer_idx: int,
         fast_model,
         features: torch.Tensor,
-    ) -> dict[str, dict[str, torch.Tensor]]:
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
         """Recover K via regression slope on the mixer's per-point partials.
 
         The mixer ideally learns `f(a, b) ≈ K·a·b` where a = 1-u and
         b = u_xx+u_yy. The partial ∂f/∂a equals K·b at every point. A
         least-squares slope of (∂f/∂a) against b recovers K.
+
+        Returns a nested dict `{coeff_name: {formula_tag: CoefficientExtraction}}`.
+        The single formula tag here is `"regression"`, reflecting the
+        least-squares slope extraction.
+
+        The reported `mean` is the regression slope (numerically stable
+        across the full batch). The `values` tensor carries the *per-point*
+        ratio `jvp_1_minus_u / (u_xx+u_yy)`, safely clamped away from zero
+        denominators. This is noisier than the regression slope but gives
+        a meaningful distribution across the holdout for histogram plots.
         """
         if mixer_idx != 0:
             raise ValueError(
@@ -2176,7 +2360,27 @@ class NLHeatEquationTask(PDETask):
         denom = (lap * lap).sum().clamp(min=1e-12)
         K_slope = numer / denom
         K_std = jvp_1_minus_u.std()  # per-point dispersion (linearity check)
-        return {"K": {"mean": K_slope.detach(), "std": K_std.detach()}}
+        # Per-point ratio as the `values` tensor. Guard against near-zero
+        # denominators: where |lap| < eps, fall back to the regression
+        # slope (a neutral filler that doesn't skew histograms).
+        eps = 1e-6
+        safe_lap = torch.where(
+            lap.abs() > eps, lap, torch.ones_like(lap)
+        )
+        per_point_K = torch.where(
+            lap.abs() > eps,
+            jvp_1_minus_u / safe_lap,
+            K_slope.expand_as(lap),
+        )
+        return {
+            "K": {
+                "regression": CoefficientExtraction(
+                    mean=K_slope.detach(),
+                    std=K_std.detach(),
+                    values=per_point_K.detach(),
+                ),
+            },
+        }
 
     def auxiliary_losses(
         self,
