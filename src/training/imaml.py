@@ -798,11 +798,33 @@ class iMAMLTrainer:
 
         `support_x_list[i]` and `query_x_list[i]` are the structural feature
         tensors for mixer `i`. For 1-output PDEs the lists are length 1.
+
+        When `training.noise_augmentation.enabled` is true, samples a per-call
+        `noise_level ~ Uniform(range[0], range[1])` with a seeded generator and
+        builds a device-side generator for the Gaussian noise injection inside
+        `task.inject_noise_at_source`. Both generators are seeded off `seed`
+        with disjoint streams so the whole training run is reproducible.
         """
+        noise_level = 0.0
+        noise_generator: Optional[torch.Generator] = None
+        if self.config.noise_augmentation.enabled:
+            lo, hi = self.config.noise_augmentation.range
+            # Separate streams: one CPU generator for the noise_level scalar,
+            # one device generator for the Gaussian tensor in inject_noise_at_source.
+            # Both derived from `seed` with disjoint offsets for determinism.
+            level_gen = torch.Generator(device="cpu").manual_seed(seed + 0x01)
+            u01 = torch.rand(1, generator=level_gen).item()
+            noise_level = float(lo + u01 * (hi - lo))
+            noise_generator = torch.Generator(device=self.device).manual_seed(
+                seed + 0x02
+            )
+
         support, query, support_coords, query_coords = task.get_support_query_split(
             K_shot=self.config.k_shot,
             query_size=self.config.query_size,
             k_seed=seed,
+            noise_level=noise_level,
+            noise_generator=noise_generator,
         )
 
         if self.config.inner_steps == 0:

@@ -157,6 +157,8 @@ class PDETask(ABC):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[list[torch.Tensor], torch.Tensor]:
         """Produce structural features and targets at collocation points.
 
@@ -164,6 +166,14 @@ class PDETask(ABC):
             snap_idx_list: Unique snapshot indices, shape (n_unique,)
             E_x: Masked x phase matrix, shape (n_unique, n_points, nx)
             E_y: Masked y phase matrix, shape (n_unique, n_points, ny)
+            noise_level: source-level noise scale in [0, 1]. When > 0,
+                         subclasses call `inject_noise_at_source` on their
+                         sliced `u_hat`/`v_hat` before derivative
+                         computation, so both features AND targets inherit
+                         correlated noise from the perturbed state.
+            noise_generator: optional seeded torch.Generator for the
+                             Gaussian sampling inside `inject_noise_at_source`.
+                             Required for reproducibility.
 
         Returns:
             A tuple (features_list, targets):
@@ -370,6 +380,8 @@ class PDETask(ABC):
         query_size: int,
         k_seed: Optional[int] = None,
         snapshot_seed: Optional[int] = None,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[
         Tuple[list[torch.Tensor], torch.Tensor],
         Tuple[list[torch.Tensor], torch.Tensor],
@@ -378,7 +390,11 @@ class PDETask(ABC):
     ]:
         """
         Generate support/query data at random collocation points.
-        Returns clean data — noise injection is the caller's responsibility.
+
+        `noise_level` and `noise_generator` are forwarded to
+        `evaluate_collocations`, which injects source-level noise via
+        `inject_noise_at_source` before computing structural features
+        and targets. `noise_level=0.0` (default) is the clean path.
         Everything stays on GPU — no numpy, no host transfers.
 
         Returns:
@@ -452,7 +468,9 @@ class PDETask(ABC):
         )  # (len(unique_snaps), max(counts), ny)
 
         feats_list, tgts = self.evaluate_collocations(
-            unique_snaps, E_x_compact, E_y_compact
+            unique_snaps, E_x_compact, E_y_compact,
+            noise_level=noise_level,
+            noise_generator=noise_generator,
         )
 
         mask_idx = torch.arange(0, E_x_compact.shape[1], device=self.device).unsqueeze(
@@ -528,6 +546,8 @@ class BrusselatorTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[list[torch.Tensor], torch.Tensor]:
         """Produce structural features and targets for Brusselator.
 
@@ -540,6 +560,15 @@ class BrusselatorTask(PDETask):
 
         u_hat = self.u_hat[snap_idx_list].to(device=self.device)
         v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat, "v_hat": v_hat},
+                noise_level,
+                noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+            v_hat = noisy["v_hat"]
 
         coeff_batch = torch.stack(
             [
@@ -856,6 +885,8 @@ class FitzHughNagumoTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[list[torch.Tensor], torch.Tensor]:
         """Produce structural features and targets for FitzHugh-Nagumo.
 
@@ -868,6 +899,15 @@ class FitzHughNagumoTask(PDETask):
 
         u_hat = self.u_hat[snap_idx_list].to(device=self.device)
         v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat, "v_hat": v_hat},
+                noise_level,
+                noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+            v_hat = noisy["v_hat"]
 
         coeff_batch = torch.stack(
             [
@@ -1180,6 +1220,8 @@ class LambdaOmegaTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[list[torch.Tensor], torch.Tensor]:
         """Produce structural features and targets for Lambda-Omega.
 
@@ -1192,6 +1234,15 @@ class LambdaOmegaTask(PDETask):
 
         u_hat = self.u_hat[snap_idx_list].to(device=self.device)
         v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat, "v_hat": v_hat},
+                noise_level,
+                noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+            v_hat = noisy["v_hat"]
 
         coeff_batch = torch.stack(
             [
@@ -1511,6 +1562,8 @@ class NavierStokesTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[list[torch.Tensor], torch.Tensor]:
         """Produce structural features and targets for NS via the vorticity form.
 
@@ -1525,6 +1578,15 @@ class NavierStokesTask(PDETask):
 
         u_hat = self.u_hat[snap_idx_list].to(device=self.device)
         v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat, "v_hat": v_hat},
+                noise_level,
+                noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+            v_hat = noisy["v_hat"]
 
         omega_hat = ikx * v_hat - iky * u_hat
         omega_x_hat = ikx * omega_hat
@@ -1758,6 +1820,8 @@ class HeatEquationTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[list[torch.Tensor], torch.Tensor]:
         """Produce structural features and targets for Heat.
 
@@ -1770,6 +1834,14 @@ class HeatEquationTask(PDETask):
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
         u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat},
+                noise_level,
+                noise_generator,
+            )
+            u_hat = noisy["u_hat"]
 
         coeff_batch = torch.stack(
             [
@@ -1962,6 +2034,8 @@ class NLHeatEquationTask(PDETask):
         snap_idx_list: torch.Tensor,
         E_x: torch.Tensor,
         E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
     ) -> Tuple[list[torch.Tensor], torch.Tensor]:
         """Produce structural features and targets for NLHeat.
 
@@ -1972,6 +2046,14 @@ class NLHeatEquationTask(PDETask):
         neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)  # (ny, 1)
 
         u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat},
+                noise_level,
+                noise_generator,
+            )
+            u_hat = noisy["u_hat"]
 
         coeff_batch = torch.stack(
             [

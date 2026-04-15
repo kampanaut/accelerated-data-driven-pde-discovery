@@ -58,6 +58,21 @@ class MetalSection:
 
 
 @dataclass
+class NoiseAugmentationSection:
+    """Source-level noise injection during meta-training.
+
+    When enabled, a noise_level is sampled ~ Uniform(range[0], range[1])
+    per call to `get_support_query_split()` and routed into the task's
+    `inject_noise_at_source`, which perturbs `u_hat`/`v_hat` (or the
+    equivalent state variables) before derivative computation. The
+    structural features and targets then inherit correlated noise from
+    the perturbed source state, matching SINDy's noise protocol.
+    """
+    enabled: bool = False
+    range: list = field(default_factory=lambda: [0.0, 0.1])
+
+
+@dataclass
 class IMAMLSection:
     enabled: bool = False
     lam: float = 1.0
@@ -149,6 +164,9 @@ class TrainingSection:
     # Nested sections
     spectral_loss: SpectralLossSection = field(default_factory=SpectralLossSection)
     imaml: IMAMLSection = field(default_factory=IMAMLSection)
+    noise_augmentation: NoiseAugmentationSection = field(
+        default_factory=NoiseAugmentationSection
+    )
 
     @property
     def has_scheduler(self) -> bool:
@@ -218,10 +236,14 @@ class ExperimentConfig:
         train_raw.pop("metal", None)  # legacy key, silently discarded
         spectral = SpectralLossSection(**train_raw.pop("spectral_loss", {}))
         imaml = IMAMLSection(**train_raw.pop("imaml", {}))
+        noise_aug = NoiseAugmentationSection(
+            **train_raw.pop("noise_augmentation", {})
+        )
         training = TrainingSection(
             **_filter_fields(TrainingSection, train_raw),
             spectral_loss=spectral,
             imaml=imaml,
+            noise_augmentation=noise_aug,
         )
 
         evaluation = EvaluationSection(**_filter_fields(EvaluationSection, d.get("evaluation", {})))
@@ -276,6 +298,13 @@ class ExperimentConfig:
                     if t.imaml.slope_recovery_inner > 0:
                         imaml_dict["slope_recovery_inner"] = t.imaml.slope_recovery_inner
                     train_dict["imaml"] = imaml_dict
+                continue
+            if name == "noise_augmentation":
+                if t.noise_augmentation.enabled:
+                    train_dict["noise_augmentation"] = {
+                        "enabled": True,
+                        "range": list(t.noise_augmentation.range),
+                    }
                 continue
 
             # layers XOR old-format: only emit the format that was provided
