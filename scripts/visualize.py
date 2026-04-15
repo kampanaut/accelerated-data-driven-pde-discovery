@@ -15,7 +15,7 @@ import sys
 import argparse
 import shutil
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple
 
 from numpy.typing import NDArray
 import yaml
@@ -23,13 +23,11 @@ import numpy as np
 import matplotlib
 from src.config import ExperimentConfig, OutputSection
 from src.evaluation.results import EvaluationResults, TaskResult
-from src.training.task_loader import CoefficientSpec
 
 matplotlib.use("Agg")  # Non-interactive backend for server use
 import matplotlib.pyplot as plt
 
 from src.evaluation.metrics import (
-    compute_comparison_metrics,
     ComparisonMetrics,
     compress_step_ranges,
     steps_to_plateau,
@@ -98,9 +96,11 @@ def parse_only(arg: str | None) -> GraphSelection:
         "scatter[1,25,1000](br-18,heat-1,br-19)"
         "scatter(br-18,heat-1)"
 
-    Returns GraphSelection with all_graphs=True when arg is None.
+    Returns GraphSelection with all_graphs=True when arg is None or empty.
+    Empty string is treated as None so an unset `visualization.only: ""` in
+    the config doesn't silently filter every plot out.
     """
-    if arg is None:
+    if arg is None or not arg.strip():
         return GraphSelection(
             graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
         )
@@ -170,7 +170,6 @@ from src.evaluation.graphs import (
     plot_sample_efficiency,
     # Graph 7-10: Jacobian analysis graphs
     plot_jacobian_histogram,
-    plot_jacobian_regression_scatter,
     plot_coefficient_heatmap,
     plot_coefficient_vs_k,
     plot_coefficient_vs_noise,
@@ -180,6 +179,9 @@ from src.evaluation.graphs import (
     # Graph 12: Best-combo prediction scatter
     plot_best_combo_scatter,
 )
+# `plot_jacobian_regression_scatter` is intentionally NOT imported — left
+# dormant in graphs.py for any future caller that wants the (regressor, JVP)
+# scatter view back.
 
 
 
@@ -232,41 +234,109 @@ def compute_all_metrics(
     tasks: Dict[str, TaskResult],
     fixed_steps: NDArray[np.integer[Any]],
     deriv_threshold: float = 1e-7,
-) -> Dict[str, Dict[str, ComparisonMetrics]]:
+) -> Dict[str, Dict[str, Dict[str, ComparisonMetrics]]]:
     """
-    Compute metrics for all (task, K, noise) combinations.
+    Compute per-mixer metrics for all (task, K, noise) combinations.
+
+    The new schema's `per_mixer_train_losses` arrays are **sparse**: under
+    L-BFGS, evaluate.py records one snapshot per fixed_step (index `i` in
+    the array == loss at `fixed_steps[i]`). The classic
+    `compute_comparison_metrics` from metrics.py treats `loss[step]` as a
+    dense indexed lookup, which silently drops any fixed_step >= len(array).
+    We bypass it here and build `ComparisonMetrics` by positional alignment.
+
+    Plateau-related fields (`*_steps_to_plateau`, `speedup`) are degenerate
+    on 2-element L-BFGS arrays — populated for shape compatibility with the
+    plot functions but should be read as best-effort.
 
     Returns:
-        Dict mapping task_name -> combo_key -> ComparisonMetrics
+        Dict mapping task_name -> combo_key -> mixer_name -> ComparisonMetrics
     """
-    all_metrics: Dict[str, Dict[str, ComparisonMetrics]] = {}
+    all_metrics: Dict[str, Dict[str, Dict[str, ComparisonMetrics]]] = {}
+    fs_list = [int(s) for s in fixed_steps]
 
     for task_name, task in tasks.items():
         all_metrics[task_name] = {}
 
         for combo in task.combos:
-            maml_losses = combo.maml.fine_tune.train_losses
-            baseline_losses = combo.baseline.fine_tune.train_losses
+            maml_train_pm = combo.maml.fine_tune.per_mixer_train_losses
+            baseline_train_pm = combo.baseline.fine_tune.per_mixer_train_losses
+            maml_holdout_pm = combo.maml.fine_tune.per_mixer_holdout_losses
+            baseline_holdout_pm = combo.baseline.fine_tune.per_mixer_holdout_losses
 
-            if maml_losses.size == 0 or baseline_losses.size == 0:
+            if not maml_train_pm or not baseline_train_pm:
                 continue
 
-            metrics = compute_comparison_metrics(
-                maml_losses=maml_losses,
-                baseline_losses=baseline_losses,
-                fixed_steps=fixed_steps,
-                deriv_threshold=deriv_threshold,
-                maml_holdout_losses=combo.maml.fine_tune.holdout_losses,
-                baseline_holdout_losses=combo.baseline.fine_tune.holdout_losses,
-            )
-            all_metrics[task_name][combo.combo_key] = metrics
+            per_mixer_metrics: Dict[str, ComparisonMetrics] = {}
+            for mname in maml_train_pm:
+                if mname not in baseline_train_pm:
+                    continue
+
+                m_train = np.asarray(maml_train_pm[mname], dtype=float)
+                b_train = np.asarray(baseline_train_pm[mname], dtype=float)
+                m_holdout = np.asarray(maml_holdout_pm[mname], dtype=float)
+                b_holdout = np.asarray(baseline_holdout_pm[mname], dtype=float)
+
+                # Positional alignment: array index i == fixed_steps[i].
+                n = min(len(m_train), len(b_train), len(fs_list))
+                if n == 0:
+                    continue
+
+                maml_at_steps: Dict[int, float] = {}
+                baseline_at_steps: Dict[int, float] = {}
+                ratios: Dict[int, float] = {}
+                for i in range(n):
+                    step = fs_list[i]
+                    m_loss = float(m_train[i])
+                    b_loss = float(b_train[i])
+                    maml_at_steps[step] = m_loss
+                    baseline_at_steps[step] = b_loss
+                    ratios[step] = m_loss / b_loss if b_loss > 0 else float("inf")
+
+                # Plateau on holdout (best-effort; degenerate for n<=2 — the
+                # function returns its lower-bound default in that case).
+                m_plateau_idx = (
+                    steps_to_plateau(m_holdout, deriv_threshold=deriv_threshold)
+                    if len(m_holdout) > 0 else 0
+                )
+                b_plateau_idx = (
+                    steps_to_plateau(b_holdout, deriv_threshold=deriv_threshold)
+                    if len(b_holdout) > 0 else 0
+                )
+                # Translate plateau array index → fixed_step value where possible.
+                m_plateau_step = (
+                    fs_list[m_plateau_idx] if m_plateau_idx < len(fs_list)
+                    else fs_list[-1]
+                )
+                b_plateau_step = (
+                    fs_list[b_plateau_idx] if b_plateau_idx < len(fs_list)
+                    else fs_list[-1]
+                )
+
+                m_final = float(m_train[n - 1])
+                b_final = float(b_train[n - 1])
+                speedup = b_plateau_step / m_plateau_step if m_plateau_step > 0 else 1.0
+
+                per_mixer_metrics[mname] = ComparisonMetrics(
+                    maml_steps_to_plateau=m_plateau_step,
+                    baseline_steps_to_plateau=b_plateau_step,
+                    speedup=speedup,
+                    maml_plateau_loss=m_final,
+                    baseline_plateau_loss=b_final,
+                    maml_loss_at_steps=maml_at_steps,
+                    baseline_loss_at_steps=baseline_at_steps,
+                    loss_ratios=ratios,
+                )
+
+            if per_mixer_metrics:
+                all_metrics[task_name][combo.combo_key] = per_mixer_metrics
 
     return all_metrics
 
 
 def generate_per_task_figures(
     tasks: Dict[str, TaskResult],
-    all_metrics: Dict[str, Dict[str, ComparisonMetrics]],
+    all_metrics: Dict[str, Dict[str, Dict[str, ComparisonMetrics]]],
     k_values: NDArray[np.integer[Any]],
     fixed_steps: NDArray[np.integer[Any]],
     noise_levels: NDArray[np.floating[Any]],
@@ -278,7 +348,10 @@ def generate_per_task_figures(
         graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
     ),
 ) -> None:
-    """Generate all per-task figures."""
+    """Generate all per-task figures.
+
+    `all_metrics[task_name][combo_key][mixer_name] -> ComparisonMetrics`.
+    """
 
     for task_name, task in tasks.items():
         suffix = _task_dir_worse_suffix(task, fixed_steps.tolist())
@@ -289,158 +362,127 @@ def generate_per_task_figures(
         task_metrics = all_metrics.get(task_name, {})
         combo_lookup = {c.combo_key: c for c in task.combos}
 
-        # Build coefficient grouping from task-level specs
-        specs = task.coefficient_specs
-        coeff_group: Dict[str, List[CoefficientSpec]] = {}
-        for s in specs:
-            coeff_group.setdefault(s.coeff_name, []).append(s)
+        # Discover coefficient names from the first combo's recovery snapshot —
+        # PDE-constant across all combos.
+        if not task.combos:
+            continue
+        coeff_names = list(
+            task.combos[0].maml.coefficient_recovery.coefficients.keys()
+        )
 
         print(f"  Generating figures for {task_name}...")
 
         # ---------------------------------------------------------------------
-        # Graph 7: Jacobian histogram (one per group per K × noise × step)
-        # Groups with multiple members overlay estimates (e.g. NS nu_u + nu_v)
+        # Graph 7: Jacobian histogram (one per coefficient per K × noise × step)
+        # Multi-path coefficients (BR's k2, λω's c) overlay one curve per path
+        # in the same panel, distinguished by label and the function's internal
+        # _ESTIMATE_COLORS palette. Per-path raw values come from the NPZ.
         # ---------------------------------------------------------------------
         if sel.enabled("jacobian"):
+            allowed_steps = set(sel.steps_for("jacobian", fixed_steps.tolist()))
+            step_indices = [
+                i for i, s in enumerate(fixed_steps) if int(s) in allowed_steps
+            ]
+
             for k in k_values:
                 for noise in noise_levels:
                     combo_key = f"k_{k}_noise_{noise:.2f}"
                     combo = combo_lookup[combo_key]
                     combo_coeff_worse = combo.worse.coeff_steps
 
-                    combo_fixed_steps = fixed_steps
-                    maml_pe = combo.maml.pred_errors if combo.maml.pred_errors.size > 0 else None
-                    baseline_pe = combo.baseline.pred_errors if combo.baseline.pred_errors.size > 0 else None
+                    # Map mixer name → output_index for slicing pred_errors.
+                    # Order matches MixerNetwork.forward() stack order, which
+                    # mirrors per_mixer_train_losses dict insertion order.
+                    mixer_idx_map = {
+                        mname: i for i, mname in enumerate(
+                            combo.maml.fine_tune.per_mixer_train_losses.keys()
+                        )
+                    }
 
-                    for coeff_name, members in coeff_group.items():
-                        member_names = [m.name for m in members]
-                        output_indices = [m.output_index for m in members]
+                    maml_pe = (
+                        combo.maml.pred_errors
+                        if combo.maml.pred_errors.size > 0 else None
+                    )
+                    baseline_pe = (
+                        combo.baseline.pred_errors
+                        if combo.baseline.pred_errors.size > 0 else None
+                    )
 
-                        maml_ests_full = [
-                            combo.maml.jacobian_estimates[n] for n in member_names
-                        ]
-                        baseline_ests_full = [
-                            combo.baseline.jacobian_estimates[n] for n in member_names
-                        ]
-                        true_arr = combo.maml.jacobian_true[member_names[0]]
-
-                        if true_arr is None or any(
-                            x is None for x in maml_ests_full + baseline_ests_full
-                        ):
+                    for coeff_name in coeff_names:
+                        maml_snap = combo.maml.coefficient_recovery.coefficients[coeff_name]
+                        baseline_snap = combo.baseline.coefficient_recovery.coefficients[coeff_name]
+                        if not maml_snap.per_step or not baseline_snap.per_step:
                             continue
+                        true_val = float(maml_snap.true_value)
 
-                        # Determine step indices to iterate
-                        if (
-                            combo_fixed_steps is not None
-                            and maml_ests_full[0].ndim == 2
-                        ):
-                            allowed = sel.steps_for(
-                                "jacobian", combo_fixed_steps.tolist()
-                            )
-                            step_indices = [
-                                i
-                                for i, s in enumerate(combo_fixed_steps)
-                                if int(s) in allowed
-                            ]
-                        else:
-                            # Legacy: single-step data
-                            step_indices = [0]
-                            combo_fixed_steps = None
+                        # Path keys are the same across all steps within a snapshot.
+                        path_keys = list(maml_snap.per_step[0].recoveries.keys())
 
                         for si in step_indices:
-                            step_label = (
-                                int(combo_fixed_steps[si])
-                                if combo_fixed_steps is not None
-                                else ""
-                            )
+                            step_label = int(fixed_steps[si])
 
-                            # Index into per-step arrays
-                            if combo_fixed_steps is not None:
-                                maml_ests = [x[si] for x in maml_ests_full]
-                                baseline_ests = [x[si] for x in baseline_ests_full]
-                                maml_pe_step = (
-                                    maml_pe[si] if maml_pe is not None else None
-                                )
-                                baseline_pe_step = (
-                                    baseline_pe[si] if baseline_pe is not None else None
-                                )
-                            else:
-                                maml_ests = maml_ests_full
-                                baseline_ests = baseline_ests_full
-                                maml_pe_step = maml_pe
-                                baseline_pe_step = baseline_pe
+                            # Per-path per-point arrays from NPZ at this step.
+                            maml_ests: list = []
+                            baseline_ests: list = []
+                            kept_paths: list[str] = []
+                            for path_key in path_keys:
+                                m_arr = combo.maml.per_path_raw_values.get(path_key)
+                                b_arr = combo.baseline.per_path_raw_values.get(path_key)
+                                if (
+                                    m_arr is None or b_arr is None
+                                    or si >= m_arr.shape[0] or si >= b_arr.shape[0]
+                                ):
+                                    continue
+                                maml_ests.append(m_arr[si])
+                                baseline_ests.append(b_arr[si])
+                                kept_paths.append(path_key)
 
-                            if any(len(x) == 0 for x in maml_ests + baseline_ests):
+                            if not kept_paths:
                                 continue
 
-                            maml_pe_list = [
-                                maml_pe_step[:, idx]
-                                if maml_pe_step is not None
-                                else None
-                                for idx in output_indices
-                            ]
-                            baseline_pe_list = [
-                                baseline_pe_step[:, idx]
-                                if baseline_pe_step is not None
-                                else None
-                                for idx in output_indices
-                            ]
+                            # Per-path pred-error overlay: each path's mixer
+                            # determines which output column to slice. Paths
+                            # whose mixer isn't in the map (shouldn't happen)
+                            # get None so the histogram skips them.
+                            maml_pe_list: list = []
+                            baseline_pe_list: list = []
+                            if maml_pe is not None and baseline_pe is not None:
+                                for path_key in kept_paths:
+                                    mname = path_key.split(".", 1)[0]
+                                    out_idx = mixer_idx_map.get(mname)
+                                    if (
+                                        out_idx is None
+                                        or si >= maml_pe.shape[0]
+                                        or out_idx >= maml_pe.shape[2]
+                                    ):
+                                        maml_pe_list.append(None)
+                                        baseline_pe_list.append(None)
+                                    else:
+                                        maml_pe_list.append(maml_pe[si, :, out_idx])
+                                        baseline_pe_list.append(baseline_pe[si, :, out_idx])
 
-                            step_suffix = (
-                                f"_step[{step_label}]" if step_label != "" else ""
+                            step_suffix = f"_step[{step_label}]"
+                            coeff_worse = _coeff_worse_suffix_at_step(
+                                combo_coeff_worse, step_label
                             )
-                            coeff_worse = (
-                                _coeff_worse_suffix_at_step(
-                                    combo_coeff_worse, int(step_label)
-                                )
-                                if step_label != ""
-                                else ""
+
+                            fig = plot_jacobian_histogram(
+                                maml_estimates=maml_ests,
+                                baseline_estimates=baseline_ests,
+                                estimate_labels=kept_paths,
+                                coeff_true=true_val,
+                                title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
+                                coeff_name=coeff_name,
+                                save_path=task_dir
+                                / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
+                                dpi=dpi,
+                                maml_pred_errors=maml_pe_list if maml_pe_list else None,
+                                baseline_pred_errors=baseline_pe_list if baseline_pe_list else None,
                             )
-                            # Use scatter for regression-based extraction (NLHeat), histogram otherwise
-                            maml_reg_full = combo.maml.jacobian_regression.get(member_names[0], {})
-                            baseline_reg_full = combo.baseline.jacobian_regression.get(member_names[0], {})
-                            if maml_reg_full:
-                                # Index per-step regression data
-                                maml_reg = {
-                                    "value": float(maml_reg_full["value"][si]),
-                                    "r2": float(maml_reg_full["r2"][si]),
-                                    "raw_jvp": maml_reg_full["raw_jvp"][si],
-                                    "regressor": maml_reg_full["regressor"][si],
-                                }
-                                baseline_reg = {
-                                    "value": float(baseline_reg_full["value"][si]),
-                                    "r2": float(baseline_reg_full["r2"][si]),
-                                    "raw_jvp": baseline_reg_full["raw_jvp"][si],
-                                    "regressor": baseline_reg_full["regressor"][si],
-                                } if baseline_reg_full else {}
-                                fig = plot_jacobian_regression_scatter(
-                                    maml_regression=maml_reg,
-                                    baseline_regression=baseline_reg,
-                                    coeff_true=float(true_arr[0]),
-                                    title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
-                                    coeff_name=coeff_name,
-                                    save_path=task_dir
-                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
-                                    dpi=dpi,
-                                )
-                            else:
-                                fig = plot_jacobian_histogram(
-                                    maml_estimates=maml_ests,
-                                    baseline_estimates=baseline_ests,
-                                    estimate_labels=member_names,
-                                    coeff_true=float(true_arr[0]),
-                                    title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
-                                    coeff_name=coeff_name,
-                                    save_path=task_dir
-                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
-                                    dpi=dpi,
-                                    maml_pred_errors=maml_pe_list,
-                                    baseline_pred_errors=baseline_pe_list,
-                                )
                             plt.close(fig)
 
         # ---------------------------------------------------------------------
-        # Generalization plot (one per K × noise)
+        # Generalization plot (one per K × noise) — per-mixer overlays per panel
         # ---------------------------------------------------------------------
         if sel.enabled("generalization"):
             for k in k_values:
@@ -448,16 +490,13 @@ def generate_per_task_figures(
                     combo_key = f"k_{k}_noise_{noise:.2f}"
                     combo = combo_lookup[combo_key]
 
-                    maml_losses = combo.maml.fine_tune.train_losses
-                    baseline_losses = combo.baseline.fine_tune.train_losses
+                    maml_train_pm = combo.maml.fine_tune.per_mixer_train_losses
+                    maml_holdout_pm = combo.maml.fine_tune.per_mixer_holdout_losses
+                    baseline_train_pm = combo.baseline.fine_tune.per_mixer_train_losses
+                    baseline_holdout_pm = combo.baseline.fine_tune.per_mixer_holdout_losses
 
-                    if maml_losses.size == 0 or baseline_losses.size == 0:
+                    if not maml_train_pm or not baseline_train_pm:
                         continue
-                    maml_losses = np.array(maml_losses)
-                    baseline_losses = np.array(baseline_losses)
-
-                    maml_holdout = np.array(combo.maml.fine_tune.holdout_losses)
-                    baseline_holdout = np.array(combo.baseline.fine_tune.holdout_losses)
 
                     combo_loss_steps = combo.worse.loss_steps
                     loss_suffix = _loss_worse_suffix(
@@ -467,10 +506,10 @@ def generate_per_task_figures(
                     fs_list = fixed_steps.tolist()
 
                     fig = plot_train_holdout_convergence(
-                        maml_train=maml_losses,
-                        maml_holdout=maml_holdout,
-                        baseline_train=baseline_losses,
-                        baseline_holdout=baseline_holdout,
+                        maml_train_per_mixer=maml_train_pm,
+                        maml_holdout_per_mixer=maml_holdout_pm,
+                        baseline_train_per_mixer=baseline_train_pm,
+                        baseline_holdout_per_mixer=baseline_holdout_pm,
                         title=f"{task_name}: K={k}, noise={noise:.0%}",
                         save_path=task_dir
                         / f"k[{k}]_noise[{noise:.2f}]_finetune_generalization{loss_suffix}.png",
@@ -483,151 +522,134 @@ def generate_per_task_figures(
                     )
                     plt.close(fig)
 
+        # Discover mixer names from the first combo's fine_tune dict.
+        # Used by per-mixer file splits below.
+        mixer_names = list(
+            task.combos[0].maml.fine_tune.per_mixer_train_losses.keys()
+        )
+
         # ---------------------------------------------------------------------
-        # Graph 4: Loss ratio heatmap (per fixed step)
+        # Graph 4: Loss ratio heatmap (one file per mixer per fixed step)
         # ---------------------------------------------------------------------
         if sel.enabled("loss-ratio"):
             for p in sel.steps_for("loss-ratio", fixed_steps.tolist()):
-                ratios = np.full((len(noise_levels), len(k_values)), np.nan)
+                for mname in mixer_names:
+                    ratios = np.full((len(noise_levels), len(k_values)), np.nan)
 
-                for i, noise in enumerate(noise_levels):
-                    for j, k in enumerate(k_values):
-                        combo_key = f"k_{k}_noise_{noise:.2f}"
-                        metrics = task_metrics.get(combo_key)
-                        if metrics is not None and p in metrics.loss_ratios:
-                            ratios[i, j] = metrics.loss_ratios[p]
+                    for i, noise in enumerate(noise_levels):
+                        for j, k in enumerate(k_values):
+                            combo_key = f"k_{k}_noise_{noise:.2f}"
+                            per_mixer = task_metrics.get(combo_key, {})
+                            metrics = per_mixer.get(mname)
+                            if metrics is not None and p in metrics.loss_ratios:
+                                ratios[i, j] = metrics.loss_ratios[p]
 
-                fig = plot_loss_ratio_heatmap(
-                    ratios=ratios,
-                    k_values=k_values,
-                    noise_levels=noise_levels,
-                    fixed_step=p,
-                    title=f"{task_name}: Loss Ratio @ step {p}",
-                    save_path=task_dir / f"step[{p}]_loss_ratio_heatmap.png",
-                    dpi=dpi,
-                )
-                plt.close(fig)
-
-        # ---------------------------------------------------------------------
-        # Graph 1: Noise robustness curves (one per K)
-        # ---------------------------------------------------------------------
-        if sel.enabled("noise-robustness"):
-            for k in k_values:
-                maml_steps_list = []
-                baseline_steps_list = []
-                valid_noise = []
-
-                for noise in noise_levels:
-                    combo_key = f"k_{k}_noise_{noise:.2f}"
-                    metrics = task_metrics.get(combo_key)
-                    if metrics is None:
-                        continue
-
-                    maml_steps_list.append(metrics.maml_steps_to_plateau)
-                    baseline_steps_list.append(metrics.baseline_steps_to_plateau)
-                    valid_noise.append(noise)
-
-                if len(valid_noise) >= 2:
-                    fig = plot_noise_robustness(
-                        noise_levels=np.array(valid_noise),
-                        maml_steps=np.array(maml_steps_list),
-                        baseline_steps=np.array(baseline_steps_list),
-                        title=f"{task_name}: Noise Robustness (K={k})",
-                        save_path=task_dir / f"k[{k}]_noise_robustness.png",
+                    fig = plot_loss_ratio_heatmap(
+                        ratios=ratios,
+                        k_values=k_values,
+                        noise_levels=noise_levels,
+                        fixed_step=p,
+                        title=f"{task_name}: Loss Ratio @ step {p} [mixer {mname}]",
+                        save_path=task_dir / f"mixer[{mname}]_step[{p}]_loss_ratio_heatmap.png",
                         dpi=dpi,
                     )
                     plt.close(fig)
 
         # ---------------------------------------------------------------------
-        # Graph 2: Sample efficiency curves (one per noise level)
+        # Graph 1: Noise robustness curves (one file per mixer per K)
         # ---------------------------------------------------------------------
-        if sel.enabled("sample-efficiency"):
-            for p in fixed_steps[:1]:  # Just first fixed step
-                for noise in noise_levels:
-                    maml_losses_list = []
-                    baseline_losses_list = []
-                    valid_k = []
+        if sel.enabled("noise-robustness"):
+            for mname in mixer_names:
+                for k in k_values:
+                    maml_steps_list = []
+                    baseline_steps_list = []
+                    valid_noise = []
 
-                    for k in k_values:
+                    for noise in noise_levels:
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        metrics = task_metrics.get(combo_key)
+                        per_mixer = task_metrics.get(combo_key, {})
+                        metrics = per_mixer.get(mname)
                         if metrics is None:
                             continue
-                        if p not in metrics.maml_loss_at_steps:
-                            continue
 
-                        maml_losses_list.append(metrics.maml_loss_at_steps[p])
-                        baseline_losses_list.append(metrics.baseline_loss_at_steps[p])
-                        valid_k.append(k)
+                        maml_steps_list.append(metrics.maml_steps_to_plateau)
+                        baseline_steps_list.append(metrics.baseline_steps_to_plateau)
+                        valid_noise.append(noise)
 
-                    if len(valid_k) >= 2:
-                        fig = plot_sample_efficiency(
-                            k_values=np.array(valid_k),
-                            maml_losses=np.array(maml_losses_list),
-                            baseline_losses=np.array(baseline_losses_list),
-                            fixed_step=p,
-                            title=f"{task_name}: Sample Efficiency (noise={noise:.0%}, step {p})",
-                            save_path=task_dir
-                            / f"noise[{noise:.2f}]_step[{p}]_sample_efficiency.png",
+                    if len(valid_noise) >= 2:
+                        fig = plot_noise_robustness(
+                            noise_levels=np.array(valid_noise),
+                            maml_steps=np.array(maml_steps_list),
+                            baseline_steps=np.array(baseline_steps_list),
+                            title=f"{task_name}: Noise Robustness (K={k}) [mixer {mname}]",
+                            save_path=task_dir / f"mixer[{mname}]_k[{k}]_noise_robustness.png",
                             dpi=dpi,
                         )
                         plt.close(fig)
 
         # ---------------------------------------------------------------------
-        # Graph 8: Coefficient error heatmap (one per group, final step)
+        # Graph 2: Sample efficiency curves (one file per mixer per noise level)
+        # ---------------------------------------------------------------------
+        if sel.enabled("sample-efficiency"):
+            for mname in mixer_names:
+                for p in fixed_steps[:1]:  # Just first fixed step
+                    for noise in noise_levels:
+                        maml_losses_list = []
+                        baseline_losses_list = []
+                        valid_k = []
+
+                        for k in k_values:
+                            combo_key = f"k_{k}_noise_{noise:.2f}"
+                            per_mixer = task_metrics.get(combo_key, {})
+                            metrics = per_mixer.get(mname)
+                            if metrics is None:
+                                continue
+                            if p not in metrics.maml_loss_at_steps:
+                                continue
+
+                            maml_losses_list.append(metrics.maml_loss_at_steps[p])
+                            baseline_losses_list.append(metrics.baseline_loss_at_steps[p])
+                            valid_k.append(k)
+
+                        if len(valid_k) >= 2:
+                            fig = plot_sample_efficiency(
+                                k_values=np.array(valid_k),
+                                maml_losses=np.array(maml_losses_list),
+                                baseline_losses=np.array(baseline_losses_list),
+                                fixed_step=p,
+                                title=f"{task_name}: Sample Efficiency (noise={noise:.0%}, step {p}) [mixer {mname}]",
+                                save_path=task_dir
+                                / f"mixer[{mname}]_noise[{noise:.2f}]_step[{p}]_sample_efficiency.png",
+                                dpi=dpi,
+                            )
+                            plt.close(fig)
+
+        # ---------------------------------------------------------------------
+        # Graph 8: Coefficient error heatmap (one per coefficient, final step).
+        # `pct_error` is precomputed per coefficient × step in the schema —
+        # no more arithmetic, just read.
         # ---------------------------------------------------------------------
         if sel.enabled("coeff-heatmap"):
-            for coeff_name, members in coeff_group.items():
-                member_names = [m.name for m in members]
-                true_key = f"{member_names[0]}_true"
+            for coeff_name in coeff_names:
                 maml_errors = np.full((len(noise_levels), len(k_values)), np.nan)
                 baseline_errors = np.full((len(noise_levels), len(k_values)), np.nan)
-                has_jacobian_data = False
 
                 for i, noise in enumerate(noise_levels):
                     for j, k in enumerate(k_values):
                         combo_key = f"k_{k}_noise_{noise:.2f}"
                         combo = combo_lookup[combo_key]
 
-                        maml_ests_raw = [
-                            combo.maml.jacobian_estimates[n] for n in member_names
-                        ]
-                        baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates[n] for n in member_names
-                        ]
-                        coeff_true = combo.maml.jacobian_true[true_key]
-
-                        if coeff_true is None or any(
-                            x is None for x in maml_ests_raw
-                        ):
+                        m_snap = combo.maml.coefficient_recovery.coefficients.get(coeff_name)
+                        b_snap = combo.baseline.coefficient_recovery.coefficients.get(coeff_name)
+                        if m_snap is None or not m_snap.per_step:
                             continue
-                        has_jacobian_data = True
-                        true_val = float(coeff_true[0])
-                        if true_val == 0:
+                        if b_snap is None or not b_snap.per_step:
                             continue
 
-                        maml_ests = [
-                            x[-1] if x.ndim == 2 else x for x in maml_ests_raw
-                        ]
-                        maml_recovered = float(
-                            np.mean([np.mean(x) for x in maml_ests])
-                        )
-                        maml_errors[i, j] = (
-                            abs(maml_recovered - true_val) / true_val * 100
-                        )
+                        maml_errors[i, j] = m_snap.per_step[-1].pct_error
+                        baseline_errors[i, j] = b_snap.per_step[-1].pct_error
 
-                        if not any(x is None for x in baseline_ests_raw):
-                            baseline_ests = [
-                                x[-1] if x.ndim == 2 else x for x in baseline_ests_raw
-                            ]
-                            baseline_recovered = float(
-                                np.mean([np.mean(x) for x in baseline_ests])
-                            )
-                            baseline_errors[i, j] = (
-                                abs(baseline_recovered - true_val) / true_val * 100
-                            )
-
-                if has_jacobian_data:
+                if not np.all(np.isnan(maml_errors)):
                     fig = plot_coefficient_heatmap(
                         k_values=k_values,
                         noise_levels=noise_levels,
@@ -641,13 +663,10 @@ def generate_per_task_figures(
                     plt.close(fig)
 
         # ---------------------------------------------------------------------
-        # Graph 9: Coefficient recovery vs K
+        # Graph 9: Coefficient recovery vs K (final step)
         # ---------------------------------------------------------------------
         if sel.enabled("coeff-vs-k"):
-            for coeff_name, members in coeff_group.items():
-                member_names = [m.name for m in members]
-                true_key = f"{member_names[0]}_true"
-
+            for coeff_name in coeff_names:
                 for noise in noise_levels:
                     maml_err_list: list[float] = []
                     baseline_err_list: list[float] = []
@@ -657,40 +676,15 @@ def generate_per_task_figures(
                         combo_key = f"k_{k}_noise_{noise:.2f}"
                         combo = combo_lookup[combo_key]
 
-                        maml_ests_raw = [
-                            combo.maml.jacobian_estimates[n] for n in member_names
-                        ]
-                        baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates[n] for n in member_names
-                        ]
-                        coeff_true = combo.maml.jacobian_true[true_key]
-
-                        if coeff_true is None or any(
-                            x is None for x in maml_ests_raw + baseline_ests_raw
-                        ):
+                        m_snap = combo.maml.coefficient_recovery.coefficients.get(coeff_name)
+                        b_snap = combo.baseline.coefficient_recovery.coefficients.get(coeff_name)
+                        if m_snap is None or not m_snap.per_step:
                             continue
-                        true_val = float(coeff_true[0])
-                        if true_val == 0:
+                        if b_snap is None or not b_snap.per_step:
                             continue
 
-                        maml_ests = [
-                            x[-1] if x.ndim == 2 else x for x in maml_ests_raw
-                        ]
-                        baseline_ests = [
-                            x[-1] if x.ndim == 2 else x for x in baseline_ests_raw
-                        ]
-                        maml_recovered = float(
-                            np.mean([np.mean(x) for x in maml_ests])
-                        )
-                        baseline_recovered = float(
-                            np.mean([np.mean(x) for x in baseline_ests])
-                        )
-                        maml_err_list.append(
-                            abs(maml_recovered - true_val) / true_val * 100
-                        )
-                        baseline_err_list.append(
-                            abs(baseline_recovered - true_val) / true_val * 100
-                        )
+                        maml_err_list.append(m_snap.per_step[-1].pct_error)
+                        baseline_err_list.append(b_snap.per_step[-1].pct_error)
                         valid_k.append(k)
 
                     if len(valid_k) >= 2:
@@ -706,13 +700,10 @@ def generate_per_task_figures(
                         plt.close(fig)
 
         # ---------------------------------------------------------------------
-        # Graph 10: Coefficient recovery vs noise
+        # Graph 10: Coefficient recovery vs noise (final step)
         # ---------------------------------------------------------------------
         if sel.enabled("coeff-vs-noise"):
-            for coeff_name, members in coeff_group.items():
-                member_names = [m.name for m in members]
-                true_key = f"{member_names[0]}_true"
-
+            for coeff_name in coeff_names:
                 for k in k_values:
                     maml_err_list = []
                     baseline_err_list = []
@@ -722,40 +713,15 @@ def generate_per_task_figures(
                         combo_key = f"k_{k}_noise_{noise:.2f}"
                         combo = combo_lookup[combo_key]
 
-                        maml_ests_raw = [
-                            combo.maml.jacobian_estimates[n] for n in member_names
-                        ]
-                        baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates[n] for n in member_names
-                        ]
-                        coeff_true = combo.maml.jacobian_true[true_key]
-
-                        if coeff_true is None or any(
-                            x is None for x in maml_ests_raw + baseline_ests_raw
-                        ):
+                        m_snap = combo.maml.coefficient_recovery.coefficients.get(coeff_name)
+                        b_snap = combo.baseline.coefficient_recovery.coefficients.get(coeff_name)
+                        if m_snap is None or not m_snap.per_step:
                             continue
-                        true_val = float(coeff_true[0])
-                        if true_val == 0:
+                        if b_snap is None or not b_snap.per_step:
                             continue
 
-                        maml_ests = [
-                            x[-1] if x.ndim == 2 else x for x in maml_ests_raw
-                        ]
-                        baseline_ests = [
-                            x[-1] if x.ndim == 2 else x for x in baseline_ests_raw
-                        ]
-                        maml_recovered = float(
-                            np.mean([np.mean(x) for x in maml_ests])
-                        )
-                        baseline_recovered = float(
-                            np.mean([np.mean(x) for x in baseline_ests])
-                        )
-                        maml_err_list.append(
-                            abs(maml_recovered - true_val) / true_val * 100
-                        )
-                        baseline_err_list.append(
-                            abs(baseline_recovered - true_val) / true_val * 100
-                        )
+                        maml_err_list.append(m_snap.per_step[-1].pct_error)
+                        baseline_err_list.append(b_snap.per_step[-1].pct_error)
                         valid_noise.append(noise)
 
                     if len(valid_noise) >= 2:
@@ -819,7 +785,7 @@ def generate_per_task_figures(
 
 def generate_aggregated_figures(
     tasks: Dict[str, TaskResult],
-    all_metrics: Dict[str, Dict[str, ComparisonMetrics]],
+    all_metrics: Dict[str, Dict[str, Dict[str, ComparisonMetrics]]],
     k_values: NDArray[np.integer[Any]],
     fixed_steps: NDArray[np.integer[Any]],
     noise_levels: NDArray[np.floating[Any]],
@@ -831,16 +797,13 @@ def generate_aggregated_figures(
         graphs=set(), step_filters={}, experiment_filters={}, all_graphs=True
     ),
 ) -> None:
-    """Generate aggregated figures (mean ± std across tasks)."""
+    """Generate aggregated figures (mean ± std across tasks).
 
-    # Build coefficient grouping from any task's specs (structure is PDE-constant)
-    any_task = next(iter(tasks.values()), None)
-    specs = any_task.coefficient_specs if any_task else []
-    # For the patterns below, build per-task combo lookups
+    `all_metrics[task_name][combo_key][mixer_name] -> ComparisonMetrics`.
+    """
+
+    # Per-task combo lookups for fast (task, combo_key) access
     task_combo_lookups = {tn: {c.combo_key: c for c in t.combos} for tn, t in tasks.items()}
-    grouped: Dict[str, List[CoefficientSpec]] = {}
-    for s in specs:
-        grouped.setdefault(s.coeff_name, []).append(s)
 
     agg_dir = output_dir / "aggregated"
     agg_dir.mkdir(parents=True, exist_ok=True)
@@ -852,315 +815,277 @@ def generate_aggregated_figures(
         print("  No valid results to aggregate.")
         return
 
+    # Discover coefficient names + mixer names from the first task's first combo —
+    # PDE-constant across all tasks/combos.
+    any_task = next(iter(tasks.values()))
+    if not any_task.combos:
+        print("  No combos in first task — nothing to aggregate.")
+        return
+    any_combo = any_task.combos[0]
+    coeff_names = list(any_combo.maml.coefficient_recovery.coefficients.keys())
+    mixer_names = list(any_combo.maml.fine_tune.per_mixer_train_losses.keys())
+
     print(f"  Aggregating across {n_tasks} tasks...")
 
     # -------------------------------------------------------------------------
-    # Aggregate Jacobian histograms (Graph 7) - one per group per K × noise × step
-    # Ratio-normalized: each task's estimates divided by that task's true value
+    # Aggregate Jacobian histograms (Graph 7).
+    # Per coefficient × K × noise × step: pool per-point values across tasks
+    # for each recovery path, normalised by each task's true coefficient
+    # (so the histogram x-axis is "recovered / true" with truth at 1.0).
     # -------------------------------------------------------------------------
     if sel.enabled("jacobian"):
-        # Determine step indices — use function param fixed_steps,
-        # or discover from first combo's Jacobian data shape
-        agg_fixed_steps = fixed_steps.tolist() if fixed_steps is not None else None
-        if agg_fixed_steps is None:
-            for task_name in task_names:
-                t = tasks[task_name]
-                if t.combos and t.combos[0].maml.coefficient_recovery.error_pct:
-                    # Infer step count from recovery array length
-                    agg_fixed_steps = list(range(len(t.combos[0].maml.coefficient_recovery.error_pct)))
-                    break
+        allowed_steps = set(sel.steps_for("jacobian", fixed_steps.tolist()))
+        step_indices = [
+            i for i, s in enumerate(fixed_steps) if int(s) in allowed_steps
+        ]
 
         for k in k_values:
             for noise in noise_levels:
                 combo_key = f"k_{k}_noise_{noise:.2f}"
 
-                # Determine per-step iteration with filtering
-                if agg_fixed_steps is not None:
-                    allowed = sel.steps_for(
-                        "jacobian", [int(s) for s in agg_fixed_steps]
-                    )
-                    step_indices = [
-                        i
-                        for i, s in enumerate(agg_fixed_steps)
-                        if int(s) in allowed
-                    ]
-                else:
-                    step_indices = [0]
+                for coeff_name in coeff_names:
+                    # Discover path keys from the first task's first step.
+                    first_tc = task_combo_lookups[task_names[0]][combo_key]
+                    first_snap = first_tc.maml.coefficient_recovery.coefficients.get(coeff_name)
+                    if first_snap is None or not first_snap.per_step:
+                        continue
+                    path_keys = list(first_snap.per_step[0].recoveries.keys())
 
-                for si in step_indices:
-                    step_label = (
-                        int(agg_fixed_steps[si]) if agg_fixed_steps is not None else ""
-                    )
+                    for si in step_indices:
+                        step_label = int(fixed_steps[si])
 
-                    for coeff_name, members in grouped.items():
-                        member_names = [m.name for m in members]
-                        maml_all: list[list[float]] = [[] for _ in members]
-                        baseline_all: list[list[float]] = [[] for _ in members]
-                        has_data = False
+                        # Per-path pools across tasks. Each path's per-point
+                        # values are divided by that task's true coefficient
+                        # so all tasks share a unit-1 axis.
+                        maml_pool: dict[str, list[float]] = {p: [] for p in path_keys}
+                        baseline_pool: dict[str, list[float]] = {p: [] for p in path_keys}
 
                         for task_name in task_names:
                             tc = task_combo_lookups[task_name][combo_key]
-                            true_arr = tc.maml.jacobian_true[member_names[0]]
-                            if true_arr is None:
+                            snap = tc.maml.coefficient_recovery.coefficients.get(coeff_name)
+                            if snap is None or snap.true_value == 0:
                                 continue
-                            true_val = float(true_arr[0])
-                            if true_val == 0:
-                                continue
+                            true_val = float(snap.true_value)
 
-                            for i, name in enumerate(member_names):
-                                m = tc.maml.jacobian_estimates[name]
-                                b = tc.baseline.jacobian_estimates[name]
-                                if m is not None:
-                                    has_data = True
-                                    m_step = m[si] if m.ndim == 2 else m
-                                    maml_all[i].extend(m_step.flatten() / true_val)
-                                if b is not None:
-                                    b_step = b[si] if b.ndim == 2 else b
-                                    baseline_all[i].extend(b_step.flatten() / true_val)
+                            for path_key in path_keys:
+                                m_arr = tc.maml.per_path_raw_values.get(path_key)
+                                b_arr = tc.baseline.per_path_raw_values.get(path_key)
+                                if (
+                                    m_arr is None or b_arr is None
+                                    or si >= m_arr.shape[0] or si >= b_arr.shape[0]
+                                ):
+                                    continue
+                                maml_pool[path_key].extend((m_arr[si] / true_val).tolist())
+                                baseline_pool[path_key].extend((b_arr[si] / true_val).tolist())
 
-                        if has_data and all(
-                            len(x) > 0 for x in maml_all + baseline_all
-                        ):
-                            step_suffix = (
-                                f"_step[{step_label}]" if step_label != "" else ""
-                            )
-                            # Use scatter for regression-based extraction (NLHeat), histogram otherwise
-                            # Check first available task for regression data
-                            _first_tc = task_combo_lookups[task_names[0]][combo_key]
-                            maml_reg = _first_tc.maml.jacobian_regression.get(member_names[0], {})
-                            baseline_reg = _first_tc.baseline.jacobian_regression.get(member_names[0], {})
-                            if maml_reg:
-                                fig = plot_jacobian_regression_scatter(
-                                    maml_regression=maml_reg,
-                                    baseline_regression=baseline_reg,
-                                    coeff_true=float(_first_tc.maml.jacobian_true[member_names[0]][0]),
-                                    title=f"Aggregated {coeff_name} (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
-                                    coeff_name=coeff_name,
-                                    save_path=agg_dir
-                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
-                                    dpi=dpi,
-                                )
-                            else:
-                                fig = plot_jacobian_histogram(
-                                    maml_estimates=[np.array(x) for x in maml_all],
-                                    baseline_estimates=[np.array(x) for x in baseline_all],
-                                    estimate_labels=member_names,
-                                    coeff_true=1.0,
-                                    title=f"Aggregated {coeff_name} Recovery Ratio (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
-                                    coeff_name=coeff_name,
-                                    save_path=agg_dir
-                                    / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
-                                    dpi=dpi,
-                                    ratio_mode=True,
-                                )
-                            plt.close(fig)
+                        kept_paths = [
+                            p for p in path_keys
+                            if len(maml_pool[p]) > 0 and len(baseline_pool[p]) > 0
+                        ]
+                        if not kept_paths:
+                            continue
+
+                        step_suffix = f"_step[{step_label}]"
+                        fig = plot_jacobian_histogram(
+                            maml_estimates=[np.array(maml_pool[p]) for p in kept_paths],
+                            baseline_estimates=[np.array(baseline_pool[p]) for p in kept_paths],
+                            estimate_labels=kept_paths,
+                            coeff_true=1.0,
+                            title=f"Aggregated {coeff_name} Recovery Ratio (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
+                            coeff_name=coeff_name,
+                            save_path=agg_dir
+                            / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
+                            dpi=dpi,
+                            ratio_mode=True,
+                        )
+                        plt.close(fig)
 
     # -------------------------------------------------------------------------
-    # Aggregate loss ratio heatmaps
+    # Aggregate loss ratio heatmaps (one file per mixer per fixed step)
     # -------------------------------------------------------------------------
     if sel.enabled("loss-ratio"):
         for p in sel.steps_for("loss-ratio", fixed_steps.tolist()):
-            ratio_stack = []
-            for task_name in task_names:
-                task_metrics = all_metrics[task_name]
-                ratios = np.full((len(noise_levels), len(k_values)), np.nan)
+            for mname in mixer_names:
+                ratio_stack = []
+                for task_name in task_names:
+                    task_metrics = all_metrics[task_name]
+                    ratios = np.full((len(noise_levels), len(k_values)), np.nan)
 
-                for i, noise in enumerate(noise_levels):
-                    for j, k in enumerate(k_values):
-                        combo_key = f"k_{k}_noise_{noise:.2f}"
-                        metrics = task_metrics.get(combo_key)
-                        if metrics is not None and p in metrics.loss_ratios:
-                            ratios[i, j] = metrics.loss_ratios[p]
+                    for i, noise in enumerate(noise_levels):
+                        for j, k in enumerate(k_values):
+                            combo_key = f"k_{k}_noise_{noise:.2f}"
+                            per_mixer = task_metrics.get(combo_key, {})
+                            metrics = per_mixer.get(mname)
+                            if metrics is not None and p in metrics.loss_ratios:
+                                ratios[i, j] = metrics.loss_ratios[p]
 
-                ratio_stack.append(ratios)
+                    ratio_stack.append(ratios)
 
-            ratio_stack_arr = np.array(ratio_stack)
+                ratio_stack_arr = np.array(ratio_stack)
 
-            ratio_inf_counts = np.sum(np.isinf(ratio_stack_arr), axis=0)
-            ratio_stack_clean = np.where(
-                np.isinf(ratio_stack_arr), np.nan, ratio_stack_arr
-            )
-            ratio_mean = np.nanmean(ratio_stack_clean, axis=0)
-            ratio_std: NDArray[np.floating[Any]] = np.nanstd(
-                ratio_stack_clean, axis=0
-            )
+                ratio_inf_counts = np.sum(np.isinf(ratio_stack_arr), axis=0)
+                ratio_stack_clean = np.where(
+                    np.isinf(ratio_stack_arr), np.nan, ratio_stack_arr
+                )
+                ratio_mean = np.nanmean(ratio_stack_clean, axis=0)
+                ratio_std: NDArray[np.floating[Any]] = np.nanstd(
+                    ratio_stack_clean, axis=0
+                )
 
-            fig = plot_loss_ratio_heatmap(
-                ratios=ratio_mean,
-                k_values=k_values,
-                noise_levels=noise_levels,
-                fixed_step=p,
-                title=f"Aggregated Loss Ratio @ step {p} (n={n_tasks} tasks)",
-                save_path=agg_dir / f"step[{p}]_loss_ratio_heatmap.png",
-                dpi=dpi,
-                std_values=ratio_std,
-                inf_counts=ratio_inf_counts,
-                n_total=n_tasks,
-            )
-            plt.close(fig)
+                fig = plot_loss_ratio_heatmap(
+                    ratios=ratio_mean,
+                    k_values=k_values,
+                    noise_levels=noise_levels,
+                    fixed_step=p,
+                    title=f"Aggregated Loss Ratio @ step {p} (n={n_tasks} tasks) [mixer {mname}]",
+                    save_path=agg_dir / f"mixer[{mname}]_step[{p}]_loss_ratio_heatmap.png",
+                    dpi=dpi,
+                    std_values=ratio_std,
+                    inf_counts=ratio_inf_counts,
+                    n_total=n_tasks,
+                )
+                plt.close(fig)
 
     # -------------------------------------------------------------------------
-    # Aggregate generalization plots (one per K × noise)
+    # Aggregate generalization plots (one per K × noise) — per-mixer overlays
     # -------------------------------------------------------------------------
     if sel.enabled("generalization"):
         for k in k_values:
             for noise in noise_levels:
                 combo_key = f"k_{k}_noise_{noise:.2f}"
 
-                maml_train_curves = []
-                maml_holdout_curves = []
-                baseline_train_curves = []
-                baseline_holdout_curves = []
-                maml_plateau_steps = []
-                baseline_plateau_steps = []
+                # Collect per-mixer curves across all tasks for this combo.
+                # Outer dict keyed by mixer name; values are lists of per-task curves.
+                maml_train_acc: Dict[str, list] = {}
+                maml_holdout_acc: Dict[str, list] = {}
+                baseline_train_acc: Dict[str, list] = {}
+                baseline_holdout_acc: Dict[str, list] = {}
+                maml_plateau_acc: Dict[str, list[int]] = {}
+                baseline_plateau_acc: Dict[str, list[int]] = {}
 
                 for task_name in task_names:
                     tc = task_combo_lookups[task_name][combo_key]
-                    mt = tc.maml.fine_tune.train_losses
-                    mh = tc.maml.fine_tune.holdout_losses
-                    bt = tc.baseline.fine_tune.train_losses
-                    bh = tc.baseline.fine_tune.holdout_losses
+                    mt_pm = tc.maml.fine_tune.per_mixer_train_losses
+                    mh_pm = tc.maml.fine_tune.per_mixer_holdout_losses
+                    bt_pm = tc.baseline.fine_tune.per_mixer_train_losses
+                    bh_pm = tc.baseline.fine_tune.per_mixer_holdout_losses
 
-                    if (
-                        mt.size > 0
-                        and mh.size > 0
-                        and bt.size > 0
-                        and bh.size > 0
-                    ):
-                        maml_train_curves.append(mt)
-                        maml_holdout_curves.append(mh)
-                        baseline_train_curves.append(bt)
-                        baseline_holdout_curves.append(bh)
-                        maml_plateau_steps.append(steps_to_plateau(mh))
-                        baseline_plateau_steps.append(steps_to_plateau(bh))
+                    if not mt_pm or not bt_pm:
+                        continue
 
-                if len(maml_train_curves) == 0:
+                    for mname, mt in mt_pm.items():
+                        mh = mh_pm[mname]
+                        maml_train_acc.setdefault(mname, []).append(mt)
+                        maml_holdout_acc.setdefault(mname, []).append(mh)
+                        maml_plateau_acc.setdefault(mname, []).append(
+                            steps_to_plateau(mh)
+                        )
+                    for mname, bt in bt_pm.items():
+                        bh = bh_pm[mname]
+                        baseline_train_acc.setdefault(mname, []).append(bt)
+                        baseline_holdout_acc.setdefault(mname, []).append(bh)
+                        baseline_plateau_acc.setdefault(mname, []).append(
+                            steps_to_plateau(bh)
+                        )
+
+                if not maml_train_acc or not baseline_train_acc:
                     continue
 
-                min_len = min(
-                    min(len(c) for c in maml_train_curves),
-                    min(len(c) for c in maml_holdout_curves),
-                    min(len(c) for c in baseline_train_curves),
-                    min(len(c) for c in baseline_holdout_curves),
-                )
-                maml_train_curves = [c[:min_len] for c in maml_train_curves]
-                maml_holdout_curves = [c[:min_len] for c in maml_holdout_curves]
-                baseline_train_curves = [c[:min_len] for c in baseline_train_curves]
-                baseline_holdout_curves = [
-                    c[:min_len] for c in baseline_holdout_curves
-                ]
+                # Per-mixer mean / std across tasks. Truncate to min_len per mixer
+                # in case fixed_steps differs across tasks (shouldn't, but safe).
+                def _mean_std(
+                    acc: Dict[str, list]
+                ) -> Tuple[Dict[str, NDArray], Dict[str, NDArray]]:
+                    means: Dict[str, NDArray] = {}
+                    stds: Dict[str, NDArray] = {}
+                    for mname, curves in acc.items():
+                        min_len = min(len(c) for c in curves)
+                        stack = np.array([c[:min_len] for c in curves])
+                        means[mname] = np.mean(stack, axis=0)
+                        stds[mname] = np.std(stack, axis=0)
+                    return means, stds
 
-                mt_arr = np.array(maml_train_curves)
-                mh_arr = np.array(maml_holdout_curves)
-                bt_arr = np.array(baseline_train_curves)
-                bh_arr = np.array(baseline_holdout_curves)
+                maml_train_mean, maml_train_std = _mean_std(maml_train_acc)
+                maml_holdout_mean, maml_holdout_std = _mean_std(maml_holdout_acc)
+                baseline_train_mean, baseline_train_std = _mean_std(baseline_train_acc)
+                baseline_holdout_mean, baseline_holdout_std = _mean_std(baseline_holdout_acc)
+
+                maml_plateau_mean = {
+                    m: int(np.mean(v)) for m, v in maml_plateau_acc.items()
+                }
+                baseline_plateau_mean = {
+                    m: int(np.mean(v)) for m, v in baseline_plateau_acc.items()
+                }
+                maml_plateau_std = {
+                    m: float(np.std(v)) for m, v in maml_plateau_acc.items()
+                }
+                baseline_plateau_std = {
+                    m: float(np.std(v)) for m, v in baseline_plateau_acc.items()
+                }
+
+                n_tasks_used = len(next(iter(maml_train_acc.values())))
 
                 fig = plot_train_holdout_convergence(
-                    maml_train=np.mean(mt_arr, axis=0),
-                    maml_holdout=np.mean(mh_arr, axis=0),
-                    baseline_train=np.mean(bt_arr, axis=0),
-                    baseline_holdout=np.mean(bh_arr, axis=0),
-                    title=f"Aggregated: K={k}, noise={noise:.0%} (n={len(maml_train_curves)} tasks)",
+                    maml_train_per_mixer=maml_train_mean,
+                    maml_holdout_per_mixer=maml_holdout_mean,
+                    baseline_train_per_mixer=baseline_train_mean,
+                    baseline_holdout_per_mixer=baseline_holdout_mean,
+                    title=f"Aggregated: K={k}, noise={noise:.0%} (n={n_tasks_used} tasks)",
                     save_path=agg_dir
                     / f"k[{k}]_noise[{noise:.2f}]_finetune_generalization.png",
                     dpi=dpi,
                     k_shot=k,
                     holdout_size=holdout_size,
-                    maml_train_std=np.std(mt_arr, axis=0),
-                    maml_holdout_std=np.std(mh_arr, axis=0),
-                    baseline_train_std=np.std(bt_arr, axis=0),
-                    baseline_holdout_std=np.std(bh_arr, axis=0),
+                    maml_train_std_per_mixer=maml_train_std,
+                    maml_holdout_std_per_mixer=maml_holdout_std,
+                    baseline_train_std_per_mixer=baseline_train_std,
+                    baseline_holdout_std_per_mixer=baseline_holdout_std,
                     deriv_threshold=deriv_threshold,
-                    maml_plateau_step=int(np.mean(maml_plateau_steps)),
-                    baseline_plateau_step=int(np.mean(baseline_plateau_steps)),
-                    plateau_step_std=(
-                        float(np.std(maml_plateau_steps)),
-                        float(np.std(baseline_plateau_steps)),
-                    ),
+                    maml_plateau_steps_per_mixer=maml_plateau_mean,
+                    baseline_plateau_steps_per_mixer=baseline_plateau_mean,
+                    maml_plateau_step_std_per_mixer=maml_plateau_std,
+                    baseline_plateau_step_std_per_mixer=baseline_plateau_std,
                 )
                 plt.close(fig)
 
     # -------------------------------------------------------------------------
-    # Aggregate noise robustness curves
+    # Aggregate noise robustness curves (one file per mixer per K)
     # -------------------------------------------------------------------------
     if sel.enabled("noise-robustness"):
-        for k in k_values:
-            maml_steps_per_task = []
-            baseline_steps_per_task = []
-
-            for task_name in task_names:
-                task_metrics = all_metrics[task_name]
-                maml_row = []
-                baseline_row = []
-
-                for noise in noise_levels:
-                    combo_key = f"k_{k}_noise_{noise:.2f}"
-                    metrics = task_metrics.get(combo_key)
-
-                    if metrics is None:
-                        maml_row.append(np.nan)
-                        baseline_row.append(np.nan)
-                    else:
-                        maml_row.append(metrics.maml_steps_to_plateau)
-                        baseline_row.append(metrics.baseline_steps_to_plateau)
-
-                maml_steps_per_task.append(maml_row)
-                baseline_steps_per_task.append(baseline_row)
-
-            maml_arr = np.array(maml_steps_per_task)
-            baseline_arr = np.array(baseline_steps_per_task)
-
-            fig = plot_noise_robustness(
-                noise_levels=noise_levels,
-                maml_steps=np.nanmean(maml_arr, axis=0),
-                baseline_steps=np.nanmean(baseline_arr, axis=0),
-                title=f"Aggregated Noise Robustness (K={k}, n={n_tasks} tasks)",
-                save_path=agg_dir / f"k[{k}]_noise_robustness.png",
-                dpi=dpi,
-                maml_std=np.nanstd(maml_arr, axis=0),
-                baseline_std=np.nanstd(baseline_arr, axis=0),
-            )
-            plt.close(fig)
-
-    # -------------------------------------------------------------------------
-    # Aggregate sample efficiency curves
-    # -------------------------------------------------------------------------
-    if sel.enabled("sample-efficiency"):
-        for p in fixed_steps[:1]:
-            for noise in noise_levels:
-                maml_per_task = []
-                baseline_per_task = []
+        for mname in mixer_names:
+            for k in k_values:
+                maml_steps_per_task = []
+                baseline_steps_per_task = []
 
                 for task_name in task_names:
                     task_metrics = all_metrics[task_name]
                     maml_row = []
                     baseline_row = []
 
-                    for k in k_values:
+                    for noise in noise_levels:
                         combo_key = f"k_{k}_noise_{noise:.2f}"
-                        metrics = task_metrics.get(combo_key)
+                        per_mixer = task_metrics.get(combo_key, {})
+                        metrics = per_mixer.get(mname)
 
-                        if metrics is None or p not in metrics.maml_loss_at_steps:
+                        if metrics is None:
                             maml_row.append(np.nan)
                             baseline_row.append(np.nan)
                         else:
-                            maml_row.append(metrics.maml_loss_at_steps[p])
-                            baseline_row.append(metrics.baseline_loss_at_steps[p])
+                            maml_row.append(metrics.maml_steps_to_plateau)
+                            baseline_row.append(metrics.baseline_steps_to_plateau)
 
-                    maml_per_task.append(maml_row)
-                    baseline_per_task.append(baseline_row)
+                    maml_steps_per_task.append(maml_row)
+                    baseline_steps_per_task.append(baseline_row)
 
-                maml_arr = np.array(maml_per_task)
-                baseline_arr = np.array(baseline_per_task)
+                maml_arr = np.array(maml_steps_per_task)
+                baseline_arr = np.array(baseline_steps_per_task)
 
-                fig = plot_sample_efficiency(
-                    k_values=k_values,
-                    maml_losses=np.nanmean(maml_arr, axis=0),
-                    baseline_losses=np.nanmean(baseline_arr, axis=0),
-                    fixed_step=p,
-                    title=f"Aggregated Sample Efficiency (noise={noise:.0%}, step {p}, n={n_tasks} tasks)",
-                    save_path=agg_dir
-                    / f"noise[{noise:.2f}]_step[{p}]_sample_efficiency.png",
+                fig = plot_noise_robustness(
+                    noise_levels=noise_levels,
+                    maml_steps=np.nanmean(maml_arr, axis=0),
+                    baseline_steps=np.nanmean(baseline_arr, axis=0),
+                    title=f"Aggregated Noise Robustness (K={k}, n={n_tasks} tasks) [mixer {mname}]",
+                    save_path=agg_dir / f"mixer[{mname}]_k[{k}]_noise_robustness.png",
                     dpi=dpi,
                     maml_std=np.nanstd(maml_arr, axis=0),
                     baseline_std=np.nanstd(baseline_arr, axis=0),
@@ -1168,76 +1093,85 @@ def generate_aggregated_figures(
                 plt.close(fig)
 
     # -------------------------------------------------------------------------
-    # Aggregate coefficient error heatmap (Graph 8)
+    # Aggregate sample efficiency curves (one file per mixer per noise)
+    # -------------------------------------------------------------------------
+    if sel.enabled("sample-efficiency"):
+        for mname in mixer_names:
+            for p in fixed_steps[:1]:
+                for noise in noise_levels:
+                    maml_per_task = []
+                    baseline_per_task = []
+
+                    for task_name in task_names:
+                        task_metrics = all_metrics[task_name]
+                        maml_row = []
+                        baseline_row = []
+
+                        for k in k_values:
+                            combo_key = f"k_{k}_noise_{noise:.2f}"
+                            per_mixer = task_metrics.get(combo_key, {})
+                            metrics = per_mixer.get(mname)
+
+                            if metrics is None or p not in metrics.maml_loss_at_steps:
+                                maml_row.append(np.nan)
+                                baseline_row.append(np.nan)
+                            else:
+                                maml_row.append(metrics.maml_loss_at_steps[p])
+                                baseline_row.append(metrics.baseline_loss_at_steps[p])
+
+                        maml_per_task.append(maml_row)
+                        baseline_per_task.append(baseline_row)
+
+                    maml_arr = np.array(maml_per_task)
+                    baseline_arr = np.array(baseline_per_task)
+
+                    fig = plot_sample_efficiency(
+                        k_values=k_values,
+                        maml_losses=np.nanmean(maml_arr, axis=0),
+                        baseline_losses=np.nanmean(baseline_arr, axis=0),
+                        fixed_step=p,
+                        title=f"Aggregated Sample Efficiency (noise={noise:.0%}, step {p}, n={n_tasks} tasks) [mixer {mname}]",
+                        save_path=agg_dir
+                        / f"mixer[{mname}]_noise[{noise:.2f}]_step[{p}]_sample_efficiency.png",
+                        dpi=dpi,
+                        maml_std=np.nanstd(maml_arr, axis=0),
+                        baseline_std=np.nanstd(baseline_arr, axis=0),
+                    )
+                    plt.close(fig)
+
+    # -------------------------------------------------------------------------
+    # Aggregate coefficient error heatmap — read pct_error per task per (k, noise),
+    # mean across tasks per cell.
     # -------------------------------------------------------------------------
     if sel.enabled("coeff-heatmap"):
-        for coeff_name, members in grouped.items():
-            member_names = [m.name for m in members]
-            true_key = f"{member_names[0]}_true"
+        for coeff_name in coeff_names:
             maml_error_stack = []
             baseline_error_stack = []
-            has_jacobian_data = False
 
             for task_name in task_names:
                 tcl = task_combo_lookups[task_name]
                 maml_errors = np.full((len(noise_levels), len(k_values)), np.nan)
-                baseline_errors = np.full(
-                    (len(noise_levels), len(k_values)), np.nan
-                )
+                baseline_errors = np.full((len(noise_levels), len(k_values)), np.nan)
 
                 for i, noise in enumerate(noise_levels):
                     for j, k in enumerate(k_values):
-                        combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo = tcl[combo_key]
-
-                        maml_ests_raw = [
-                            combo.maml.jacobian_estimates[n] for n in member_names
-                        ]
-                        baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates[n] for n in member_names
-                        ]
-                        coeff_true = combo.maml.jacobian_true[true_key]
-
-                        if coeff_true is None or any(
-                            x is None for x in maml_ests_raw
-                        ):
+                        combo = tcl[f"k_{k}_noise_{noise:.2f}"]
+                        m_snap = combo.maml.coefficient_recovery.coefficients.get(coeff_name)
+                        b_snap = combo.baseline.coefficient_recovery.coefficients.get(coeff_name)
+                        if m_snap is None or not m_snap.per_step:
                             continue
-                        has_jacobian_data = True
-                        true_val = float(coeff_true[0])
-                        if true_val == 0:
+                        if b_snap is None or not b_snap.per_step:
                             continue
-
-                        maml_ests = [
-                            x[-1] if x.ndim == 2 else x for x in maml_ests_raw
-                        ]
-                        maml_recovered = float(
-                            np.mean([np.mean(x) for x in maml_ests])
-                        )
-                        maml_errors[i, j] = (
-                            abs(maml_recovered - true_val) / true_val * 100
-                        )
-
-                        if not any(x is None for x in baseline_ests_raw):
-                            baseline_ests = [
-                                x[-1] if x.ndim == 2 else x
-                                for x in baseline_ests_raw
-                            ]
-                            baseline_recovered = float(
-                                np.mean([np.mean(x) for x in baseline_ests])
-                            )
-                            baseline_errors[i, j] = (
-                                abs(baseline_recovered - true_val) / true_val * 100
-                            )
+                        maml_errors[i, j] = m_snap.per_step[-1].pct_error
+                        baseline_errors[i, j] = b_snap.per_step[-1].pct_error
 
                 maml_error_stack.append(maml_errors)
                 baseline_error_stack.append(baseline_errors)
 
-            if has_jacobian_data:
-                maml_error_mean = np.nanmean(np.array(maml_error_stack), axis=0)
-                baseline_error_mean = np.nanmean(
-                    np.array(baseline_error_stack), axis=0
-                )
+            maml_error_mean = np.nanmean(np.array(maml_error_stack), axis=0)
+            baseline_error_mean = np.nanmean(np.array(baseline_error_stack), axis=0)
 
+            if not np.all(np.isnan(maml_error_mean)):
                 fig = plot_coefficient_heatmap(
                     k_values=k_values,
                     noise_levels=noise_levels,
@@ -1250,13 +1184,10 @@ def generate_aggregated_figures(
                 plt.close(fig)
 
     # -------------------------------------------------------------------------
-    # Aggregate coefficient vs K (Graph 9)
+    # Aggregate coefficient vs K (final step, mean across tasks)
     # -------------------------------------------------------------------------
     if sel.enabled("coeff-vs-k"):
-        for coeff_name, members in grouped.items():
-            member_names = [m.name for m in members]
-            true_key = f"{member_names[0]}_true"
-
+        for coeff_name in coeff_names:
             for noise in noise_levels:
                 maml_per_task = []
                 baseline_per_task = []
@@ -1267,50 +1198,18 @@ def generate_aggregated_figures(
                     baseline_row: list[float] = []
 
                     for k in k_values:
-                        combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo = tcl[combo_key]
-
-                        maml_ests_raw = [
-                            combo.maml.jacobian_estimates[n] for n in member_names
-                        ]
-                        baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates[n] for n in member_names
-                        ]
-                        coeff_true = combo.maml.jacobian_true[true_key]
-
-                        if coeff_true is None or any(
-                            x is None for x in maml_ests_raw + baseline_ests_raw
+                        combo = tcl[f"k_{k}_noise_{noise:.2f}"]
+                        m_snap = combo.maml.coefficient_recovery.coefficients.get(coeff_name)
+                        b_snap = combo.baseline.coefficient_recovery.coefficients.get(coeff_name)
+                        if (
+                            m_snap is None or not m_snap.per_step
+                            or b_snap is None or not b_snap.per_step
                         ):
                             maml_row.append(np.nan)
                             baseline_row.append(np.nan)
                         else:
-                            true_val = float(coeff_true[0])
-                            if true_val == 0:
-                                maml_row.append(np.nan)
-                                baseline_row.append(np.nan)
-                            else:
-                                maml_ests = [
-                                    x[-1] if x.ndim == 2 else x
-                                    for x in maml_ests_raw
-                                ]
-                                baseline_ests = [
-                                    x[-1] if x.ndim == 2 else x
-                                    for x in baseline_ests_raw
-                                ]
-                                maml_recovered = float(
-                                    np.mean([np.mean(x) for x in maml_ests])
-                                )
-                                baseline_recovered = float(
-                                    np.mean([np.mean(x) for x in baseline_ests])
-                                )
-                                maml_row.append(
-                                    abs(maml_recovered - true_val) / true_val * 100
-                                )
-                                baseline_row.append(
-                                    abs(baseline_recovered - true_val)
-                                    / true_val
-                                    * 100
-                                )
+                            maml_row.append(m_snap.per_step[-1].pct_error)
+                            baseline_row.append(b_snap.per_step[-1].pct_error)
 
                     maml_per_task.append(maml_row)
                     baseline_per_task.append(baseline_row)
@@ -1333,13 +1232,10 @@ def generate_aggregated_figures(
                     plt.close(fig)
 
     # -------------------------------------------------------------------------
-    # Aggregate coefficient vs noise (Graph 10)
+    # Aggregate coefficient vs noise (final step, mean across tasks)
     # -------------------------------------------------------------------------
     if sel.enabled("coeff-vs-noise"):
-        for coeff_name, members in grouped.items():
-            member_names = [m.name for m in members]
-            true_key = f"{member_names[0]}_true"
-
+        for coeff_name in coeff_names:
             for k in k_values:
                 maml_per_task = []
                 baseline_per_task = []
@@ -1350,50 +1246,18 @@ def generate_aggregated_figures(
                     baseline_row = []
 
                     for noise in noise_levels:
-                        combo_key = f"k_{k}_noise_{noise:.2f}"
-                        combo = tcl[combo_key]
-
-                        maml_ests_raw = [
-                            combo.maml.jacobian_estimates[n] for n in member_names
-                        ]
-                        baseline_ests_raw = [
-                            combo.baseline.jacobian_estimates[n] for n in member_names
-                        ]
-                        coeff_true = combo.maml.jacobian_true[true_key]
-
-                        if coeff_true is None or any(
-                            x is None for x in maml_ests_raw + baseline_ests_raw
+                        combo = tcl[f"k_{k}_noise_{noise:.2f}"]
+                        m_snap = combo.maml.coefficient_recovery.coefficients.get(coeff_name)
+                        b_snap = combo.baseline.coefficient_recovery.coefficients.get(coeff_name)
+                        if (
+                            m_snap is None or not m_snap.per_step
+                            or b_snap is None or not b_snap.per_step
                         ):
                             maml_row.append(np.nan)
                             baseline_row.append(np.nan)
                         else:
-                            true_val = float(coeff_true[0])
-                            if true_val == 0:
-                                maml_row.append(np.nan)
-                                baseline_row.append(np.nan)
-                            else:
-                                maml_ests = [
-                                    x[-1] if x.ndim == 2 else x
-                                    for x in maml_ests_raw
-                                ]
-                                baseline_ests = [
-                                    x[-1] if x.ndim == 2 else x
-                                    for x in baseline_ests_raw
-                                ]
-                                maml_recovered = float(
-                                    np.mean([np.mean(x) for x in maml_ests])
-                                )
-                                baseline_recovered = float(
-                                    np.mean([np.mean(x) for x in baseline_ests])
-                                )
-                                maml_row.append(
-                                    abs(maml_recovered - true_val) / true_val * 100
-                                )
-                                baseline_row.append(
-                                    abs(baseline_recovered - true_val)
-                                    / true_val
-                                    * 100
-                                )
+                            maml_row.append(m_snap.per_step[-1].pct_error)
+                            baseline_row.append(b_snap.per_step[-1].pct_error)
 
                     maml_per_task.append(maml_row)
                     baseline_per_task.append(baseline_row)
@@ -1568,51 +1432,69 @@ def generate_cross_experiment_scatter(
     """
     Generate cross-experiment coefficient recovery scatter plots.
 
-    Generates one scatter image per fixed_step. Each panel shows true vs
-    recovered coefficients across all experiments, for both MAML and baseline.
-
-    Saves to each directory in output_dirs (supports multi-experiment placement).
+    One file per coefficient per step. Each model entry inside the panel is
+    keyed `(experiment, method, path_key)` so multi-path coefficients (BR's
+    k2, λω's c) appear with one scatter series per recovery path, marker
+    cycled by MODEL_MARKERS.
     """
     k_values, noise_levels = validate_experiment_compatibility(experiment_results)
 
-    # Discover coefficient names from first experiment (PDE-constant)
+    # Discover coefficient names from the first experiment's first task (PDE-constant).
     first_er = experiment_results[0][1]
-    any_task = next(iter(first_er.tasks.values()))
-    specs = any_task.coefficient_specs
-    coeff_names = list(dict.fromkeys(s.coeff_name for s in specs))
-
+    any_task = next(iter(first_er.tasks.values()), None)
+    if any_task is None or not any_task.combos:
+        print("  No tasks/combos in first experiment — skipping scatter.")
+        return
+    coeff_names = list(
+        any_task.combos[0].maml.coefficient_recovery.coefficients.keys()
+    )
     if not coeff_names:
-        print("  No coefficient specs found — skipping scatter.")
+        print("  No coefficients found — skipping scatter.")
         return
 
-    # Discover fixed_steps from first available combo
-    scatter_fixed_steps = None
+    # Discover fixed_steps from the first experiment with a non-empty per_step.
+    scatter_fixed_steps: Optional[list[int]] = None
     for _name, er in experiment_results:
         for task in er.tasks.values():
-            if task.combos:
-                cr = task.combos[0].maml.coefficient_recovery
-                if cr.error_pct:  # has data
-                    scatter_fixed_steps = er.config.fixed_steps
+            if not task.combos:
+                continue
+            cr = task.combos[0].maml.coefficient_recovery
+            for snap in cr.coefficients.values():
+                if snap.per_step:
+                    scatter_fixed_steps = list(er.config.fixed_steps)
                     break
-        if scatter_fixed_steps is not None:
+            if scatter_fixed_steps:
+                break
+        if scatter_fixed_steps:
             break
 
-    if scatter_fixed_steps is None:
-        # Legacy: single-step data
-        scatter_fixed_steps = [None]
-        all_fixed_steps = scatter_fixed_steps
-    else:
-        # Keep full list for correct indexing into rec_raw arrays
-        all_fixed_steps = list(scatter_fixed_steps)
-        # Apply step filtering (display only selected steps)
-        allowed = sel.steps_for("scatter", [int(s) for s in scatter_fixed_steps])
-        scatter_fixed_steps = [s for s in scatter_fixed_steps if int(s) in allowed]
+    if not scatter_fixed_steps:
+        print("  No fixed_steps with recovery data — skipping scatter.")
+        return
+
+    allowed = set(sel.steps_for("scatter", [int(s) for s in scatter_fixed_steps]))
+    scatter_fixed_steps = [s for s in scatter_fixed_steps if int(s) in allowed]
 
     for step_val in scatter_fixed_steps:
-        # Build panel_data for this step
-        panel_data: PanelDataDict = {}
-
         for coeff_name in coeff_names:
+            # Discover path keys for this coefficient from the first task that has it.
+            path_keys_for_coeff: list[str] = []
+            for _name, er in experiment_results:
+                for task in er.tasks.values():
+                    if not task.combos:
+                        continue
+                    snap = task.combos[0].maml.coefficient_recovery.coefficients.get(coeff_name)
+                    if snap and snap.per_step:
+                        path_keys_for_coeff = list(snap.per_step[0].recoveries.keys())
+                        break
+                if path_keys_for_coeff:
+                    break
+
+            if not path_keys_for_coeff:
+                continue
+
+            panel_data: PanelDataDict = {}
+
             for noise in noise_levels:
                 for k in k_values:
                     key = (coeff_name, noise, k)
@@ -1626,78 +1508,76 @@ def generate_cross_experiment_scatter(
                             continue
                         exp_step_idx = exp_fs.index(step_val)
 
-                        for label_suffix, get_method in [
+                        for method_label, get_method in [
                             ("", lambda c: c.maml),
                             (" (BL)", lambda c: c.baseline),
                         ]:
-                            true_vals: list[float] = []
-                            rec_vals: list[float] = []
-                            task_names_list: list[str] = []
+                            for path_key in path_keys_for_coeff:
+                                true_vals: list[float] = []
+                                rec_vals: list[float] = []
+                                task_names_list: list[str] = []
 
-                            for task_name, task in er.tasks.items():
-                                try:
-                                    combo = task.combo_by_key(combo_key)
-                                except KeyError:
+                                for task_name, task in er.tasks.items():
+                                    try:
+                                        combo = task.combo_by_key(combo_key)
+                                    except KeyError:
+                                        continue
+
+                                    method = get_method(combo)
+                                    snap = method.coefficient_recovery.coefficients.get(coeff_name)
+                                    if snap is None or exp_step_idx >= len(snap.per_step):
+                                        continue
+                                    ps = snap.per_step[exp_step_idx]
+                                    rp = ps.recoveries.get(path_key)
+                                    if rp is None:
+                                        continue
+
+                                    true_val = float(snap.true_value)
+                                    rec_val = float(rp.mean)
+
+                                    if np.isnan(true_val) or np.isnan(rec_val):
+                                        continue
+
+                                    true_vals.append(true_val)
+                                    rec_vals.append(rec_val)
+                                    task_names_list.append(task_name)
+
+                                if not true_vals:
                                     continue
 
-                                method = get_method(combo)
-                                cr = method.coefficient_recovery
-                                if coeff_name not in cr.coefficients:
-                                    continue
-
-                                snap = cr.coefficients[coeff_name]
-                                true_val = snap.true_value
-                                recovered = snap.recovered
-
-                                if exp_step_idx >= len(recovered):
-                                    continue
-                                rec_val = recovered[exp_step_idx]
-
-                                if np.isnan(true_val) or np.isnan(rec_val):
-                                    continue
-
-                                true_vals.append(true_val)
-                                rec_vals.append(rec_val)
-                                task_names_list.append(task_name)
-
-                            display_name = f"{dir_name}{label_suffix}"
-                            models.append(
-                                (
-                                    np.array(true_vals),
-                                    np.array(rec_vals),
-                                    task_names_list,
-                                    display_name,
+                                display_name = f"{dir_name}/{path_key}{method_label}"
+                                models.append(
+                                    (
+                                        np.array(true_vals),
+                                        np.array(rec_vals),
+                                        task_names_list,
+                                        display_name,
+                                    )
                                 )
-                            )
 
                     panel_data[key] = models
 
-        filename = (
-            f"step[{step_val}]_coeff_scatter_true_vs_recovered.png"
-            if step_val is not None
-            else "coeff_scatter_true_vs_recovered.png"
-        )
+            filename = f"{coeff_name}.step[{step_val}]_coeff_scatter_true_vs_recovered.png"
 
-        # Save to first dir via plot function, then copy to remaining dirs
-        primary_path = output_dirs[0] / filename
-        fig = plot_coefficient_scatter_grid(
-            panel_data=panel_data,
-            coeff_names=coeff_names,
-            k_values=k_values,
-            noise_levels=noise_levels,
-            save_path=primary_path,
-            dpi=dpi,
-            step=step_val,
-            train_coeff_values=train_coeff_values,
-        )
-        plt.close(fig)
+            primary_path = output_dirs[0] / filename
+            fig = plot_coefficient_scatter_grid(
+                panel_data=panel_data,
+                coeff_names=[coeff_name],
+                k_values=k_values,
+                noise_levels=noise_levels,
+                save_path=primary_path,
+                dpi=dpi,
+                step=step_val,
+                train_coeff_values=train_coeff_values,
+            )
+            plt.close(fig)
 
-        for out_dir in output_dirs[1:]:
-            copy_path = out_dir / filename
-            copy_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(primary_path, copy_path)
+            for out_dir in output_dirs[1:]:
+                copy_path = out_dir / filename
+                copy_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(primary_path, copy_path)
 
-        print(f"  Saved scatter (step {step_val}) to {len(output_dirs)} dir(s)")
+            print(f"  Saved {coeff_name} scatter (step {step_val}) to {len(output_dirs)} dir(s)")
 
 
 def main():

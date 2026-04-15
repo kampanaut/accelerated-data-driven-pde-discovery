@@ -103,55 +103,73 @@ MODEL_COLORS_LIGHT: list[str] = [
     "#dec8c4",
 ]
 
+# Per-mixer color palette — stable across every per-mixer plot in a run.
+# Keys match MixerNetwork's mixer names: "u"/"v" for 2-output PDEs (BR, FHN, λω),
+# "ω" for NS vorticity. Picked from IC_PALETTE so the project's visual identity
+# stays consistent.
+MIXER_COLORS: dict[str, str] = {
+    "u": "#1f77b4",   # blue
+    "v": "#ff7f0e",   # orange
+    "ω": "#2ca02c",   # green (NS vorticity)
+}
+
 
 def plot_train_holdout_convergence(
-    maml_train: NDArray[np.floating[Any]],
-    maml_holdout: NDArray[np.floating[Any]],
-    baseline_train: NDArray[np.floating[Any]],
-    baseline_holdout: NDArray[np.floating[Any]],
+    maml_train_per_mixer: dict[str, NDArray[np.floating[Any]]],
+    maml_holdout_per_mixer: dict[str, NDArray[np.floating[Any]]],
+    baseline_train_per_mixer: dict[str, NDArray[np.floating[Any]]],
+    baseline_holdout_per_mixer: dict[str, NDArray[np.floating[Any]]],
     title: str,
     save_path: Optional[Path] = None,
     figsize: Tuple[int, int] = (10, 6),
     dpi: int = 150,
     k_shot: Optional[int] = None,
     holdout_size: Optional[int] = None,
-    maml_train_std: Optional[NDArray[np.floating[Any]]] = None,
-    maml_holdout_std: Optional[NDArray[np.floating[Any]]] = None,
-    baseline_train_std: Optional[NDArray[np.floating[Any]]] = None,
-    baseline_holdout_std: Optional[NDArray[np.floating[Any]]] = None,
+    maml_train_std_per_mixer: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
+    maml_holdout_std_per_mixer: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
+    baseline_train_std_per_mixer: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
+    baseline_holdout_std_per_mixer: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
     deriv_threshold: float = 1e-7,
-    maml_plateau_step: Optional[int] = None,
-    baseline_plateau_step: Optional[int] = None,
-    plateau_step_std: Optional[Tuple[float, float]] = None,
+    maml_plateau_steps_per_mixer: Optional[dict[str, int]] = None,
+    baseline_plateau_steps_per_mixer: Optional[dict[str, int]] = None,
+    maml_plateau_step_std_per_mixer: Optional[dict[str, float]] = None,
+    baseline_plateau_step_std_per_mixer: Optional[dict[str, float]] = None,
     fixed_steps: Optional[list[int]] = None,
     loss_worse_steps: Optional[list[int]] = None,
 ) -> pltf.Figure:
     """
-    Generalization plot: train vs holdout loss with plateau and step markers.
+    Generalization plot: per-mixer train vs holdout loss with plateau markers.
 
-    Shows generalization gap, plateau detection, and per-step MAML vs baseline
-    comparison via color-coded vertical lines at each fixed_step.
+    Two panels (MAML left, baseline right). Each panel overlays one solid
+    (train) + one dashed (holdout) curve **per mixer**, colored from
+    `MIXER_COLORS`. Plateau markers are drawn per mixer on each holdout
+    curve. The vertical fixed-step axvlines (red = MAML worse, green = OK)
+    are drawn once per panel — they're per-step, not per-mixer.
+
+    Color convention: color identifies the mixer; panel position identifies
+    the method. Mixer_u is the same color in both panels.
 
     Args:
-        maml_train: MAML training loss curve (or mean if aggregated)
-        maml_holdout: MAML holdout loss curve (or mean if aggregated)
-        baseline_train: Baseline training loss curve (or mean if aggregated)
-        baseline_holdout: Baseline holdout loss curve (or mean if aggregated)
+        maml_train_per_mixer: {mixer_name: train loss curve} for θ*
+        maml_holdout_per_mixer: {mixer_name: holdout loss curve} for θ*
+        baseline_train_per_mixer: {mixer_name: train loss curve} for θ₀
+        baseline_holdout_per_mixer: {mixer_name: holdout loss curve} for θ₀
         title: Plot title
         save_path: Path to save figure
         figsize: Figure size in inches
         dpi: Resolution for saved figure
         k_shot: Number of support samples (for labels)
         holdout_size: Number of holdout samples (for labels)
-        maml_train_std: Std for MAML train losses (aggregated mode)
-        maml_holdout_std: Std for MAML holdout losses (aggregated mode)
-        baseline_train_std: Std for baseline train losses (aggregated mode)
-        baseline_holdout_std: Std for baseline holdout losses (aggregated mode)
+        maml_train_std_per_mixer: per-mixer std bands for MAML train (agg mode)
+        maml_holdout_std_per_mixer: per-mixer std bands for MAML holdout (agg mode)
+        baseline_train_std_per_mixer: per-mixer std bands for baseline train
+        baseline_holdout_std_per_mixer: per-mixer std bands for baseline holdout
         deriv_threshold: Threshold for plateau detection
-        maml_plateau_step: Pre-computed MAML plateau step (None = auto-detect)
-        baseline_plateau_step: Pre-computed baseline plateau step
-        plateau_step_std: (maml_std, baseline_std) for plateau step bands
-        fixed_steps: Steps at which Jacobian was extracted (for markers)
+        maml_plateau_steps_per_mixer: pre-computed plateau step per mixer for MAML
+        baseline_plateau_steps_per_mixer: pre-computed plateau step per mixer for baseline
+        maml_plateau_step_std_per_mixer: per-mixer std for MAML plateau bands (agg mode)
+        baseline_plateau_step_std_per_mixer: per-mixer std for baseline plateau bands (agg mode)
+        fixed_steps: Steps at which Jacobian was extracted (for axvline markers)
         loss_worse_steps: Subset of fixed_steps where MAML holdout > baseline
 
     Returns:
@@ -159,122 +177,107 @@ def plot_train_holdout_convergence(
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=True)
 
-    steps = np.arange(len(maml_train))
+    # Curve length: assume all mixers share the same x-axis (same fixed_steps
+    # passed through fine_tune); use the first mixer to define `steps`.
+    first_mixer = next(iter(maml_train_per_mixer))
+    steps = np.arange(len(maml_train_per_mixer[first_mixer]))
 
-    # Compute overall minimum holdout loss for reference line
-    min_holdout_loss = min(maml_holdout.min(), baseline_holdout.min())
+    # Min holdout loss across every (method × mixer) for the gray reference line.
+    min_holdout_loss = float(min(
+        min(arr.min() for arr in maml_holdout_per_mixer.values()),
+        min(arr.min() for arr in baseline_holdout_per_mixer.values()),
+    ))
 
-    # Build legend labels with sample sizes
-    train_label = f"Train (K={k_shot})" if k_shot is not None else "Train"
-    holdout_label = (
-        f"Holdout (n={holdout_size})" if holdout_size is not None else "Holdout"
-    )
+    # Sample-size suffix used in legend entries.
+    k_suffix = f" (K={k_shot})" if k_shot is not None else ""
+    h_suffix = f" (n={holdout_size})" if holdout_size is not None else ""
 
     # --- Fixed step markers (color-coded, drawn first so curves sit on top) ---
     if fixed_steps is not None:
         worse_set = set(loss_worse_steps) if loss_worse_steps is not None else set()
         for s in fixed_steps:
-            if s > len(maml_train):
+            if s >= len(steps):
                 continue
             color = "#e74c3c" if s in worse_set else "#2ecc71"
             alpha = 0.35 if s in worse_set else 0.2
             for ax in (ax1, ax2):
                 ax.axvline(x=s, color=color, linewidth=1.0, alpha=alpha)
 
-    # MAML subplot
-    ax1.semilogy(steps, maml_train, "b-", label=train_label, linewidth=2)
-    ax1.semilogy(
-        steps, maml_holdout, "b--", label=holdout_label, linewidth=2, alpha=0.7
+    def _draw_panel(
+        ax: Any,
+        train_dict: dict[str, NDArray[np.floating[Any]]],
+        holdout_dict: dict[str, NDArray[np.floating[Any]]],
+        train_std_dict: Optional[dict[str, NDArray[np.floating[Any]]]],
+        holdout_std_dict: Optional[dict[str, NDArray[np.floating[Any]]]],
+        plateau_dict: Optional[dict[str, int]],
+        plateau_std_dict: Optional[dict[str, float]],
+        plateau_marker: str,
+    ) -> None:
+        """Draw all per-mixer curves + plateau markers for one method on one ax."""
+        for mname, train_curve in train_dict.items():
+            holdout_curve = holdout_dict[mname]
+            color = MIXER_COLORS.get(mname, "#7f7f7f")
+
+            ax.semilogy(
+                steps, train_curve, color=color, linestyle="-", linewidth=2,
+                label=f"[{mname}] Train{k_suffix}",
+            )
+            ax.semilogy(
+                steps, holdout_curve, color=color, linestyle="--", linewidth=2,
+                alpha=0.7, label=f"[{mname}] Holdout{h_suffix}",
+            )
+
+            # Std bands (aggregated mode)
+            if train_std_dict is not None and mname in train_std_dict:
+                t_std = train_std_dict[mname]
+                ax.fill_between(
+                    steps, train_curve - t_std, train_curve + t_std,
+                    color=color, alpha=0.2,
+                )
+            if holdout_std_dict is not None and mname in holdout_std_dict:
+                h_std = holdout_std_dict[mname]
+                ax.fill_between(
+                    steps, holdout_curve - h_std, holdout_curve + h_std,
+                    color=color, alpha=0.1,
+                )
+
+            # Plateau on this mixer's holdout curve
+            if plateau_dict is not None and mname in plateau_dict:
+                p_step = plateau_dict[mname]
+            else:
+                p_step = steps_to_plateau(
+                    holdout_curve, deriv_threshold=deriv_threshold
+                )
+            ax.plot(
+                p_step, holdout_curve[p_step], plateau_marker,
+                markerfacecolor=color, markeredgecolor=color, markersize=8,
+                label=f"[{mname}] plateau @ {p_step}", zorder=5,
+            )
+            ax.axvline(x=p_step, color=color, linestyle=":", alpha=0.5)
+
+            if plateau_std_dict is not None and mname in plateau_std_dict:
+                p_std = plateau_std_dict[mname]
+                ax.axvspan(
+                    p_step - p_std, p_step + p_std,
+                    color=color, alpha=0.1,
+                )
+
+    _draw_panel(
+        ax1,
+        maml_train_per_mixer, maml_holdout_per_mixer,
+        maml_train_std_per_mixer, maml_holdout_std_per_mixer,
+        maml_plateau_steps_per_mixer,
+        maml_plateau_step_std_per_mixer,
+        plateau_marker="o",
     )
-
-    # Add std bands for MAML (aggregated mode)
-    if maml_train_std is not None:
-        ax1.fill_between(
-            steps,
-            maml_train - maml_train_std,
-            maml_train + maml_train_std,
-            color="blue",
-            alpha=0.2,
-        )
-    if maml_holdout_std is not None:
-        ax1.fill_between(
-            steps,
-            maml_holdout - maml_holdout_std,
-            maml_holdout + maml_holdout_std,
-            color="blue",
-            alpha=0.1,
-        )
-
-    # Baseline subplot
-    ax2.semilogy(steps, baseline_train, "r-", label=train_label, linewidth=2)
-    ax2.semilogy(
-        steps, baseline_holdout, "r--", label=holdout_label, linewidth=2, alpha=0.7
+    _draw_panel(
+        ax2,
+        baseline_train_per_mixer, baseline_holdout_per_mixer,
+        baseline_train_std_per_mixer, baseline_holdout_std_per_mixer,
+        baseline_plateau_steps_per_mixer,
+        baseline_plateau_step_std_per_mixer,
+        plateau_marker="s",
     )
-
-    # Add std bands for baseline (aggregated mode)
-    if baseline_train_std is not None:
-        ax2.fill_between(
-            steps,
-            baseline_train - baseline_train_std,
-            baseline_train + baseline_train_std,
-            color="red",
-            alpha=0.2,
-        )
-    if baseline_holdout_std is not None:
-        ax2.fill_between(
-            steps,
-            baseline_holdout - baseline_holdout_std,
-            baseline_holdout + baseline_holdout_std,
-            color="red",
-            alpha=0.1,
-        )
-
-    # --- Plateau detection on holdout curves ---
-    if maml_plateau_step is None:
-        maml_plateau_step = steps_to_plateau(
-            maml_holdout, deriv_threshold=deriv_threshold
-        )
-    if baseline_plateau_step is None:
-        baseline_plateau_step = steps_to_plateau(
-            baseline_holdout, deriv_threshold=deriv_threshold
-        )
-
-    # Mark plateau on respective subplots
-    ax1.plot(
-        maml_plateau_step,
-        maml_holdout[maml_plateau_step],
-        "bo",
-        markersize=8,
-        label=f"Plateau @ {maml_plateau_step}",
-        zorder=5,
-    )
-    ax1.axvline(x=maml_plateau_step, color="blue", linestyle=":", alpha=0.5)
-
-    ax2.plot(
-        baseline_plateau_step,
-        baseline_holdout[baseline_plateau_step],
-        "rs",
-        markersize=8,
-        label=f"Plateau @ {baseline_plateau_step}",
-        zorder=5,
-    )
-    ax2.axvline(x=baseline_plateau_step, color="red", linestyle=":", alpha=0.5)
-
-    # Plateau std bands (aggregated mode)
-    if plateau_step_std is not None:
-        maml_step_std, baseline_step_std = plateau_step_std
-        ax1.axvspan(
-            maml_plateau_step - maml_step_std,
-            maml_plateau_step + maml_step_std,
-            color="blue",
-            alpha=0.1,
-        )
-        ax2.axvspan(
-            baseline_plateau_step - baseline_step_std,
-            baseline_plateau_step + baseline_step_std,
-            color="red",
-            alpha=0.1,
-        )
 
     # --- Labels and formatting ---
     ax1.set_xlabel("Gradient Steps")
@@ -288,22 +291,17 @@ def plot_train_holdout_convergence(
     ax2.legend(fontsize=7)
     ax2.grid(True, alpha=0.3)
 
-    # Draw thin horizontal line at overall minimum holdout loss
+    # Gray reference line at overall min holdout across all (method × mixer).
     min_line_color = "gray"
     min_line_alpha = 0.7
     min_linewidth = 0.8
-    ax1.axhline(
-        y=min_holdout_loss,
-        color=min_line_color,
-        linewidth=min_linewidth,
-        alpha=min_line_alpha,
-    )
-    ax2.axhline(
-        y=min_holdout_loss,
-        color=min_line_color,
-        linewidth=min_linewidth,
-        alpha=min_line_alpha,
-    )
+    for ax in (ax1, ax2):
+        ax.axhline(
+            y=min_holdout_loss,
+            color=min_line_color,
+            linewidth=min_linewidth,
+            alpha=min_line_alpha,
+        )
     ax2.annotate(
         f"min: {min_holdout_loss:.2e}",
         xy=(steps[-1], min_holdout_loss),
@@ -839,7 +837,7 @@ def plot_jacobian_regression_scatter(
     save_path: Optional[Path] = None,
     figsize: Tuple[int, int] = (14, 6),
     dpi: int = 150,
-) -> plt.Figure:
+) -> pltf.Figure:
     """Scatter plot of raw JVP vs (1-u) with regression line for NLHeat-style PDEs.
 
     Shows how well the model learned K(1-u) structure. R² on the plot.
@@ -1275,6 +1273,8 @@ def _scatter_panel(
     model_data: ModelScatterData,
     coeff_name: str,
     train_coeff_values: Optional[list[float]] = None,
+    force_xlim: Optional[Tuple[float, float]] = None,
+    force_ylim: Optional[Tuple[float, float]] = None,
 ) -> None:
     """Render one scatter panel with overlaid models, regression lines, Pearson r."""
     # Build IC color map dynamically from all task names in this panel
@@ -1351,27 +1351,170 @@ def _scatter_panel(
 
     if not all_true:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        # Still apply forced limits so empty MAML/BL panels in a row
+        # share the same axes as their populated sibling.
+        if force_xlim is not None:
+            ax.set_xlim(force_xlim)
+        if force_ylim is not None:
+            ax.set_ylim(force_ylim)
         return
 
-    # Training distribution: horizontal lines at each training task's true coefficient
+    # Axis limits: forced (for joint MAML/BL row sharing) or auto-zoomed
+    # to data range only — no forced y=0 baseline, no forced inclusion
+    # of distribution lines that sit outside the cluster.
+    if force_xlim is not None:
+        xlim = force_xlim
+    else:
+        x_lo, x_hi = float(min(all_true)), float(max(all_true))
+        x_margin = max((x_hi - x_lo) * 0.1, 1e-6)
+        xlim = (x_lo - x_margin, x_hi + x_margin)
+    if force_ylim is not None:
+        ylim = force_ylim
+    else:
+        y_lo, y_hi = float(min(all_rec)), float(max(all_rec))
+        y_margin = max((y_hi - y_lo) * 0.1, 1e-6)
+        ylim = (y_lo - y_margin, y_hi + y_margin)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+
+    # Training distribution: only draw lines that fall inside the visible y range.
     if train_coeff_values is not None:
         for d in train_coeff_values:
-            ax.axhline(d, color="orange", alpha=0.15, linewidth=0.8, zorder=0)
+            if ylim[0] <= d <= ylim[1]:
+                ax.axhline(d, color="orange", alpha=0.15, linewidth=0.8, zorder=0)
 
-    # Test distribution: horizontal lines at each test task's true coefficient
-    if all_true:
-        for d in set(all_true):
+    # Test distribution: only draw lines that fall inside the visible y range.
+    for d in set(all_true):
+        if ylim[0] <= d <= ylim[1]:
             ax.axhline(d, color="cyan", alpha=0.15, linewidth=0.8, zorder=0)
 
-    # y=x reference line
-    all_vals = np.array(all_true + all_rec)
-    lo, hi = float(all_vals.min()), float(all_vals.max())
-    margin = (hi - lo) * 0.1
-    ref = [lo - margin, hi + margin]
-    ax.plot(ref, ref, "k--", alpha=0.25, linewidth=1)
+    # y=x reference line, clipped to the intersection of x and y ranges.
+    diag_lo = max(xlim[0], ylim[0])
+    diag_hi = min(xlim[1], ylim[1])
+    if diag_lo < diag_hi:
+        ax.plot([diag_lo, diag_hi], [diag_lo, diag_hi], "k--", alpha=0.25, linewidth=1)
 
-    ax.axhline(0, color="gray", linewidth=0.5, linestyle=":")
     ax.set_xlabel(f"True {coeff_name}", fontsize=9)
+
+
+def _number_line_panel(
+    ax: pltax.Axes,
+    model_data: ModelScatterData,
+    coeff_name: str,
+    true_value: float,
+    force_ylim: Optional[Tuple[float, float]] = None,
+) -> None:
+    """Render N vertical number lines for a degenerate-truth coefficient.
+
+    All test tasks share the same true coefficient value, so a 2D scatter
+    collapses to a vertical column. Instead, give each model entry its own
+    vertical number line side-by-side: x = categorical model column,
+    y = recovered value. A horizontal red dashed line at y=true_value cuts
+    across all columns.
+
+    Color and marker conventions match `_scatter_panel`: IC type → border
+    color, model entry → marker shape via `MODEL_MARKERS`.
+    """
+    # Build IC color map dynamically from all task names in this panel
+    all_ic_types: set[str] = set()
+    for _, _, task_names, _ in model_data:
+        all_ic_types.update(_ic_type(n) for n in task_names)
+    ic_color_map = {
+        ic: IC_PALETTE[j % len(IC_PALETTE)] for j, ic in enumerate(sorted(all_ic_types))
+    }
+
+    all_rec: list[float] = []
+    rng = np.random.RandomState(0)  # deterministic jitter seed per panel
+    n_models = len(model_data)
+
+    # Per-model vertical guide lines (the "number lines" themselves).
+    for i in range(n_models):
+        ax.axvline(i, color="gray", alpha=0.2, linewidth=0.5, zorder=0)
+
+    for i, (_true_vals, recovered_vals, task_names, label) in enumerate(model_data):
+        if len(recovered_vals) == 0:
+            continue
+
+        all_rec.extend(recovered_vals.tolist())
+
+        is_baseline = "(BL)" in label
+        ic_types = [_ic_type(n) for n in task_names]
+        marker_style = MODEL_MARKERS[i % len(MODEL_MARKERS)]
+        marker_size = 120
+
+        # Markers cluster in column i with horizontal jitter for visibility.
+        x_jitter = rng.uniform(-0.2, 0.2, size=len(recovered_vals))
+        x_pos = i + x_jitter
+
+        for ic, color in ic_color_map.items():
+            mask = np.array([t == ic for t in ic_types])
+            if not mask.any():
+                continue
+            ax.scatter(
+                x_pos[mask],
+                recovered_vals[mask],
+                facecolors="none",
+                edgecolors=color,
+                marker=marker_style,
+                s=marker_size,
+                alpha=0.85,
+                linewidths=1.5 if not is_baseline else 0.8,
+            )
+
+        # Per-task label inside each marker
+        for j, tname in enumerate(task_names):
+            short = tname.split("_fourier")[0].split("heat_")[-1]
+            parts = short.split("_")
+            short_label = parts[-1] if len(parts) >= 2 else short
+            ax.text(
+                x_pos[j], recovered_vals[j], short_label,
+                fontsize=4, alpha=0.7,
+                ha="center", va="center",
+            )
+
+        # Per-model legend entry with μ/σ of recovered values for this column.
+        mean_rec = float(np.mean(recovered_vals))
+        std_rec = float(np.std(recovered_vals))
+        color_list = MODEL_COLORS_LIGHT if is_baseline else MODEL_COLORS_DARK
+        line_color = color_list[i % len(color_list)]
+        ax.plot(
+            [], [],
+            color=line_color, marker=marker_style, linestyle="None",
+            label=f"{label}: μ={mean_rec:.3f}, σ={std_rec:.3f}",
+        )
+
+    if not all_rec:
+        ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+        if force_ylim is not None:
+            ax.set_ylim(force_ylim)
+        ax.set_xlim(-0.6, max(n_models - 0.4, 0.4))
+        return
+
+    # y-axis range: forced (for joint MAML/BL row sharing) or auto-spanned
+    # to recovered values + truth line.
+    if force_ylim is not None:
+        ax.set_ylim(force_ylim)
+    else:
+        rec_lo, rec_hi = float(min(all_rec)), float(max(all_rec))
+        span_lo = min(rec_lo, true_value)
+        span_hi = max(rec_hi, true_value)
+        margin = max((span_hi - span_lo) * 0.1, 1e-6)
+        ax.set_ylim(span_lo - margin, span_hi + margin)
+
+    # x-axis: one column per model, ticks labeled with short model names.
+    ax.set_xlim(-0.6, n_models - 0.4)
+    short_names: list[str] = []
+    for _t, _r, _n, lbl in model_data:
+        s = lbl if len(lbl) <= 25 else "…" + lbl[-24:]
+        short_names.append(s)
+    ax.set_xticks(list(range(n_models)))
+    ax.set_xticklabels(short_names, rotation=45, ha="right", fontsize=6)
+
+    # Truth line: horizontal across all model columns.
+    ax.axhline(
+        true_value, color="red", linestyle="--", linewidth=2,
+        alpha=0.8, label=f"True {coeff_name} = {true_value:.4f}",
+    )
 
 
 def plot_coefficient_scatter_grid(
@@ -1390,9 +1533,29 @@ def plot_coefficient_scatter_grid(
 
     Rows = coefficient_names × noise_levels, Columns = k_values.
     Each panel shows one scatter per model, colored by IC type.
+
+    Degenerate-truth detection: if the std of all true values across the
+    entire panel_data is zero (all test tasks have the same true coefficient),
+    every panel switches to `_number_line_panel` instead of a 2D scatter —
+    a vertical column would carry no information. The truth value is read
+    from the first non-empty model entry.
     """
+    # Detect degenerate truth: pool all `true_vals` arrays across panels and
+    # check if their unique values collapse to one. Done once per file.
+    pooled_true: list[float] = []
+    for _key, models in panel_data.items():
+        for true_vals, _rec, _names, _label in models:
+            if len(true_vals) > 0:
+                pooled_true.extend(true_vals.tolist())
+    degenerate_truth: Optional[float] = None
+    if pooled_true:
+        true_arr = np.asarray(pooled_true, dtype=float)
+        if float(np.std(true_arr)) < 1e-12:
+            degenerate_truth = float(true_arr[0])
+
     n_rows = len(coeff_names) * len(noise_levels)
-    n_cols = len(k_values)
+    # Doubled cols: each k value gets a MAML panel and a baseline panel side by side.
+    n_cols = len(k_values) * 2
 
     fig, axes = plt.subplots(
         n_rows,
@@ -1401,33 +1564,97 @@ def plot_coefficient_scatter_grid(
         squeeze=False,
     )
 
+    def _split_models(
+        models: ModelScatterData,
+    ) -> Tuple[ModelScatterData, ModelScatterData]:
+        """Partition by `(BL)` suffix in label."""
+        maml_models = [m for m in models if "(BL)" not in m[3]]
+        bl_models = [m for m in models if "(BL)" in m[3]]
+        return maml_models, bl_models
+
+    def _row_joint_limits(
+        coeff_name: str, noise: float
+    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        """Pool (true, recovered) across both methods × all k for this row.
+
+        Returns (xlim, ylim) for the scatter case. For the number-line case,
+        only ylim matters (xlim is categorical per panel).
+        """
+        true_pool: list[float] = []
+        rec_pool: list[float] = []
+        for k_val in k_values:
+            for true_vals, rec_vals, _names, _label in panel_data.get(
+                (coeff_name, noise, k_val), []
+            ):
+                if len(true_vals) > 0:
+                    true_pool.extend(true_vals.tolist())
+                    rec_pool.extend(rec_vals.tolist())
+        if not rec_pool:
+            return None, None
+        if degenerate_truth is not None:
+            # ylim spans recovered values + truth line.
+            span_lo = min(min(rec_pool), degenerate_truth)
+            span_hi = max(max(rec_pool), degenerate_truth)
+            margin = max((span_hi - span_lo) * 0.1, 1e-6)
+            return None, (span_lo - margin, span_hi + margin)
+        # Scatter: x on true_vals, y on rec_vals, both with margin.
+        x_lo, x_hi = float(min(true_pool)), float(max(true_pool))
+        y_lo, y_hi = float(min(rec_pool)), float(max(rec_pool))
+        x_margin = max((x_hi - x_lo) * 0.1, 1e-6)
+        y_margin = max((y_hi - y_lo) * 0.1, 1e-6)
+        return (x_lo - x_margin, x_hi + x_margin), (y_lo - y_margin, y_hi + y_margin)
+
     row_idx = 0
     for coeff_name in coeff_names:
         for noise in noise_levels:
-            for col_idx, k_val in enumerate(k_values):
-                ax = axes[row_idx, col_idx]
+            row_xlim, row_ylim = _row_joint_limits(coeff_name, noise)
+            for k_idx, k_val in enumerate(k_values):
+                maml_col = k_idx * 2
+                bl_col = k_idx * 2 + 1
+                ax_maml = axes[row_idx, maml_col]
+                ax_bl = axes[row_idx, bl_col]
+
                 key = (coeff_name, noise, k_val)
                 models = panel_data.get(key, [])
+                maml_models, bl_models = _split_models(models)
 
                 coeff_train_vals = (
                     train_coeff_values.get(coeff_name)
                     if train_coeff_values is not None
                     else None
                 )
-                _scatter_panel(ax, models, coeff_name, coeff_train_vals)
+                if degenerate_truth is not None:
+                    _number_line_panel(
+                        ax_maml, maml_models, coeff_name, degenerate_truth,
+                        force_ylim=row_ylim,
+                    )
+                    _number_line_panel(
+                        ax_bl, bl_models, coeff_name, degenerate_truth,
+                        force_ylim=row_ylim,
+                    )
+                else:
+                    _scatter_panel(
+                        ax_maml, maml_models, coeff_name, coeff_train_vals,
+                        force_xlim=row_xlim, force_ylim=row_ylim,
+                    )
+                    _scatter_panel(
+                        ax_bl, bl_models, coeff_name, coeff_train_vals,
+                        force_xlim=row_xlim, force_ylim=row_ylim,
+                    )
 
-                # Column headers on top row
+                # Column headers on top row — pair under the same K value.
                 if row_idx == 0:
-                    ax.set_title(f"K = {k_val}", fontsize=11)
+                    ax_maml.set_title(f"K = {k_val}  [MAML θ*]", fontsize=10)
+                    ax_bl.set_title(f"K = {k_val}  [Baseline θ₀]", fontsize=10)
 
-                # Row labels on leftmost column
-                if col_idx == 0:
-                    ax.set_ylabel(
+                # Row label only on the leftmost (MAML side of first K).
+                if k_idx == 0:
+                    ax_maml.set_ylabel(
                         f"Recovered {coeff_name}",
                         fontsize=10,
                         fontweight="bold",
                     )
-                    ax.annotate(
+                    ax_maml.annotate(
                         f"noise={noise:.0%}",
                         xy=(0, 0.5),
                         xycoords="axes fraction",
