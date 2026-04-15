@@ -1,76 +1,69 @@
-"""Typed result structures for MAML evaluation.
+"""Typed result structures for mixer-method evaluation.
 
 Dataclasses mirror the results.json + samples/*.npz output.
 Produced by evaluate.py, consumed by visualize.py.
 
-Serialization:
-- to_json_dict() → nested dict for results.json
-- to_npz_dict() → flat string-keyed dict for np.savez_compressed
+Serialization split:
+- `to_json_dict()` → nested dict for results.json (scalars, loss trajectories,
+  per-step recovery summaries with per-path means + cross-path reconciliation)
+- `to_npz_dict()` → flat string-keyed dict for np.savez_compressed (per-mixer
+  fine-tune arrays, per-path raw per-point values, prediction residuals)
 
 results.json structure:
     EvaluationResults
     ├── experiment_name: str
     ├── timestamp: str
-    ├── config: EvalConfig
-    │   ├── k_values: List[int]
-    │   ├── noise_levels: List[float]
-    │   ├── fine_tune_lr: float
-    │   ├── max_steps: int
-    │   ├── threshold: float
-    │   ├── fixed_steps: List[int]
-    │   ├── holdout_size: int
-    │   └── pde_type: str
-    │
+    ├── config: EvalConfig (fixed_steps, noise_levels, etc.)
     └── tasks: Dict[str, TaskResult]
         └── {task_name}: TaskResult
             ├── task_name: str
-            ├── coefficients: Dict[str, float]
-            ├── coefficient_specs: List[CoefficientSpec]
+            ├── coefficients: Dict[str, float]       (ground-truth values)
             ├── ic_type: str
             ├── n_samples: int
-            ├── loss_worse_steps: List[int]
-            ├── coeff_worse_steps: Dict[str, List[int]]
-            │
-            └── combos: List[ComboResult]
-                └── ComboResult
-                    ├── k: int
-                    ├── noise: float
-                    ├── error: Optional[str]
-                    ├── maml: MethodResult
-                    │   ├── fine_tune: FineTuneResult
-                    │   │   ├── train_losses: List[float]
-                    │   │   └── holdout_losses: List[float]
-                    │   └── coefficient_recovery: SnapshotSummary
-                    │       ├── error_pct: List[float]
-                    │       └── coefficients: Dict[str, CoefficientSnapshot]
-                    │           └── {name}: CoefficientSnapshot
-                    │               ├── true_value: float
-                    │               ├── recovered: List[float]
-                    │               ├── error_pct: List[float]
-                    │               ├── mean: List[float]
-                    │               └── std: List[float]
-                    ├── baseline: MethodResult (same shape)
-                    └── worse: WorseFlags
-                        ├── loss_steps: List[int]
-                        └── coeff_steps: Dict[str, List[int]]
-            │
+            ├── worse: WorseFlags                     (union across combos)
+            ├── combos: List[ComboResult]
+            │   └── ComboResult
+            │       ├── k: int
+            │       ├── noise: float
+            │       ├── maml: MethodResult            (θ* fine-tuned)
+            │       │   ├── fine_tune: FineTuneResult
+            │       │   │   ├── per_mixer_train_losses: Dict[mixer_name, ndarray]
+            │       │   │   └── per_mixer_holdout_losses: Dict[mixer_name, ndarray]
+            │       │   ├── coefficient_recovery: SnapshotSummary
+            │       │   │   ├── coefficients: Dict[coeff_name, CoefficientSnapshot]
+            │       │   │   │   └── CoefficientSnapshot
+            │       │   │   │       ├── true_value: float
+            │       │   │   │       └── per_step: List[PerStepRecovery]  (one per fixed_step)
+            │       │   │   │           └── PerStepRecovery
+            │       │   │   │               ├── recoveries: Dict[path_key, RecoveryPath]
+            │       │   │   │               │   └── RecoveryPath(mean, std)
+            │       │   │   │               ├── cross_path_mean: float
+            │       │   │   │               ├── cross_path_std: float
+            │       │   │   │               ├── abs_error: float
+            │       │   │   │               └── pct_error: float
+            │       │   │   └── avg_error_pct_per_step: List[float]  (per-step aggregate)
+            │       │   ├── per_path_raw_values: Dict[path_key, ndarray]  (NPZ only)
+            │       │   └── pred_errors: ndarray              (NPZ only)
+            │       ├── baseline: MethodResult         (θ₀ fine-tuned, same shape)
+            │       └── worse: WorseFlags
             └── best_combo: BestComboData
-                ├── combo_key: str
-                ├── predictions: ndarray (n_steps, holdout, n_outputs)
-                ├── true_targets: ndarray (holdout, n_outputs)
-                ├── x_pts: ndarray (holdout,)
-                ├── y_pts: ndarray (holdout,)
-                ├── steps: ndarray (n_steps,)
-                └── coeff_error: ndarray (n_steps,)
+
+Path keys are formed as `{mixer_name}.{formula_tag}` — e.g. `"u.jvp_lap_u"`
+for mixer_u's D_u extraction via the laplacian JVP formula, or
+`"v.neg1_minus_jvp_u"` for mixer_v's k2 extraction. This encoding lets
+the visualizer parse each key to color by mixer or marker-by-formula.
+
+For single-path coefficients (BR's D_u, lives only in mixer_u) the
+`recoveries` dict has one entry and `cross_path_std = 0.0`. For multi-path
+coefficients (BR's k2, λ-ω's c) multiple entries sit side-by-side and
+`cross_path_std` measures inter-mixer agreement.
 """
 
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
-
-from src.training.task_loader import CoefficientSpec
 
 
 # ── Leaf structures ──────────────────────────────────────────────────────
@@ -78,39 +71,110 @@ from src.training.task_loader import CoefficientSpec
 
 @dataclass
 class FineTuneResult:
-    """Per-step train and holdout losses from fine-tuning."""
-    train_losses: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
-    holdout_losses: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
+    """Per-mixer train and holdout loss trajectories from inner solving.
+
+    Each mixer has its own L-BFGS inner solve with its own trajectory, so the
+    loss curves are stored per-mixer (keyed by mixer name: "u", "v", "ω").
+    For `n_outputs=1` PDEs (NLHeat, Heat, NS-vorticity) the dicts have a single
+    entry. For 2-output PDEs (BR, FHN, λ-ω) they have two entries.
+    """
+    per_mixer_train_losses: Dict[str, np.ndarray] = field(default_factory=dict)
+    per_mixer_holdout_losses: Dict[str, np.ndarray] = field(default_factory=dict)
+
+
+@dataclass
+class RecoveryPath:
+    """One recovery path's estimate from the holdout batch.
+
+    `mean` is the mean across collocation points of the per-point extracted
+    value (e.g. mean of `jvp_wrt_uxxuyy` across the holdout for BR's D_u).
+    `std` is the dispersion across those same points — the "within-path"
+    consistency. A small std means the mixer is near-linear on that feature
+    and the extraction is clean; a large std means the per-point estimates
+    vary a lot across the holdout.
+    """
+    mean: float = 0.0
+    std: float = 0.0
+
+
+@dataclass
+class PerStepRecovery:
+    """All recovery paths for one coefficient at one fixed_step, with reconciliation.
+
+    `recoveries` is keyed by path name like "u.jvp_lap_u" or "v.neg1_minus_jvp_u".
+    Keys encode the mixer name + the extraction formula tag so the visualizer
+    can parse them to color by mixer or marker-by-formula.
+
+    Cross-path statistics are unweighted over `recoveries[*].mean`:
+    - `cross_path_mean`: unweighted mean of per-path means. For a single-path
+       coefficient, this is just that one path's mean.
+    - `cross_path_std`: std of the per-path means. Zero when there's one path;
+       for multi-path coefficients (BR's k2, λ-ω's c) it measures inter-mixer
+       agreement — small std means the mixers reconcile cleanly, large std
+       means they've absorbed the coefficient into different structures.
+
+    `abs_error` is `|cross_path_mean - CoefficientSnapshot.true_value|` —
+    the final reconciled recovery error for this coefficient at this step.
+
+    `pct_error` is the same quantity normalized by |true_value|: `100 * abs_error
+    / |true_value|`. Makes errors comparable across coefficients of different
+    magnitudes (a 0.18 abs error on D_u=2.58 is ~7%, same abs error on k1=4.5
+    is ~4%). Set to 0.0 when `true_value == 0` to avoid division by zero.
+    """
+    recoveries: Dict[str, RecoveryPath] = field(default_factory=dict)
+    cross_path_mean: float = 0.0
+    cross_path_std: float = 0.0
+    abs_error: float = 0.0
+    pct_error: float = 0.0
 
 
 @dataclass
 class CoefficientSnapshot:
-    """Per-coefficient recovery summary across fixed steps."""
+    """Per-coefficient recovery summary across fixed_steps.
+
+    `per_step[i]` corresponds to `EvalConfig.fixed_steps[i]`. For the typical
+    `fixed_steps: [0, 16]`, index 0 is the pre-adapt snapshot, index 1 is
+    the post-adapt snapshot. Adaptation lift for this coefficient is
+    `per_step[0].abs_error - per_step[-1].abs_error`.
+    """
     true_value: float = 0.0
-    recovered: List[float] = field(default_factory=list)
-    error_pct: List[float] = field(default_factory=list)
-    mean: List[float] = field(default_factory=list)
-    std: List[float] = field(default_factory=list)
+    per_step: List[PerStepRecovery] = field(default_factory=list)
 
 
 @dataclass
 class SnapshotSummary:
     """Coefficient recovery for one method (MAML or baseline) at one combo."""
     coefficients: Dict[str, CoefficientSnapshot] = field(default_factory=dict)
-    error_pct: List[float] = field(default_factory=list)  # mean across all coeffs per step
+    # Per-step aggregate: at each fixed_step, the mean of pct_error across all
+    # coefficients in `coefficients`. One "headline number per step" for this
+    # method at this combo, used for top-level convergence curves that don't
+    # want to pick an individual coefficient.
+    avg_error_pct_per_step: List[float] = field(default_factory=list)
 
 
 @dataclass
 class MethodResult:
-    """Fine-tuning + coefficient recovery for one method."""
+    """Fine-tuning + coefficient recovery for one adapted model.
+
+    One instance per (ComboResult.maml, ComboResult.baseline) — the two sit
+    side-by-side in ComboResult carrying the θ* and θ₀ branches of the
+    comparison.
+
+    JSON-serialized: `fine_tune` loss trajectories, `coefficient_recovery`
+    with per-step per-path reconciliation.
+
+    NPZ-only: `per_path_raw_values` holds the raw per-point extracted values
+    for each recovery path at each fixed_step — too big for JSON, useful for
+    diagnostic scatter plots. `pred_errors` holds the prediction residuals
+    for the prediction-scatter visualization.
+    """
     fine_tune: FineTuneResult = field(default_factory=FineTuneResult)
     coefficient_recovery: SnapshotSummary = field(default_factory=SnapshotSummary)
-    # Raw arrays for NPZ (not serialized to JSON)
-    jacobian_estimates: Dict[str, np.ndarray] = field(default_factory=dict)  # coeff_name → (n_steps, holdout)
-    jacobian_true: Dict[str, np.ndarray] = field(default_factory=dict)      # coeff_name → (1,)
-    jacobian_regression: Dict[str, Dict] = field(default_factory=dict)      # coeff_name → {value, r2, raw_jvp, regressor}
-    pred_errors: np.ndarray = field(default_factory=lambda: np.array([]))    # (n_steps, holdout, n_outputs)
-    weights: np.ndarray = field(default_factory=lambda: np.array([]))        # (n_steps, n_params) if log_weights
+    # NPZ-only fields — not in JSON
+    per_path_raw_values: Dict[str, np.ndarray] = field(default_factory=dict)
+    # key: "{mixer_name}.{formula_tag}" → shape (n_fixed_steps, holdout)
+    pred_errors: np.ndarray = field(default_factory=lambda: np.array([]))
+    # shape (n_fixed_steps, holdout, n_outputs)
 
 
 @dataclass
@@ -160,7 +224,6 @@ class TaskResult:
     """Full evaluation result for one test task."""
     task_name: str = ""
     coefficients: Dict[str, float] = field(default_factory=dict)
-    coefficient_specs: List[CoefficientSpec] = field(default_factory=list)
     ic_type: str = ""
     n_samples: int = 0
     worse: WorseFlags = field(default_factory=WorseFlags)  # union across all combos
@@ -180,83 +243,72 @@ class TaskResult:
     ) -> "TaskResult":
         """Reconstruct TaskResult from results.json task entry + NPZ arrays.
 
-        Inverse of to_json_dict() + to_npz_dict(). Used by visualize.py
-        to load evaluation results into typed structures.
+        Inverse of `to_json_dict` + `to_npz_dict`. Used by visualize.py to
+        load evaluation results into typed dataclass instances. Scalars come
+        from the JSON task_dict; per-mixer loss arrays and per-path raw
+        values come from raw_npz.
         """
-        raw_specs = task_dict.get("coefficient_specs", [])
-        specs = [CoefficientSpec(**s) for s in raw_specs]
-        coeff_names = [s.name for s in specs]
-
-        # Discover combo keys from NPZ prefixes AND JSON keys
-        combo_keys: set[str] = set()
-        for key in raw_npz:
-            prefix = key.rsplit("/")[0]
-            if prefix != "best_combo":
-                combo_keys.add(prefix)
-        # Also from JSON coefficient_recovery_ keys (for when NPZ is absent)
-        for key in task_dict:
-            if key.startswith("coefficient_recovery_"):
-                combo_keys.add(key[len("coefficient_recovery_"):])
-
         combos: List[ComboResult] = []
-        for ck in sorted(combo_keys):
-            # Parse k and noise from combo_key: "k_800_noise_0.00"
-            parts = ck.split("_")
-            k = int(parts[1])
-            noise = float(parts[3])
+        for combo_dict in task_dict.get("combos", []):
+            k = int(combo_dict.get("k", 0))
+            noise = float(combo_dict.get("noise", 0.0))
+            ck = f"k_{k}_noise_{noise:.2f}"
 
             methods: Dict[str, MethodResult] = {}
             for label in ("maml", "baseline"):
-                train_arr = raw_npz.get(f"{ck}/{label}_train_losses")
-                holdout_arr = raw_npz.get(f"{ck}/{label}_holdout_losses")
+                method_dict = combo_dict.get(label, {})
 
-                ft = FineTuneResult(
-                    train_losses=train_arr if train_arr is not None else np.array([]),
-                    holdout_losses=holdout_arr if holdout_arr is not None else np.array([]),
+                # Per-mixer fine-tune losses — prefer NPZ, fall back to JSON list
+                per_mixer_train: Dict[str, np.ndarray] = {}
+                per_mixer_holdout: Dict[str, np.ndarray] = {}
+                ft_prefix = f"{ck}/{label}/fine_tune/"
+                for key, arr in raw_npz.items():
+                    if not key.startswith(ft_prefix):
+                        continue
+                    rest = key[len(ft_prefix):].split("/")
+                    if len(rest) != 2:
+                        continue
+                    mname, subfield = rest
+                    if subfield == "train_losses":
+                        per_mixer_train[mname] = arr
+                    elif subfield == "holdout_losses":
+                        per_mixer_holdout[mname] = arr
+
+                if not per_mixer_train or not per_mixer_holdout:
+                    ft_json = method_dict.get("fine_tune", {})
+                    for mname, lst in ft_json.get("per_mixer_train_losses", {}).items():
+                        per_mixer_train.setdefault(mname, np.asarray(lst))
+                    for mname, lst in ft_json.get("per_mixer_holdout_losses", {}).items():
+                        per_mixer_holdout.setdefault(mname, np.asarray(lst))
+
+                fine_tune = FineTuneResult(
+                    per_mixer_train_losses=per_mixer_train,
+                    per_mixer_holdout_losses=per_mixer_holdout,
                 )
-
-                # Jacobian arrays
-                jac_estimates: Dict[str, np.ndarray] = {}
-                jac_true: Dict[str, np.ndarray] = {}
-                for name in coeff_names:
-                    est = raw_npz.get(f"{ck}/{label}/{name}")
-                    if est is not None:
-                        jac_estimates[name] = est
-                    true_val = raw_npz.get(f"{ck}/{label}/{name}_true")
-                    if true_val is not None:
-                        jac_true[name] = true_val
-
-                # Load regression data if present
-                jac_regression: Dict[str, Dict] = {}
-                for name in coeff_names:
-                    reg_val = raw_npz.get(f"{ck}/{label}/{name}_regression_value")
-                    if reg_val is not None:
-                        jac_regression[name] = {
-                            "value": reg_val,           # (n_steps,)
-                            "r2": raw_npz[f"{ck}/{label}/{name}_regression_r2"],  # (n_steps,)
-                            "raw_jvp": raw_npz[f"{ck}/{label}/{name}_regression_raw_jvp"],  # (n_steps, holdout)
-                            "regressor": raw_npz[f"{ck}/{label}/{name}_regression_regressor"],  # (n_steps, holdout)
-                        }
-
-                pred_err = raw_npz.get(f"{ck}/{label}/pred_errors")
-                weights = raw_npz.get(f"{ck}/{label}/weights")
 
                 # Coefficient recovery from JSON
-                recovery_dict = task_dict.get(f"coefficient_recovery_{ck}", {})
-                label_recovery = recovery_dict.get(label, {})
-                summary = _flat_to_summary(label_recovery, coeff_names)
+                summary = _summary_from_json(method_dict.get("coefficient_recovery", {}))
 
-                methods[label] = MethodResult(
-                    fine_tune=ft,
-                    coefficient_recovery=summary,
-                    jacobian_estimates=jac_estimates,
-                    jacobian_true=jac_true,
-                    jacobian_regression=jac_regression,
-                    pred_errors=pred_err if pred_err is not None else np.array([]),
-                    weights=weights if weights is not None else np.array([]),
+                # Per-path raw values from NPZ
+                per_path_raw_values: Dict[str, np.ndarray] = {}
+                raw_prefix = f"{ck}/{label}/raw_values/"
+                for key, arr in raw_npz.items():
+                    if key.startswith(raw_prefix):
+                        path_key = key[len(raw_prefix):]
+                        per_path_raw_values[path_key] = arr
+
+                pred_errors = raw_npz.get(
+                    f"{ck}/{label}/pred_errors", np.array([])
                 )
 
-            worse_dict = task_dict.get(f"worse_{ck}", {})
+                methods[label] = MethodResult(
+                    fine_tune=fine_tune,
+                    coefficient_recovery=summary,
+                    per_path_raw_values=per_path_raw_values,
+                    pred_errors=pred_errors,
+                )
+
+            worse_dict = combo_dict.get("worse", {})
             worse = WorseFlags(
                 loss_steps=worse_dict.get("loss_steps", []),
                 coeff_steps=worse_dict.get("coeff_steps", {}),
@@ -269,9 +321,10 @@ class TaskResult:
                 worse=worse,
             ))
 
+        task_worse_dict = task_dict.get("worse", {})
         task_worse = WorseFlags(
-            loss_steps=task_dict.get("loss_worse_steps", []),
-            coeff_steps=task_dict.get("coeff_worse_steps", {}),
+            loss_steps=task_worse_dict.get("loss_steps", []),
+            coeff_steps=task_worse_dict.get("coeff_steps", {}),
         )
 
         bc = BestComboData()
@@ -290,7 +343,6 @@ class TaskResult:
         return cls(
             task_name=task_dict.get("task_name", ""),
             coefficients=task_dict.get("coefficients", {}),
-            coefficient_specs=specs,
             ic_type=task_dict.get("ic_type", ""),
             n_samples=task_dict.get("n_samples", 0),
             worse=task_worse,
@@ -299,61 +351,49 @@ class TaskResult:
         )
 
     def to_json_dict(self) -> Dict[str, Any]:
-        """Serialize to results.json format."""
-        d: Dict[str, Any] = {
+        """Serialize to results.json format (new nested schema)."""
+        return {
             "task_name": self.task_name,
             "coefficients": self.coefficients,
-            "coefficient_specs": [asdict(s) for s in self.coefficient_specs],
             "ic_type": self.ic_type,
             "n_samples": self.n_samples,
-            "loss_worse_steps": self.worse.loss_steps,
-            "coeff_worse_steps": self.worse.coeff_steps,
+            "worse": {
+                "loss_steps": self.worse.loss_steps,
+                "coeff_steps": self.worse.coeff_steps,
+            },
+            "combos": [_combo_to_json(c) for c in self.combos],
         }
 
-        for combo in self.combos:
-            ck = combo.combo_key
-
-            d[f"coefficient_recovery_{ck}"] = {
-                "fixed_steps": None,  # filled by caller from EvalConfig
-                "maml": _summary_to_flat(combo.maml.coefficient_recovery),
-                "baseline": _summary_to_flat(combo.baseline.coefficient_recovery),
-            }
-
-            d[f"worse_{ck}"] = {
-                "loss_steps": combo.worse.loss_steps,
-                "coeff_steps": combo.worse.coeff_steps,
-            }
-
-        return d
-
     def to_npz_dict(self) -> Dict[str, Any]:
-        """Serialize to flat NPZ key→array dict."""
+        """Serialize to flat NPZ key→array dict.
+
+        Key layout:
+            {combo_key}/{label}/fine_tune/{mixer}/train_losses
+            {combo_key}/{label}/fine_tune/{mixer}/holdout_losses
+            {combo_key}/{label}/raw_values/{path_key}      # (n_fixed_steps, holdout)
+            {combo_key}/{label}/pred_errors                 # (n_fixed_steps, holdout, n_outputs)
+            best_combo/*
+        """
         npz: Dict[str, Any] = {}
 
         for combo in self.combos:
             ck = combo.combo_key
-
             for label, method in [("maml", combo.maml), ("baseline", combo.baseline)]:
-                npz[f"{ck}/{label}_train_losses"] = method.fine_tune.train_losses
-                npz[f"{ck}/{label}_holdout_losses"] = method.fine_tune.holdout_losses
+                # Per-mixer fine-tune trajectories
+                for mname, arr in method.fine_tune.per_mixer_train_losses.items():
+                    npz[f"{ck}/{label}/fine_tune/{mname}/train_losses"] = arr
+                for mname, arr in method.fine_tune.per_mixer_holdout_losses.items():
+                    npz[f"{ck}/{label}/fine_tune/{mname}/holdout_losses"] = arr
 
-                for coeff_name, arr in method.jacobian_estimates.items():
-                    npz[f"{ck}/{label}/{coeff_name}"] = arr
-                for coeff_name, arr in method.jacobian_true.items():
-                    npz[f"{ck}/{label}/{coeff_name}_true"] = arr
+                # Per-path raw values
+                for path_key, arr in method.per_path_raw_values.items():
+                    npz[f"{ck}/{label}/raw_values/{path_key}"] = arr
 
-                for coeff_name, reg in method.jacobian_regression.items():
-                    npz[f"{ck}/{label}/{coeff_name}_regression_value"] = np.array(reg["value"])
-                    npz[f"{ck}/{label}/{coeff_name}_regression_r2"] = np.array(reg["r2"])
-                    npz[f"{ck}/{label}/{coeff_name}_regression_raw_jvp"] = np.stack(reg["raw_jvp"])
-                    npz[f"{ck}/{label}/{coeff_name}_regression_regressor"] = np.stack(reg["regressor"])
-
+                # Prediction residuals
                 if method.pred_errors.size > 0:
                     npz[f"{ck}/{label}/pred_errors"] = method.pred_errors
-                if method.weights.size > 0:
-                    npz[f"{ck}/{label}/weights"] = method.weights
 
-        # Best combo prediction data
+        # Best combo prediction data (unchanged from old schema)
         if self.best_combo.combo_key:
             bc = self.best_combo
             npz["best_combo/key"] = np.array(bc.combo_key)
@@ -437,21 +477,20 @@ class EvaluationResults:
         )
 
     def to_json_dict(self) -> Dict[str, Any]:
-        """Serialize to results.json format."""
-        tasks_dict: Dict[str, Any] = {}
-        for task_name, task_result in self.tasks.items():
-            td = task_result.to_json_dict()
-            # Fill in fixed_steps from config into each combo's coefficient_recovery
-            for key in list(td.keys()):
-                if key.startswith("coefficient_recovery_") and isinstance(td[key], dict):
-                    td[key]["fixed_steps"] = self.config.fixed_steps
-            tasks_dict[task_name] = td
+        """Serialize to results.json format.
 
+        `fixed_steps` lives at the top level under `config`, not duplicated
+        into each combo — the per-combo `per_step` lists in each
+        CoefficientSnapshot are ordered by `config.fixed_steps` so readers
+        can line them up positionally.
+        """
         return {
             "experiment_name": self.experiment_name,
             "timestamp": self.timestamp,
             "config": asdict(self.config),
-            "tasks": tasks_dict,
+            "tasks": {
+                name: tr.to_json_dict() for name, tr in self.tasks.items()
+            },
         }
 
 
@@ -460,84 +499,176 @@ class EvaluationResults:
 
 def build_method_result(
     fine_tune_result: FineTuneResult,
-    jac_snapshots: list,
-    pred_snapshots: list,
-    weight_snapshots: list | None = None,
+    true_coefficients: Dict[str, float],
+    per_step_extractions: List[Dict[str, Dict[str, RecoveryPath]]],
+    per_path_raw_values: Dict[str, np.ndarray],
+    pred_snapshots: Optional[np.ndarray] = None,
 ) -> MethodResult:
-    """Build MethodResult from raw fine-tune output and Jacobian snapshots."""
-    # Coefficient recovery summary
+    """Build a MethodResult from per-mixer fine-tune output + per-step extractions.
+
+    Args:
+        fine_tune_result: per-mixer train/holdout loss trajectories
+        true_coefficients: ground-truth values from the task, e.g.
+            {"D_u": 2.58, "k1": 4.5, "k2": 11.63, "D_v": 13.22}
+        per_step_extractions: list of length len(fixed_steps). Entry `i` is a
+            dict {coeff_name: {path_key: RecoveryPath}} — the extracted
+            recoveries from all mixers for the i-th fixed_step. The caller
+            builds this by merging task.extract_coefficients(...) outputs
+            across mixers, keying each path by "{mixer_name}.{formula_tag}".
+        per_path_raw_values: NPZ-only. {path_key: (n_fixed_steps, holdout)}.
+        pred_snapshots: NPZ-only. (n_fixed_steps, holdout, n_outputs).
+
+    Cross-path reconciliation (cross_path_mean, cross_path_std, abs_error,
+    pct_error) is computed here from the per-path means in each
+    PerStepRecovery, then SnapshotSummary.avg_error_pct_per_step is
+    aggregated as the mean of per-coefficient pct_error across all
+    coefficients at each step.
+    """
+    # Collect all coefficient names that appeared at any step
+    all_coeff_names: set[str] = set()
+    for step_data in per_step_extractions:
+        all_coeff_names.update(step_data.keys())
+
     coefficients: Dict[str, CoefficientSnapshot] = {}
-    for name in jac_snapshots[0].estimates:
+    for name in sorted(all_coeff_names):
+        true_val = float(true_coefficients.get(name, 0.0))
+        per_step_list: List[PerStepRecovery] = []
+        for step_data in per_step_extractions:
+            paths = step_data.get(name, {})
+            path_means = [p.mean for p in paths.values()]
+            if path_means:
+                cross_mean = float(np.mean(path_means))
+                cross_std = float(np.std(path_means)) if len(path_means) > 1 else 0.0
+                abs_err = abs(cross_mean - true_val)
+                pct_err = (100.0 * abs_err / abs(true_val)) if true_val != 0.0 else 0.0
+            else:
+                cross_mean = 0.0
+                cross_std = 0.0
+                abs_err = 0.0
+                pct_err = 0.0
+            per_step_list.append(PerStepRecovery(
+                recoveries=dict(paths),
+                cross_path_mean=cross_mean,
+                cross_path_std=cross_std,
+                abs_error=abs_err,
+                pct_error=pct_err,
+            ))
         coefficients[name] = CoefficientSnapshot(
-            true_value=jac_snapshots[0].true_values[name],
-            recovered=[jac.recovered(name) for jac in jac_snapshots],
-            error_pct=[jac.coeff_error_pct(name) for jac in jac_snapshots],
-            mean=[float(np.mean(jac.estimates[name])) for jac in jac_snapshots],
-            std=[float(np.std(jac.estimates[name])) for jac in jac_snapshots],
+            true_value=true_val,
+            per_step=per_step_list,
         )
+
+    # Aggregate pct_error per step: mean across all coefficients at that step
+    n_steps = len(per_step_extractions)
+    avg_error_pct: List[float] = []
+    for i in range(n_steps):
+        errs = [
+            snap.per_step[i].pct_error
+            for snap in coefficients.values()
+            if i < len(snap.per_step)
+        ]
+        avg_error_pct.append(float(np.mean(errs)) if errs else 0.0)
 
     summary = SnapshotSummary(
         coefficients=coefficients,
-        error_pct=[
-            float(np.mean([jac.coeff_error_pct(n) for n in jac.true_values]))
-            for jac in jac_snapshots
-        ],
+        avg_error_pct_per_step=avg_error_pct,
     )
-
-    # Raw arrays for NPZ
-    jac_estimates: Dict[str, np.ndarray] = {}
-    jac_true: Dict[str, np.ndarray] = {}
-    for name in jac_snapshots[0].estimates:
-        jac_estimates[name] = np.stack([jac.estimates[name] for jac in jac_snapshots])
-        jac_true[name] = np.array([jac_snapshots[0].true_values[name]])
-
-    # Regression data per step
-    jac_regression: Dict[str, Dict] = {}
-    for name in jac_snapshots[0].regressions:
-        jac_regression[name] = {
-            "value": [jac.regressions[name].value for jac in jac_snapshots],
-            "r2": [jac.regressions[name].r_squared for jac in jac_snapshots],
-            "raw_jvp": [jac.regressions[name].raw_jvp for jac in jac_snapshots],
-            "regressor": [jac.regressions[name].regressor for jac in jac_snapshots],
-        }
 
     return MethodResult(
         fine_tune=fine_tune_result,
         coefficient_recovery=summary,
-        jacobian_estimates=jac_estimates,
-        jacobian_true=jac_true,
-        jacobian_regression=jac_regression,
-        pred_errors=np.stack(pred_snapshots) if pred_snapshots else np.array([]),
-        weights=np.stack(weight_snapshots) if weight_snapshots else np.array([]),
+        per_path_raw_values=per_path_raw_values,
+        pred_errors=pred_snapshots if pred_snapshots is not None else np.array([]),
     )
 
 
-def _flat_to_summary(flat: Dict[str, Any], coeff_names: List[str]) -> SnapshotSummary:
-    """Convert flat {name}_true, {name}_recovered, ... dict to SnapshotSummary."""
+def _combo_to_json(combo: ComboResult) -> Dict[str, Any]:
+    """Serialize one ComboResult to a JSON-friendly nested dict.
+
+    Output shape: `{k, noise, maml: MethodResult_json, baseline: MethodResult_json, worse}`
+    where each `MethodResult_json` carries its `fine_tune` loss lists and
+    its nested `coefficient_recovery` (see `_summary_to_json`).
+    """
+    return {
+        "k": combo.k,
+        "noise": combo.noise,
+        "maml": _method_to_json(combo.maml),
+        "baseline": _method_to_json(combo.baseline),
+        "worse": {
+            "loss_steps": combo.worse.loss_steps,
+            "coeff_steps": combo.worse.coeff_steps,
+        },
+    }
+
+
+def _method_to_json(method: MethodResult) -> Dict[str, Any]:
+    """Serialize one MethodResult (JSON-only fields — NPZ fields are excluded).
+
+    `per_path_raw_values` and `pred_errors` are NPZ-only and NOT emitted here.
+    """
+    return {
+        "fine_tune": {
+            "per_mixer_train_losses": {
+                mname: arr.tolist() if hasattr(arr, "tolist") else list(arr)
+                for mname, arr in method.fine_tune.per_mixer_train_losses.items()
+            },
+            "per_mixer_holdout_losses": {
+                mname: arr.tolist() if hasattr(arr, "tolist") else list(arr)
+                for mname, arr in method.fine_tune.per_mixer_holdout_losses.items()
+            },
+        },
+        "coefficient_recovery": _summary_to_json(method.coefficient_recovery),
+    }
+
+
+def _summary_to_json(summary: SnapshotSummary) -> Dict[str, Any]:
+    """Serialize a SnapshotSummary to a JSON-friendly nested dict."""
+    coeffs: Dict[str, Any] = {}
+    for name, snap in summary.coefficients.items():
+        coeffs[name] = {
+            "true_value": snap.true_value,
+            "per_step": [
+                {
+                    "recoveries": {
+                        path: {"mean": rp.mean, "std": rp.std}
+                        for path, rp in ps.recoveries.items()
+                    },
+                    "cross_path_mean": ps.cross_path_mean,
+                    "cross_path_std": ps.cross_path_std,
+                    "abs_error": ps.abs_error,
+                    "pct_error": ps.pct_error,
+                }
+                for ps in snap.per_step
+            ],
+        }
+    return {
+        "coefficients": coeffs,
+        "avg_error_pct_per_step": summary.avg_error_pct_per_step,
+    }
+
+
+def _summary_from_json(d: Dict[str, Any]) -> SnapshotSummary:
+    """Inverse of `_summary_to_json`."""
     coefficients: Dict[str, CoefficientSnapshot] = {}
-    for name in coeff_names:
-        if f"{name}_true" in flat:
-            coefficients[name] = CoefficientSnapshot(
-                true_value=flat[f"{name}_true"],
-                recovered=flat.get(f"{name}_recovered", []),
-                error_pct=flat.get(f"{name}_error_pct", []),
-                mean=flat.get(f"{name}_mean", []),
-                std=flat.get(f"{name}_std", []),
-            )
+    for name, snap_dict in d.get("coefficients", {}).items():
+        per_step: List[PerStepRecovery] = []
+        for ps_dict in snap_dict.get("per_step", []):
+            recoveries = {
+                path: RecoveryPath(mean=rp["mean"], std=rp["std"])
+                for path, rp in ps_dict.get("recoveries", {}).items()
+            }
+            per_step.append(PerStepRecovery(
+                recoveries=recoveries,
+                cross_path_mean=ps_dict.get("cross_path_mean", 0.0),
+                cross_path_std=ps_dict.get("cross_path_std", 0.0),
+                abs_error=ps_dict.get("abs_error", 0.0),
+                pct_error=ps_dict.get("pct_error", 0.0),
+            ))
+        coefficients[name] = CoefficientSnapshot(
+            true_value=snap_dict.get("true_value", 0.0),
+            per_step=per_step,
+        )
     return SnapshotSummary(
         coefficients=coefficients,
-        error_pct=flat.get("error_pct", []),
+        avg_error_pct_per_step=d.get("avg_error_pct_per_step", []),
     )
-
-
-def _summary_to_flat(summary: SnapshotSummary) -> Dict[str, Any]:
-    """Convert SnapshotSummary to flat {name}_true, {name}_recovered, ... format."""
-    d: Dict[str, Any] = {}
-    for name, snap in summary.coefficients.items():
-        d[f"{name}_true"] = snap.true_value
-        d[f"{name}_recovered"] = snap.recovered
-        d[f"{name}_error_pct"] = snap.error_pct
-        d[f"{name}_mean"] = snap.mean
-        d[f"{name}_std"] = snap.std
-    d["error_pct"] = summary.error_pct
-    return d
