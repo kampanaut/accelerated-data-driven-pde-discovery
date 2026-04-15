@@ -1080,6 +1080,16 @@ class FitzHughNagumoTask(PDETask):
         return {"D_u": self.D_u, "D_v": self.D_v}
 
     @property
+    def true_coefficients(self) -> dict[str, float]:
+        return {
+            "D_u": float(self.D_u),
+            "D_v": float(self.D_v),
+            "eps": float(self.eps),
+            "eps_a": float(self.eps * self.a),
+            "eps_b": float(self.eps * self.b),
+        }
+
+    @property
     def rhs_feature_mask(self) -> list[bool]:
         # FHN RHS: D_u*∇²u + u - u³ - v, D_v*∇²v + eps*(u - a*v - b)
         # Uses: u, v, u_xx, u_yy, v_xx, v_yy. NOT: u_x, u_y, v_x, v_y
@@ -1485,6 +1495,15 @@ class LambdaOmegaTask(PDETask):
             ),
         ]
 
+    @property
+    def true_coefficients(self) -> dict[str, float]:
+        return {
+            "D_u": float(self.D_u),
+            "D_v": float(self.D_v),
+            "a":   float(self.a),
+            "c":   float(self.c),
+        }
+
     # ── Mixer method implementations ─────────────────────────────────
 
     @property
@@ -1875,6 +1894,14 @@ class NavierStokesTask(PDETask):
         return 1
 
     @property
+    def mixer_names(self) -> list[str]:
+        return ["ω"]
+
+    @property
+    def true_coefficients(self) -> dict[str, float]:
+        return {"nu": float(self.nu)}
+
+    @property
     def structural_feature_names(self) -> list[list[str]]:
         return [["u·ω_x+v·ω_y", "ω_xx+ω_yy"]]
 
@@ -2085,6 +2112,10 @@ class HeatEquationTask(PDETask):
     @property
     def diffusion_coeffs(self) -> dict:
         return {"D": self.D}
+
+    @property
+    def true_coefficients(self) -> dict[str, float]:
+        return {"D": float(self.D)}
 
     # ── Mixer method implementations ─────────────────────────────────
 
@@ -2322,6 +2353,10 @@ class NLHeatEquationTask(PDETask):
     @property
     def diffusion_coeffs(self) -> dict:
         return {"K": self.K}
+
+    @property
+    def true_coefficients(self) -> dict[str, float]:
+        return {"K": float(self.K)}
 
     @property
     def rhs_feature_mask(self) -> list[bool]:
