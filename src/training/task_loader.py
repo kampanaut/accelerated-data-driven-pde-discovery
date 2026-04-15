@@ -288,6 +288,40 @@ class PDETask(ABC):
         pass
 
     @property
+    def mixer_names(self) -> list[str]:
+        """Human-readable name for each mixer, matching `n_outputs` in length.
+
+        Used by `scripts/evaluate.py` to prefix recovery path keys with a
+        stable identifier for each mixer. Default: `["u"]` for n_outputs=1,
+        `["u", "v"]` for n_outputs=2. Override if the mixer represents a
+        different field (e.g. NS-vorticity uses `["ω"]`).
+        """
+        if self.n_outputs == 1:
+            return ["u"]
+        if self.n_outputs == 2:
+            return ["u", "v"]
+        raise ValueError(
+            f"Default mixer_names only defined for n_outputs in {{1, 2}}, "
+            f"got n_outputs={self.n_outputs}. Override `mixer_names` on "
+            f"this task subclass."
+        )
+
+    @property
+    def true_coefficients(self) -> dict[str, float]:
+        """Ground-truth values for task-varying coefficients.
+
+        Returns a dict `{coeff_name: value}` where keys match the outer
+        keys produced by `extract_coefficients`. Used by the evaluation
+        pipeline to compute recovery errors. Subclasses must override
+        with their own mapping — the default raises `NotImplementedError`.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__}.true_coefficients not implemented. "
+            f"Override to return a dict of {{coeff_name: value}} matching "
+            f"the task-varying coefficients reported by extract_coefficients."
+        )
+
+    @property
     @abstractmethod
     def structural_feature_names(self) -> list[list[str]]:
         """Human-readable names for the structural features, per mixer.
@@ -723,6 +757,15 @@ class BrusselatorTask(PDETask):
     @property
     def n_outputs(self) -> int:
         return 2
+
+    @property
+    def true_coefficients(self) -> dict[str, float]:
+        return {
+            "D_u": float(self.D_u),
+            "D_v": float(self.D_v),
+            "k1":  float(self.k1),
+            "k2":  float(self.k2),
+        }
 
     @property
     def structural_feature_names(self) -> list[list[str]]:
