@@ -1044,6 +1044,7 @@ class iMAMLTrainer:
             torch.zeros(
                 sum(p.numel() for p in self._opt_params_list[i]),
                 device=self.device,
+                dtype=self._opt_params_list[i][0].dtype,
             )
             for i in range(n_outputs)
         ]
@@ -1688,7 +1689,7 @@ class iMAMLTrainer:
         # either crash in load_state_dict or silently skip parameters.
         ckpt_cfg = checkpoint.get("config")
         if ckpt_cfg is not None:
-            ckpt_aux = ckpt_cfg.training.aux_losses_enabled
+            ckpt_aux = ckpt_cfg.aux_losses_enabled
             if ckpt_aux != self.aux_losses_enabled:
                 raise RuntimeError(
                     f"aux_losses_enabled mismatch: checkpoint was trained "

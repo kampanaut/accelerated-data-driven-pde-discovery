@@ -214,6 +214,7 @@ def main():
         for p in model.parameters():
             if p.dim() >= 2:
                 nn.init.xavier_uniform_(p)
+    model = model.double()
     print("Weight init: xavier_uniform (Raissi 2018)")
 
     print(model)
