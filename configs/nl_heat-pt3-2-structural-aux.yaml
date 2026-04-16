@@ -11,7 +11,7 @@ data:
   meta_test_dir: data/datasets/nl_heat_test-1
 training:
   inner_lr: 0.01
-  outer_lr: 0.01
+  outer_lr: 0.0035
   adam_betas:
   - 0.9
   - 0.999
@@ -49,7 +49,7 @@ training:
   plateau_threshold: 0.001
   plateau_window: 20
   loss_function: normalized_mse
-  max_grad_norm: 0.0
+  max_grad_norm: 10.0
   aux_losses_enabled: true
   imaml:
     enabled: true
