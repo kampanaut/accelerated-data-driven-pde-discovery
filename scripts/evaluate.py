@@ -43,6 +43,7 @@ from src.training.task_loader import (
 )
 from src.training.maml import LSLRSchedule
 from src.training.imaml import kendall_total_loss
+from src.training.spectral_loss import compute_spectral_loss
 from src.evaluation.metrics import compress_step_ranges
 from src.evaluation.eval_types import MixerFineTuneOutput, assemble_method_result
 from src.evaluation.results import (
@@ -411,7 +412,7 @@ def evaluate_task(
         torch.Tensor,
     ]] = None,
     aux_losses_enabled: bool = False,
-    proximal_lam: float = 0.0,
+    proximal_lam_list: Optional[List[float]] = None,
     inner_optimizer: str = "lbfgs",
     anil_mode: str = "head",
     max_grad_norm: float = 0.0,
@@ -453,6 +454,7 @@ def evaluate_task(
     mixer_names = task.mixer_names
     n_outputs = task.n_outputs
     anil_mode_effective = anil_mode  # fine_tune receives the inner-params slice directly
+    lam_per_mixer = proximal_lam_list or ([0.0] * n_outputs)
 
     true_coefficients = task.true_coefficients
 
@@ -532,7 +534,7 @@ def evaluate_task(
                         inner_steps=max_steps,
                         inner_lr=fine_tune_lr,
                         inner_optimizer=inner_optimizer,
-                        lam=proximal_lam,
+                        lam=lam_per_mixer[mixer_idx],
                         theta_snapshot=maml_theta_snapshots[mixer_idx],
                         fixed_steps=fixed_steps,
                         max_grad_norm=max_grad_norm,
@@ -719,7 +721,7 @@ def evaluate_task(
                 inner_steps=max_steps,
                 inner_lr=fine_tune_lr,
                 inner_optimizer=inner_optimizer,
-                lam=proximal_lam,
+                lam=lam_per_mixer[mixer_idx],
                 theta_snapshot=bc_theta_snapshots[mixer_idx],
                 fixed_steps=fixed_steps,
                 max_grad_norm=max_grad_norm,
@@ -923,34 +925,31 @@ def main():
     # its old shape.
     lslr_module: Optional[LSLRSchedule] = None
 
-    # iMAML: set up proximal term strength and inner optimizer for evaluation
-    proximal_lam = 0.0
+    # iMAML: set up per-mixer proximal term strength and inner optimizer.
+    n_outputs = sizing_task.n_outputs
+    proximal_lam_list: List[float] = [0.0] * n_outputs
     eval_inner_optimizer = "sgd"
 
     if cfg.training.imaml.enabled:
         im = cfg.training.imaml
-        proximal_lam = im.lam
 
-        # Load meta-learned lambda if it was saved by the trainer.
+        # Load per-mixer meta-learned lambda from the checkpoint (M4b
+        # stores self.lam as List[Tensor], one per mixer). Falls back to
+        # the config scalar replicated across mixers.
         lam_checkpoint = torch.load(theta_star_path, map_location=device, weights_only=False)
         saved_lam = lam_checkpoint.get("lam")
         if saved_lam is not None:
-            # M4b stores self.lam as List[Tensor] (per-mixer). Use the
-            # first mixer's lam as the scalar default for the proximal
-            # term at eval — per-mixer eval lam isn't plumbed yet, so
-            # everyone uses the same lam, which matches how the smoke
-            # configs train anyway (lam_lr=0, so both lam[0] and lam[1]
-            # stay at their init value and are identical).
             if isinstance(saved_lam, list):
-                proximal_lam = float(saved_lam[0].item())
+                proximal_lam_list = [float(t.item()) for t in saved_lam]
             else:
-                proximal_lam = float(saved_lam.item())
-            print(f"  Using meta-learned λ={proximal_lam:.4f}")
+                proximal_lam_list = [float(saved_lam.item())] * n_outputs
+            print(f"  Meta-learned λ per mixer: {proximal_lam_list}")
         else:
-            print(f"  Using config λ={proximal_lam}")
+            proximal_lam_list = [float(im.lam)] * n_outputs
+            print(f"  Config λ (replicated): {proximal_lam_list}")
 
         eval_inner_optimizer = im.inner_optimizer
-        print(f"  iMAML eval: proximal_lam={proximal_lam}, inner_optimizer={eval_inner_optimizer}")
+        print(f"  iMAML eval: inner_optimizer={eval_inner_optimizer}")
 
     print()
 
@@ -971,13 +970,7 @@ def main():
     # Build the cost_function used by fine_tune's inner loop. Matches the
     # trainer's `_reset_for_epoch` binding for training-eval consistency —
     # evaluation's closure should see the same objective the training-time
-    # closure saw. Spectral loss is not yet supported at eval.
-    if spectral_mode_size > 0:
-        raise NotImplementedError(
-            "Spectral loss is not yet supported in the mixer-method evaluation "
-            "pipeline. Set training.spectral_loss.enabled=false for now."
-        )
-
+    # closure saw.
     if loss_type == "mse":
         def _pointwise_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
             return F.mse_loss(pred, target)
@@ -995,12 +988,25 @@ def main():
             f"Unknown loss_function: {loss_type}. Use 'mse', 'normalized_mse', 'sse', or 'mae'."
         )
 
+    # Spectral loss: domain dims captured from sizing_task (PDE-constant
+    # across all tasks in the distribution). When spectral_mode_size > 0
+    # and coords are available, the spectral term adds to the pointwise.
+    _spec_Lx = sizing_task.Lx
+    _spec_Ly = sizing_task.Ly
+
     def cost_function(
         pred: torch.Tensor,
         target: torch.Tensor,
         coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> torch.Tensor:
-        return _pointwise_loss(pred, target)
+        pw = _pointwise_loss(pred, target)
+        if coords is not None and spectral_mode_size > 0:
+            spec = compute_spectral_loss(
+                pred, target, coords[0], coords[1],
+                _spec_Lx, _spec_Ly, spectral_mode_size,
+            )
+            return pw + spec
+        return pw
 
     total_combos = len(test_loader) * len(k_values) * len(noise_levels)
     print("-" * 60)
@@ -1069,7 +1075,7 @@ def main():
             fixed_steps=fixed_steps,
             cost_function=cost_function,
             aux_losses_enabled=cfg.training.aux_losses_enabled,
-            proximal_lam=proximal_lam,
+            proximal_lam_list=proximal_lam_list,
             inner_optimizer=eval_inner_optimizer,
             anil_mode=eval_anil_mode,
             slope_recovery_inner=(
