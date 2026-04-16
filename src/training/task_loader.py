@@ -585,8 +585,8 @@ class PDETask(ABC):
         tgts = tgts[unsort]
 
         # Unsort coordinates the same way as features/targets
-        x_pts = x_pts[unsort].float()
-        y_pts = y_pts[unsort].float()
+        x_pts = x_pts[unsort].double()
+        y_pts = y_pts[unsort].double()
 
         support_feats = [f[:K_shot] for f in feats_list]
         query_feats = [f[K_shot:] for f in feats_list]
@@ -702,7 +702,7 @@ class BrusselatorTask(PDETask):
         v_t = self.D_v * lap_v + self.k2 * u - u_sq_v
         targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
-        return [mixer_u_features.float(), mixer_v_features.float()], targets.float()
+        return [mixer_u_features.double(), mixer_v_features.double()], targets.double()
 
     def inject_noise(
         self,
@@ -1047,7 +1047,7 @@ class FitzHughNagumoTask(PDETask):
         v_t = self.D_v * lap_v + self.eps * (u - self.a * v - self.b)
         targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
-        return [mixer_u_features.float(), mixer_v_features.float()], targets.float()
+        return [mixer_u_features.double(), mixer_v_features.double()], targets.double()
 
     def inject_noise(
         self,
@@ -1445,7 +1445,7 @@ class LambdaOmegaTask(PDETask):
         )
         targets = torch.stack([u_t, v_t], dim=2)  # (n_unique, n_pts, 2)
 
-        return [mixer_u_features.float(), mixer_v_features.float()], targets.float()
+        return [mixer_u_features.double(), mixer_v_features.double()], targets.double()
 
     def inject_noise(
         self,
@@ -1825,7 +1825,7 @@ class NavierStokesTask(PDETask):
         omega_t = -advection + self.nu * lap_omega
         targets = torch.stack([omega_t], dim=2)  # (n_unique, n_pts, 1)
 
-        return [mixer_0_features.float()], targets.float()
+        return [mixer_0_features.double()], targets.double()
 
     def inject_noise(
         self,
@@ -2089,7 +2089,7 @@ class HeatEquationTask(PDETask):
         u_t = self.D * (u_xx + u_yy)
         targets = torch.stack([u_t], dim=2)  # (n_unique, n_pts, 1)
 
-        return [mixer_0_features.float()], targets.float()
+        return [mixer_0_features.double()], targets.double()
 
     def inject_noise(
         self,
@@ -2325,7 +2325,7 @@ class NLHeatEquationTask(PDETask):
         u_t = self.K * one_minus_u * lap_u
         targets = torch.stack([u_t], dim=2)  # (n_unique, n_pts, 1)
 
-        return [mixer_0_features.float()], targets.float()
+        return [mixer_0_features.double()], targets.double()
 
     def inject_noise(
         self,

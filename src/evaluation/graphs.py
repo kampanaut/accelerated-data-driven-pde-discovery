@@ -660,12 +660,26 @@ def _draw_histogram_panel(
     for i, (est, label) in enumerate(zip(estimates, estimate_labels)):
         fill, edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
         mean, std = float(np.mean(est)), float(np.std(est))
-        if std < 1e-6:
-            # Constant estimates (e.g. linear model) — KDE undefined, draw vertical line
-            ax.axvline(mean, color=fill, linestyle="-", linewidth=2.5, alpha=0.8,
-                       label=f"{label}: μ={mean:.4f}, σ={std:.4f}")
+
+        # Try KDE; fall back to a vertical line for any data shape that
+        # collapses the covariance (constant values, near-constant values,
+        # or a linear-subspace artifact). Catching LinAlgError handles all
+        # of these uniformly — the std threshold alone misses oracle-style
+        # data where float32 noise lifts std slightly above 1e-6 but the
+        # values still lie in a degenerate subspace.
+        kde = None
+        if std >= 1e-6:
+            try:
+                kde = stats.gaussian_kde(est)
+            except np.linalg.LinAlgError:
+                kde = None
+
+        if kde is None:
+            ax.axvline(
+                mean, color=fill, linestyle="-", linewidth=2.5, alpha=0.8,
+                label=f"{label}: μ={mean:.4f}, σ={std:.4f}",
+            )
         else:
-            kde = stats.gaussian_kde(est)
             density = kde(x_grid)
             ax.fill_between(
                 x_grid, density, alpha=0.4, color=fill,
@@ -1404,13 +1418,19 @@ def _number_line_panel(
     true_value: float,
     force_ylim: Optional[Tuple[float, float]] = None,
 ) -> None:
-    """Render N vertical number lines for a degenerate-truth coefficient.
+    """Render one vertical number line per model — literal 1D axes, not 2D scatter.
 
-    All test tasks share the same true coefficient value, so a 2D scatter
-    collapses to a vertical column. Instead, give each model entry its own
-    vertical number line side-by-side: x = categorical model column,
-    y = recovered value. A horizontal red dashed line at y=true_value cuts
-    across all columns.
+    For a degenerate-truth coefficient (all test tasks share the same true
+    value), a 2D scatter has no useful x-axis. Instead, each model entry
+    becomes a literal vertical number line: a bold vertical segment with
+    the markers pinned directly on it. The left y-axis carries the shared
+    tick labels; the panel frame (top/right/bottom spines) is hidden so
+    the visual reads as 1D lines rather than a bounded rectangle.
+
+    A red dashed horizontal truth line cuts across every model's number
+    line at y=true_value. When all 27 tasks recover the same value, their
+    markers stack at one point on the line — that stacking IS the
+    verification.
 
     Color and marker conventions match `_scatter_panel`: IC type → border
     color, model entry → marker shape via `MODEL_MARKERS`.
@@ -1423,13 +1443,14 @@ def _number_line_panel(
         ic: IC_PALETTE[j % len(IC_PALETTE)] for j, ic in enumerate(sorted(all_ic_types))
     }
 
-    all_rec: list[float] = []
-    rng = np.random.RandomState(0)  # deterministic jitter seed per panel
-    n_models = len(model_data)
+    # Strip the 2D-plane frame — only the left spine (the shared y-axis /
+    # number-line value scale) stays visible.
+    for spine_name in ("top", "right", "bottom"):
+        ax.spines[spine_name].set_visible(False)
+    ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
 
-    # Per-model vertical guide lines (the "number lines" themselves).
-    for i in range(n_models):
-        ax.axvline(i, color="gray", alpha=0.2, linewidth=0.5, zorder=0)
+    all_rec: list[float] = []
+    n_models = len(model_data)
 
     for i, (_true_vals, recovered_vals, task_names, label) in enumerate(model_data):
         if len(recovered_vals) == 0:
@@ -1442,9 +1463,15 @@ def _number_line_panel(
         marker_style = MODEL_MARKERS[i % len(MODEL_MARKERS)]
         marker_size = 120
 
-        # Markers cluster in column i with horizontal jitter for visibility.
-        x_jitter = rng.uniform(-0.2, 0.2, size=len(recovered_vals))
-        x_pos = i + x_jitter
+        # The number line itself: a bold black vertical segment at x=i.
+        # Drawn AFTER axis tweaks so zorder=1 sits below the markers.
+        ax.axvline(i, color="black", linewidth=1.8, alpha=0.9, zorder=1)
+
+        # Markers pinned to the line at exact column center. Every task
+        # lives at x=i; vertical position encodes its recovered value.
+        # When tasks have identical recoveries (perfect oracle), all 27
+        # markers stack at one point — that stacking IS the verification.
+        x_pos = np.full(len(recovered_vals), float(i))
 
         for ic, color in ic_color_map.items():
             mask = np.array([t == ic for t in ic_types])
@@ -1459,9 +1486,10 @@ def _number_line_panel(
                 s=marker_size,
                 alpha=0.85,
                 linewidths=1.5 if not is_baseline else 0.8,
+                zorder=3,
             )
 
-        # Per-task label inside each marker
+        # Per-task label centered on the marker
         for j, tname in enumerate(task_names):
             short = tname.split("_fourier")[0].split("heat_")[-1]
             parts = short.split("_")
@@ -1470,9 +1498,10 @@ def _number_line_panel(
                 x_pos[j], recovered_vals[j], short_label,
                 fontsize=4, alpha=0.7,
                 ha="center", va="center",
+                zorder=4,
             )
 
-        # Per-model legend entry with μ/σ of recovered values for this column.
+        # Per-model legend entry with μ/σ of recovered values for this line.
         mean_rec = float(np.mean(recovered_vals))
         std_rec = float(np.std(recovered_vals))
         color_list = MODEL_COLORS_LIGHT if is_baseline else MODEL_COLORS_DARK
@@ -1501,19 +1530,26 @@ def _number_line_panel(
         margin = max((span_hi - span_lo) * 0.1, 1e-6)
         ax.set_ylim(span_lo - margin, span_hi + margin)
 
-    # x-axis: one column per model, ticks labeled with short model names.
-    ax.set_xlim(-0.6, n_models - 0.4)
-    short_names: list[str] = []
-    for _t, _r, _n, lbl in model_data:
-        s = lbl if len(lbl) <= 25 else "…" + lbl[-24:]
-        short_names.append(s)
-    ax.set_xticks(list(range(n_models)))
-    ax.set_xticklabels(short_names, rotation=45, ha="right", fontsize=6)
+    # Tight x-limits: just enough padding for the lines to breathe, not a
+    # full 2D plane. Pad is 0.35 model-widths on each side.
+    ax.set_xlim(-0.35, n_models - 0.65)
 
-    # Truth line: horizontal across all model columns.
+    # Model names as rotated text labels UNDER each number line (x-tick
+    # replacement — we disabled the x-axis but still want to identify lines).
+    y_lo, _y_hi = ax.get_ylim()
+    for i, (_t, _r, _n, lbl) in enumerate(model_data):
+        short = lbl if len(lbl) <= 25 else "…" + lbl[-24:]
+        ax.text(
+            i, y_lo, short,
+            rotation=45, ha="right", va="top", fontsize=6,
+            transform=ax.transData, clip_on=False,
+        )
+
+    # Truth line: horizontal across all number lines.
     ax.axhline(
         true_value, color="red", linestyle="--", linewidth=2,
-        alpha=0.8, label=f"True {coeff_name} = {true_value:.4f}",
+        alpha=0.8, zorder=2,
+        label=f"True {coeff_name} = {true_value:.4f}",
     )
 
 
