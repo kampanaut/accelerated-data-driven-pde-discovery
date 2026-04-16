@@ -921,6 +921,128 @@ def plot_jacobian_regression_scatter(
     return fig
 
 
+def plot_coefficient_extraction_scatter(
+    maml_values: list[NDArray[np.floating[Any]]],
+    maml_regressors: list[NDArray[np.floating[Any]]],
+    baseline_values: list[NDArray[np.floating[Any]]],
+    baseline_regressors: list[NDArray[np.floating[Any]]],
+    path_labels: list[str],
+    coeff_true: float,
+    title: str,
+    coeff_name: str = "",
+    regressor_names: list[str] | None = None,
+    save_path: Optional[Path] = None,
+    figsize: Tuple[int, int] = (14, 6),
+    dpi: int = 150,
+    ratio_mode: bool = False,
+) -> pltf.Figure:
+    """Generalized coefficient extraction scatter: JVP/residual vs feature column.
+
+    Replaces both histogram and regression-scatter views with one unified
+    plot. Each panel (MAML left, baseline right) shows per-point scatter of
+    extracted values (y) against the corresponding feature column (x), with
+    a regression line (slope = recovered coefficient) and a truth line.
+
+    For direct-JVP coefficients (BR D_u): y ≈ constant, scatter is a
+    horizontal cloud, slope ≈ 0, intercept = coefficient.
+    For regression coefficients (NLHeat K): y ≈ K·x, scatter follows a
+    line through the origin, slope = K.
+    For residual coefficients (BR k1): y ≈ constant (k1), scatter is
+    a horizontal cloud independent of x — showing the residual doesn't
+    correlate with the feature.
+
+    Args:
+        maml_values: per-path JVP/residual arrays, each (holdout,)
+        maml_regressors: per-path feature column arrays, each (holdout,)
+        baseline_values: same for baseline
+        baseline_regressors: same for baseline
+        path_labels: per-path label strings (one per entry in the lists)
+        coeff_true: ground-truth coefficient value
+        title: plot title
+        coeff_name: coefficient name for axis labels
+        save_path: path to save figure
+        figsize: figure size
+        dpi: resolution
+        ratio_mode: if True, values are already normalized by true
+    """
+    symbol = {"nu": "ν", "D_u": "D_u", "D_v": "D_v", "K": "K"}.get(coeff_name, coeff_name)
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    if ratio_mode:
+        fig.suptitle(title, fontsize=12)
+    else:
+        fig.suptitle(f"{title}\nTrue {symbol} = {coeff_true:.6f}", fontsize=12)
+
+    for ax, values_list, regressors_list, panel_title in [
+        (axes[0], maml_values, maml_regressors, "MAML (θ*)"),
+        (axes[1], baseline_values, baseline_regressors, "Baseline (θ₀)"),
+    ]:
+        if not values_list:
+            ax.set_title(f"{panel_title}\nNo data")
+            continue
+
+        for i, (vals, regs, label) in enumerate(
+            zip(values_list, regressors_list, path_labels)
+        ):
+            fill, _edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
+
+            # Subsample for rendering if too many points
+            n = len(vals)
+            if n > 5000:
+                idx = np.random.RandomState(42 + i).choice(n, 5000, replace=False)
+                x_plot, y_plot = regs[idx], vals[idx]
+            else:
+                x_plot, y_plot = regs, vals
+
+            ax.scatter(
+                x_plot, y_plot, s=1, alpha=0.3, color=fill, rasterized=True,
+            )
+
+            # Regression line through (regressor, values)
+            mean_val = float(np.mean(vals))
+            std_val = float(np.std(vals))
+            if len(regs) >= 2 and float(np.std(regs)) > 1e-12:
+                slope, intercept = np.polyfit(regs, vals, 1)
+                ss_res = float(np.sum((vals - (slope * regs + intercept)) ** 2))
+                ss_tot = float(np.sum((vals - np.mean(vals)) ** 2))
+                r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else float("nan")
+                x_line = np.linspace(float(regs.min()), float(regs.max()), 100)
+                ax.plot(
+                    x_line, slope * x_line + intercept,
+                    color=fill, linewidth=2, alpha=0.8,
+                    label=f"{label}: μ={mean_val:.4f}, slope={slope:.4f}, R²={r2:.4f}",
+                )
+            else:
+                ax.axhline(
+                    mean_val, color=fill, linewidth=2, alpha=0.8,
+                    label=f"{label}: μ={mean_val:.4f}, σ={std_val:.4f}",
+                )
+
+        truth_label = (
+            "Perfect recovery (1.0)" if ratio_mode
+            else f"True {symbol} = {coeff_true:.4f}"
+        )
+        ax.axhline(
+            coeff_true, color="red", linewidth=2, linestyle="--",
+            alpha=0.6, label=truth_label,
+        )
+
+        x_label = next((n for n in (regressor_names or []) if n), "Feature column value")
+        ax.set_xlabel(x_label, fontsize=9)
+        ax.set_ylabel(f"{symbol} extracted value", fontsize=9)
+        ax.set_title(panel_title)
+        ax.legend(fontsize=7)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+
+    return fig
+
+
 def plot_coefficient_heatmap(
     k_values: NDArray[np.integer[Any]],
     noise_levels: NDArray[np.floating[Any]],
@@ -1287,8 +1409,6 @@ def _scatter_panel(
     model_data: ModelScatterData,
     coeff_name: str,
     train_coeff_values: Optional[list[float]] = None,
-    force_xlim: Optional[Tuple[float, float]] = None,
-    force_ylim: Optional[Tuple[float, float]] = None,
 ) -> None:
     """Render one scatter panel with overlaid models, regression lines, Pearson r."""
     # Build IC color map dynamically from all task names in this panel
@@ -1365,48 +1485,23 @@ def _scatter_panel(
 
     if not all_true:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        # Still apply forced limits so empty MAML/BL panels in a row
-        # share the same axes as their populated sibling.
-        if force_xlim is not None:
-            ax.set_xlim(force_xlim)
-        if force_ylim is not None:
-            ax.set_ylim(force_ylim)
         return
 
-    # Axis limits: forced (for joint MAML/BL row sharing) or auto-zoomed
-    # to data range only — no forced y=0 baseline, no forced inclusion
-    # of distribution lines that sit outside the cluster.
-    if force_xlim is not None:
-        xlim = force_xlim
-    else:
-        x_lo, x_hi = float(min(all_true)), float(max(all_true))
-        x_margin = max((x_hi - x_lo) * 0.1, 1e-6)
-        xlim = (x_lo - x_margin, x_hi + x_margin)
-    if force_ylim is not None:
-        ylim = force_ylim
-    else:
-        y_lo, y_hi = float(min(all_rec)), float(max(all_rec))
-        y_margin = max((y_hi - y_lo) * 0.1, 1e-6)
-        ylim = (y_lo - y_margin, y_hi + y_margin)
-    ax.set_xlim(xlim)
-    ax.set_ylim(ylim)
-
-    # Training distribution: only draw lines that fall inside the visible y range.
+    # Training distribution: horizontal lines at each training task's true coefficient.
     if train_coeff_values is not None:
         for d in train_coeff_values:
-            if ylim[0] <= d <= ylim[1]:
-                ax.axhline(d, color="orange", alpha=0.15, linewidth=0.8, zorder=0)
+            ax.axhline(d, color="orange", alpha=0.15, linewidth=0.8, zorder=0)
 
-    # Test distribution: only draw lines that fall inside the visible y range.
+    # Test distribution: horizontal lines at each test task's true coefficient.
     for d in set(all_true):
-        if ylim[0] <= d <= ylim[1]:
-            ax.axhline(d, color="cyan", alpha=0.15, linewidth=0.8, zorder=0)
+        ax.axhline(d, color="cyan", alpha=0.15, linewidth=0.8, zorder=0)
 
-    # y=x reference line, clipped to the intersection of x and y ranges.
-    diag_lo = max(xlim[0], ylim[0])
-    diag_hi = min(xlim[1], ylim[1])
-    if diag_lo < diag_hi:
-        ax.plot([diag_lo, diag_hi], [diag_lo, diag_hi], "k--", alpha=0.25, linewidth=1)
+    # y=x reference line spanning the data range.
+    all_vals = np.array(all_true + all_rec)
+    lo, hi = float(all_vals.min()), float(all_vals.max())
+    margin = (hi - lo) * 0.1
+    ref = [lo - margin, hi + margin]
+    ax.plot(ref, ref, "k--", alpha=0.25, linewidth=1)
 
     ax.set_xlabel(f"True {coeff_name}", fontsize=9)
 
@@ -1416,7 +1511,6 @@ def _number_line_panel(
     model_data: ModelScatterData,
     coeff_name: str,
     true_value: float,
-    force_ylim: Optional[Tuple[float, float]] = None,
 ) -> None:
     """Render one vertical number line per model — literal 1D axes, not 2D scatter.
 
@@ -1514,21 +1608,15 @@ def _number_line_panel(
 
     if not all_rec:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
-        if force_ylim is not None:
-            ax.set_ylim(force_ylim)
         ax.set_xlim(-0.6, max(n_models - 0.4, 0.4))
         return
 
-    # y-axis range: forced (for joint MAML/BL row sharing) or auto-spanned
-    # to recovered values + truth line.
-    if force_ylim is not None:
-        ax.set_ylim(force_ylim)
-    else:
-        rec_lo, rec_hi = float(min(all_rec)), float(max(all_rec))
-        span_lo = min(rec_lo, true_value)
-        span_hi = max(rec_hi, true_value)
-        margin = max((span_hi - span_lo) * 0.1, 1e-6)
-        ax.set_ylim(span_lo - margin, span_hi + margin)
+    # y-axis range: span recovered values + truth line.
+    rec_lo, rec_hi = float(min(all_rec)), float(max(all_rec))
+    span_lo = min(rec_lo, true_value)
+    span_hi = max(rec_hi, true_value)
+    margin = max((span_hi - span_lo) * 0.1, 1e-6)
+    ax.set_ylim(span_lo - margin, span_hi + margin)
 
     # Tight x-limits: just enough padding for the lines to breathe, not a
     # full 2D plane. Pad is 0.35 model-widths on each side.
@@ -1608,42 +1696,9 @@ def plot_coefficient_scatter_grid(
         bl_models = [m for m in models if "(BL)" in m[3]]
         return maml_models, bl_models
 
-    def _row_joint_limits(
-        coeff_name: str, noise: float
-    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
-        """Pool (true, recovered) across both methods × all k for this row.
-
-        Returns (xlim, ylim) for the scatter case. For the number-line case,
-        only ylim matters (xlim is categorical per panel).
-        """
-        true_pool: list[float] = []
-        rec_pool: list[float] = []
-        for k_val in k_values:
-            for true_vals, rec_vals, _names, _label in panel_data.get(
-                (coeff_name, noise, k_val), []
-            ):
-                if len(true_vals) > 0:
-                    true_pool.extend(true_vals.tolist())
-                    rec_pool.extend(rec_vals.tolist())
-        if not rec_pool:
-            return None, None
-        if degenerate_truth is not None:
-            # ylim spans recovered values + truth line.
-            span_lo = min(min(rec_pool), degenerate_truth)
-            span_hi = max(max(rec_pool), degenerate_truth)
-            margin = max((span_hi - span_lo) * 0.1, 1e-6)
-            return None, (span_lo - margin, span_hi + margin)
-        # Scatter: x on true_vals, y on rec_vals, both with margin.
-        x_lo, x_hi = float(min(true_pool)), float(max(true_pool))
-        y_lo, y_hi = float(min(rec_pool)), float(max(rec_pool))
-        x_margin = max((x_hi - x_lo) * 0.1, 1e-6)
-        y_margin = max((y_hi - y_lo) * 0.1, 1e-6)
-        return (x_lo - x_margin, x_hi + x_margin), (y_lo - y_margin, y_hi + y_margin)
-
     row_idx = 0
     for coeff_name in coeff_names:
         for noise in noise_levels:
-            row_xlim, row_ylim = _row_joint_limits(coeff_name, noise)
             for k_idx, k_val in enumerate(k_values):
                 maml_col = k_idx * 2
                 bl_col = k_idx * 2 + 1
@@ -1662,20 +1717,16 @@ def plot_coefficient_scatter_grid(
                 if degenerate_truth is not None:
                     _number_line_panel(
                         ax_maml, maml_models, coeff_name, degenerate_truth,
-                        force_ylim=row_ylim,
                     )
                     _number_line_panel(
                         ax_bl, bl_models, coeff_name, degenerate_truth,
-                        force_ylim=row_ylim,
                     )
                 else:
                     _scatter_panel(
                         ax_maml, maml_models, coeff_name, coeff_train_vals,
-                        force_xlim=row_xlim, force_ylim=row_ylim,
                     )
                     _scatter_panel(
                         ax_bl, bl_models, coeff_name, coeff_train_vals,
-                        force_xlim=row_xlim, force_ylim=row_ylim,
                     )
 
                 # Column headers on top row — pair under the same K value.

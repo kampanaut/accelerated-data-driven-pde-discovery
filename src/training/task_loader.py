@@ -75,10 +75,20 @@ class CoefficientExtraction:
     `values.mean()` and `values.std()`) but are stored explicitly for
     cheap scalar access at the JSON serialization path without re-running
     reductions.
+
+    - `regressor`: per-point tensor shape `(holdout,)` — the feature column
+      this coefficient's weight is measured against. For direct-JVP paths
+      (e.g. BR's D_u via jvp_wrt_lap_u), this is the library feature the
+      JVP is taken w.r.t. For regression paths (NLHeat K), this is the
+      regressor column (u_xx+u_yy). For residual paths (BR k1), this is
+      any feature column used to check independence of the constant offset.
+      Used by the visualization scatter plot: x = regressor, y = values.
     """
     mean: torch.Tensor
     std: torch.Tensor
     values: torch.Tensor
+    regressor: torch.Tensor
+    regressor_name: str = ""
 
 
 class PDETask(ABC):
@@ -828,17 +838,18 @@ class BrusselatorTask(PDETask):
             )
             residual = mixer_output - lin_combo
             return {
-                "D_u": {"jvp_lap_u":        CoefficientExtraction(mean=jvp_lap_u.mean(), std=jvp_lap_u.std(), values=jvp_lap_u.detach())},
-                "k2":  {"neg1_minus_jvp_u": CoefficientExtraction(mean=k2_vals.mean(),   std=k2_vals.std(),   values=k2_vals.detach())},
-                "k1":  {"residual":         CoefficientExtraction(mean=residual.mean(),  std=residual.std(),  values=residual.detach())},
+                "D_u": {"jvp_lap_u":        CoefficientExtraction(mean=jvp_lap_u.mean(), std=jvp_lap_u.std(), values=jvp_lap_u.detach(), regressor=feats_det[:, 2], regressor_name="u_xx+u_yy")},
+                "k2":  {"neg1_minus_jvp_u": CoefficientExtraction(mean=k2_vals.mean(),   std=k2_vals.std(),   values=k2_vals.detach(),   regressor=feats_det[:, 0], regressor_name="u")},
+                "k1":  {"residual":         CoefficientExtraction(mean=residual.mean(),  std=residual.std(),  values=residual.detach(),  regressor=feats_det[:, 0], regressor_name="u")},
             }
 
         # mixer_v (idx == 1)
+        feats_det = features.detach()
         jvp_u = grads[:, 0]          # ≈ k2
         jvp_lap_v = grads[:, 2]      # ≈ D_v
         return {
-            "D_v": {"jvp_lap_v": CoefficientExtraction(mean=jvp_lap_v.mean(), std=jvp_lap_v.std(), values=jvp_lap_v.detach())},
-            "k2":  {"jvp_u":     CoefficientExtraction(mean=jvp_u.mean(),     std=jvp_u.std(),     values=jvp_u.detach())},
+            "D_v": {"jvp_lap_v": CoefficientExtraction(mean=jvp_lap_v.mean(), std=jvp_lap_v.std(), values=jvp_lap_v.detach(), regressor=feats_det[:, 2], regressor_name="v_xx+v_yy")},
+            "k2":  {"jvp_u":     CoefficientExtraction(mean=jvp_u.mean(),     std=jvp_u.std(),     values=jvp_u.detach(),     regressor=feats_det[:, 0], regressor_name="u")},
         }
 
     def auxiliary_losses(
@@ -1160,12 +1171,15 @@ class FitzHughNagumoTask(PDETask):
         if mixer_idx == 0:
             jvp_lap_u = grads[:, 0]  # ≈ D_u (per-point)
             D_u_values = jvp_lap_u.detach()
+            feats_det = features.detach()
             return {
                 "D_u": {
                     "jvp_lap_u": CoefficientExtraction(
                         mean=D_u_values.mean(),
                         std=D_u_values.std(),
                         values=D_u_values,
+                        regressor=feats_det[:, 0],
+                        regressor_name="u_xx+u_yy",
                     )
                 },
             }
@@ -1196,6 +1210,8 @@ class FitzHughNagumoTask(PDETask):
                     mean=D_v_values.mean(),
                     std=D_v_values.std(),
                     values=D_v_values,
+                    regressor=feats_det[:, 0],
+                    regressor_name="v_xx+v_yy",
                 )
             },
             "eps": {
@@ -1203,6 +1219,8 @@ class FitzHughNagumoTask(PDETask):
                     mean=eps_values.mean(),
                     std=eps_values.std(),
                     values=eps_values,
+                    regressor=feats_det[:, 1],
+                    regressor_name="u",
                 )
             },
             "eps_a": {
@@ -1210,6 +1228,8 @@ class FitzHughNagumoTask(PDETask):
                     mean=eps_a_values.mean(),
                     std=eps_a_values.std(),
                     values=eps_a_values,
+                    regressor=feats_det[:, 2],
+                    regressor_name="v",
                 )
             },
             "eps_b": {
@@ -1217,6 +1237,8 @@ class FitzHughNagumoTask(PDETask):
                     mean=eps_b_values.mean(),
                     std=eps_b_values.std(),
                     values=eps_b_values,
+                    regressor=feats_det[:, 1],
+                    regressor_name="u",
                 )
             },
         }
@@ -1570,6 +1592,7 @@ class LambdaOmegaTask(PDETask):
             retain_graph=False,
         )[0].detach()  # (N, 6)
 
+        feats_det = features.detach()
         if mixer_idx == 0:
             # Library: [lap_u, u, u³, u·v², u²·v, v³]
             # Weights: (D_u, +a, -1, -1, -c, -c)
@@ -1585,6 +1608,8 @@ class LambdaOmegaTask(PDETask):
                         mean=jvp_lap_u.mean(),
                         std=jvp_lap_u.std(),
                         values=jvp_lap_u.detach(),
+                        regressor=feats_det[:, 0],
+                        regressor_name="u_xx+u_yy",
                     ),
                 },
                 "a": {
@@ -1592,6 +1617,8 @@ class LambdaOmegaTask(PDETask):
                         mean=jvp_u.mean(),
                         std=jvp_u.std(),
                         values=jvp_u.detach(),
+                        regressor=feats_det[:, 1],
+                        regressor_name="u",
                     ),
                 },
                 "c": {
@@ -1599,11 +1626,15 @@ class LambdaOmegaTask(PDETask):
                         mean=c_u2v_vals.mean(),
                         std=c_u2v_vals.std(),
                         values=c_u2v_vals.detach(),
+                        regressor=feats_det[:, 4],
+                        regressor_name="u²v",
                     ),
                     "from_v3": CoefficientExtraction(
                         mean=c_v3_vals.mean(),
                         std=c_v3_vals.std(),
                         values=c_v3_vals.detach(),
+                        regressor=feats_det[:, 5],
+                        regressor_name="v³",
                     ),
                 },
             }
@@ -1621,6 +1652,8 @@ class LambdaOmegaTask(PDETask):
                     mean=jvp_lap_v.mean(),
                     std=jvp_lap_v.std(),
                     values=jvp_lap_v.detach(),
+                    regressor=feats_det[:, 0],
+                    regressor_name="v_xx+v_yy",
                 ),
             },
             "a": {
@@ -1628,6 +1661,8 @@ class LambdaOmegaTask(PDETask):
                     mean=jvp_v.mean(),
                     std=jvp_v.std(),
                     values=jvp_v.detach(),
+                    regressor=feats_det[:, 1],
+                    regressor_name="v",
                 ),
             },
             "c": {
@@ -1635,11 +1670,15 @@ class LambdaOmegaTask(PDETask):
                     mean=jvp_u3.mean(),
                     std=jvp_u3.std(),
                     values=jvp_u3.detach(),
+                    regressor=feats_det[:, 2],
+                    regressor_name="u³",
                 ),
                 "from_uv2": CoefficientExtraction(
                     mean=jvp_uv2.mean(),
                     std=jvp_uv2.std(),
                     values=jvp_uv2.detach(),
+                    regressor=feats_det[:, 3],
+                    regressor_name="uv²",
                 ),
             },
         }
@@ -1938,6 +1977,7 @@ class NavierStokesTask(PDETask):
             create_graph=False,
             retain_graph=False,
         )[0]  # (N, 2)
+        feats_det = features.detach()
         jvp_lap_omega = grads[:, 1].detach()
         nu_mean = jvp_lap_omega.mean()
         nu_std = jvp_lap_omega.std()
@@ -1947,6 +1987,8 @@ class NavierStokesTask(PDETask):
                     mean=nu_mean,
                     std=nu_std,
                     values=jvp_lap_omega,
+                    regressor=feats_det[:, 1],
+                    regressor_name="ω_xx+ω_yy",
                 )
             }
         }
@@ -2161,6 +2203,7 @@ class HeatEquationTask(PDETask):
             create_graph=False,
             retain_graph=False,
         )[0]  # (N, 2)
+        feats_det = features.detach()
         jvp_uxx = grads[:, 0].detach()  # ≈ D per point
         jvp_uyy = grads[:, 1].detach()  # ≈ D per point
         return {
@@ -2169,11 +2212,15 @@ class HeatEquationTask(PDETask):
                     mean=jvp_uxx.mean(),
                     std=jvp_uxx.std(),
                     values=jvp_uxx.detach(),
+                    regressor=feats_det[:, 0],
+                    regressor_name="u_xx",
                 ),
                 "from_uyy": CoefficientExtraction(
                     mean=jvp_uyy.mean(),
                     std=jvp_uyy.std(),
                     values=jvp_uyy.detach(),
+                    regressor=feats_det[:, 1],
+                    regressor_name="u_yy",
                 ),
             },
         }
@@ -2456,6 +2503,8 @@ class NLHeatEquationTask(PDETask):
                     mean=K_slope.detach(),
                     std=K_std.detach(),
                     values=per_point_K.detach(),
+                    regressor=lap,
+                    regressor_name="u_xx+u_yy",
                 ),
             },
         }

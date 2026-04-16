@@ -168,8 +168,8 @@ from src.evaluation.graphs import (
     plot_loss_ratio_heatmap,
     plot_noise_robustness,
     plot_sample_efficiency,
-    # Graph 7-10: Jacobian analysis graphs
-    plot_jacobian_histogram,
+    # Graph 7-10: Coefficient recovery graphs
+    plot_coefficient_extraction_scatter,
     plot_coefficient_heatmap,
     plot_coefficient_vs_k,
     plot_coefficient_vs_noise,
@@ -373,10 +373,9 @@ def generate_per_task_figures(
         print(f"  Generating figures for {task_name}...")
 
         # ---------------------------------------------------------------------
-        # Graph 7: Jacobian histogram (one per coefficient per K × noise × step)
-        # Multi-path coefficients (BR's k2, λω's c) overlay one curve per path
-        # in the same panel, distinguished by label and the function's internal
-        # _ESTIMATE_COLORS palette. Per-path raw values come from the NPZ.
+        # Graph 7: Coefficient extraction scatter (one per coeff per K × noise × step)
+        # Scatter of extracted values (y) vs feature column (x) per recovery path.
+        # Replaces the old histogram view with a regression-line + truth-line plot.
         # ---------------------------------------------------------------------
         if sel.enabled("jacobian"):
             allowed_steps = set(sel.steps_for("jacobian", fixed_steps.tolist()))
@@ -390,24 +389,6 @@ def generate_per_task_figures(
                     combo = combo_lookup[combo_key]
                     combo_coeff_worse = combo.worse.coeff_steps
 
-                    # Map mixer name → output_index for slicing pred_errors.
-                    # Order matches MixerNetwork.forward() stack order, which
-                    # mirrors per_mixer_train_losses dict insertion order.
-                    mixer_idx_map = {
-                        mname: i for i, mname in enumerate(
-                            combo.maml.fine_tune.per_mixer_train_losses.keys()
-                        )
-                    }
-
-                    maml_pe = (
-                        combo.maml.pred_errors
-                        if combo.maml.pred_errors.size > 0 else None
-                    )
-                    baseline_pe = (
-                        combo.baseline.pred_errors
-                        if combo.baseline.pred_errors.size > 0 else None
-                    )
-
                     for coeff_name in coeff_names:
                         maml_snap = combo.maml.coefficient_recovery.coefficients[coeff_name]
                         baseline_snap = combo.baseline.coefficient_recovery.coefficients[coeff_name]
@@ -415,69 +396,57 @@ def generate_per_task_figures(
                             continue
                         true_val = float(maml_snap.true_value)
 
-                        # Path keys are the same across all steps within a snapshot.
                         path_keys = list(maml_snap.per_step[0].recoveries.keys())
 
                         for si in step_indices:
                             step_label = int(fixed_steps[si])
 
-                            # Per-path per-point arrays from NPZ at this step.
-                            maml_ests: list = []
-                            baseline_ests: list = []
+                            maml_vals: list = []
+                            maml_regs: list = []
+                            baseline_vals: list = []
+                            baseline_regs: list = []
                             kept_paths: list[str] = []
                             for path_key in path_keys:
-                                m_arr = combo.maml.per_path_raw_values.get(path_key)
-                                b_arr = combo.baseline.per_path_raw_values.get(path_key)
-                                if (
-                                    m_arr is None or b_arr is None
-                                    or si >= m_arr.shape[0] or si >= b_arr.shape[0]
-                                ):
+                                m_v = combo.maml.per_path_raw_values.get(path_key)
+                                m_r = combo.maml.per_path_regressor_values.get(path_key)
+                                b_v = combo.baseline.per_path_raw_values.get(path_key)
+                                b_r = combo.baseline.per_path_regressor_values.get(path_key)
+                                if any(
+                                    x is None for x in (m_v, m_r, b_v, b_r)
+                                ) or si >= m_v.shape[0]:  # type: ignore[union-attr]
                                     continue
-                                maml_ests.append(m_arr[si])
-                                baseline_ests.append(b_arr[si])
+                                maml_vals.append(m_v[si])  # type: ignore[index]
+                                maml_regs.append(m_r[si])  # type: ignore[index]
+                                baseline_vals.append(b_v[si])  # type: ignore[index]
+                                baseline_regs.append(b_r[si])  # type: ignore[index]
                                 kept_paths.append(path_key)
 
                             if not kept_paths:
                                 continue
-
-                            # Per-path pred-error overlay: each path's mixer
-                            # determines which output column to slice. Paths
-                            # whose mixer isn't in the map (shouldn't happen)
-                            # get None so the histogram skips them.
-                            maml_pe_list: list = []
-                            baseline_pe_list: list = []
-                            if maml_pe is not None and baseline_pe is not None:
-                                for path_key in kept_paths:
-                                    mname = path_key.split(".", 1)[0]
-                                    out_idx = mixer_idx_map.get(mname)
-                                    if (
-                                        out_idx is None
-                                        or si >= maml_pe.shape[0]
-                                        or out_idx >= maml_pe.shape[2]
-                                    ):
-                                        maml_pe_list.append(None)
-                                        baseline_pe_list.append(None)
-                                    else:
-                                        maml_pe_list.append(maml_pe[si, :, out_idx])
-                                        baseline_pe_list.append(baseline_pe[si, :, out_idx])
 
                             step_suffix = f"_step[{step_label}]"
                             coeff_worse = _coeff_worse_suffix_at_step(
                                 combo_coeff_worse, step_label
                             )
 
-                            fig = plot_jacobian_histogram(
-                                maml_estimates=maml_ests,
-                                baseline_estimates=baseline_ests,
-                                estimate_labels=kept_paths,
+                            regressor_names = []
+                            for path_key in kept_paths:
+                                rp = maml_snap.per_step[si].recoveries.get(path_key)
+                                regressor_names.append(rp.regressor_name if rp else "")
+
+                            fig = plot_coefficient_extraction_scatter(
+                                maml_values=maml_vals,
+                                maml_regressors=maml_regs,
+                                baseline_values=baseline_vals,
+                                baseline_regressors=baseline_regs,
+                                path_labels=kept_paths,
                                 coeff_true=true_val,
                                 title=f"{task_name}: {coeff_name} (K={k}, noise={noise:.0%}, step {step_label})",
                                 coeff_name=coeff_name,
+                                regressor_names=regressor_names,
                                 save_path=task_dir
                                 / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution{coeff_worse}.png",
                                 dpi=dpi,
-                                maml_pred_errors=maml_pe_list if maml_pe_list else None,
-                                baseline_pred_errors=baseline_pe_list if baseline_pe_list else None,
                             )
                             plt.close(fig)
 
@@ -844,7 +813,6 @@ def generate_aggregated_figures(
                 combo_key = f"k_{k}_noise_{noise:.2f}"
 
                 for coeff_name in coeff_names:
-                    # Discover path keys from the first task's first step.
                     first_tc = task_combo_lookups[task_names[0]][combo_key]
                     first_snap = first_tc.maml.coefficient_recovery.coefficients.get(coeff_name)
                     if first_snap is None or not first_snap.per_step:
@@ -854,11 +822,11 @@ def generate_aggregated_figures(
                     for si in step_indices:
                         step_label = int(fixed_steps[si])
 
-                        # Per-path pools across tasks. Each path's per-point
-                        # values are divided by that task's true coefficient
-                        # so all tasks share a unit-1 axis.
-                        maml_pool: dict[str, list[float]] = {p: [] for p in path_keys}
-                        baseline_pool: dict[str, list[float]] = {p: [] for p in path_keys}
+                        # Pool (values / true_val) and (regressors) across tasks.
+                        maml_val_pool: dict[str, list[float]] = {p: [] for p in path_keys}
+                        maml_reg_pool: dict[str, list[float]] = {p: [] for p in path_keys}
+                        baseline_val_pool: dict[str, list[float]] = {p: [] for p in path_keys}
+                        baseline_reg_pool: dict[str, list[float]] = {p: [] for p in path_keys}
 
                         for task_name in task_names:
                             tc = task_combo_lookups[task_name][combo_key]
@@ -868,31 +836,47 @@ def generate_aggregated_figures(
                             true_val = float(snap.true_value)
 
                             for path_key in path_keys:
-                                m_arr = tc.maml.per_path_raw_values.get(path_key)
-                                b_arr = tc.baseline.per_path_raw_values.get(path_key)
-                                if (
-                                    m_arr is None or b_arr is None
-                                    or si >= m_arr.shape[0] or si >= b_arr.shape[0]
-                                ):
+                                m_v = tc.maml.per_path_raw_values.get(path_key)
+                                m_r = tc.maml.per_path_regressor_values.get(path_key)
+                                b_v = tc.baseline.per_path_raw_values.get(path_key)
+                                b_r = tc.baseline.per_path_regressor_values.get(path_key)
+                                if any(x is None for x in (m_v, m_r, b_v, b_r)):
                                     continue
-                                maml_pool[path_key].extend((m_arr[si] / true_val).tolist())
-                                baseline_pool[path_key].extend((b_arr[si] / true_val).tolist())
+                                if si >= m_v.shape[0]:  # type: ignore[union-attr]
+                                    continue
+                                maml_val_pool[path_key].extend((m_v[si] / true_val).tolist())  # type: ignore[index]
+                                maml_reg_pool[path_key].extend(m_r[si].tolist())  # type: ignore[index]
+                                baseline_val_pool[path_key].extend((b_v[si] / true_val).tolist())  # type: ignore[index]
+                                baseline_reg_pool[path_key].extend(b_r[si].tolist())  # type: ignore[index]
 
                         kept_paths = [
                             p for p in path_keys
-                            if len(maml_pool[p]) > 0 and len(baseline_pool[p]) > 0
+                            if len(maml_val_pool[p]) > 0 and len(baseline_val_pool[p]) > 0
                         ]
                         if not kept_paths:
                             continue
 
                         step_suffix = f"_step[{step_label}]"
-                        fig = plot_jacobian_histogram(
-                            maml_estimates=[np.array(maml_pool[p]) for p in kept_paths],
-                            baseline_estimates=[np.array(baseline_pool[p]) for p in kept_paths],
-                            estimate_labels=kept_paths,
+                        agg_regressor_names = []
+                        first_tc_snap = task_combo_lookups[task_names[0]][combo_key]
+                        first_agg_snap = first_tc_snap.maml.coefficient_recovery.coefficients.get(coeff_name)
+                        for path_key in kept_paths:
+                            rp = (
+                                first_agg_snap.per_step[si].recoveries.get(path_key)
+                                if first_agg_snap and si < len(first_agg_snap.per_step)
+                                else None
+                            )
+                            agg_regressor_names.append(rp.regressor_name if rp else "")
+                        fig = plot_coefficient_extraction_scatter(
+                            maml_values=[np.array(maml_val_pool[p]) for p in kept_paths],
+                            maml_regressors=[np.array(maml_reg_pool[p]) for p in kept_paths],
+                            baseline_values=[np.array(baseline_val_pool[p]) for p in kept_paths],
+                            baseline_regressors=[np.array(baseline_reg_pool[p]) for p in kept_paths],
+                            path_labels=kept_paths,
                             coeff_true=1.0,
                             title=f"Aggregated {coeff_name} Recovery Ratio (K={k}, noise={noise:.0%}, step {step_label}, n={n_tasks} tasks)",
                             coeff_name=coeff_name,
+                            regressor_names=agg_regressor_names,
                             save_path=agg_dir
                             / f"coeff[{coeff_name}]_k[{k}]_noise[{noise:.2f}]{step_suffix}_distribution.png",
                             dpi=dpi,

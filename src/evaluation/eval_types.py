@@ -152,25 +152,28 @@ def assemble_method_result(
                     merged_for_step[coeff_name][path_key] = RecoveryPath(
                         mean=float(extraction.mean.item()),
                         std=float(extraction.std.item()),
+                        regressor_name=extraction.regressor_name,
                     )
         per_step_merged.append(merged_for_step)
 
-    # 3. Per-path raw values: (n_fixed_steps, holdout) per path_key
+    # 3. Per-path raw values + regressors: (n_fixed_steps, holdout) per path_key
     per_path_raw_values: Dict[str, np.ndarray] = {}
+    per_path_regressor_values: Dict[str, np.ndarray] = {}
     for mixer_output in mixer_outputs:
         mixer_name = mixer_output.mixer_name
-        # Discover all (coeff_name, formula_tag) pairs this mixer reports at step 0
-        # (all fixed_steps should produce the same structure — asserted above).
         first_step = sorted_fixed_steps[0]
         first_step_extractions = mixer_output.per_step_extractions[first_step]
         for coeff_name, formulas in first_step_extractions.items():
             for formula_tag in formulas.keys():
                 path_key = f"{mixer_name}.{formula_tag}"
-                arrs = []
+                val_arrs = []
+                reg_arrs = []
                 for step in sorted_fixed_steps:
                     ext = mixer_output.per_step_extractions[step][coeff_name][formula_tag]
-                    arrs.append(ext.values.detach().cpu().numpy())
-                per_path_raw_values[path_key] = np.stack(arrs, axis=0)
+                    val_arrs.append(ext.values.detach().cpu().numpy())
+                    reg_arrs.append(ext.regressor.detach().cpu().numpy())
+                per_path_raw_values[path_key] = np.stack(val_arrs, axis=0)
+                per_path_regressor_values[path_key] = np.stack(reg_arrs, axis=0)
 
     # 4. Prediction residuals: (n_fixed_steps, holdout, n_outputs)
     pred_errors_stacked: Optional[np.ndarray] = None
@@ -187,5 +190,6 @@ def assemble_method_result(
         true_coefficients=true_coefficients,
         per_step_extractions=per_step_merged,
         per_path_raw_values=per_path_raw_values,
+        per_path_regressor_values=per_path_regressor_values,
         pred_snapshots=pred_errors_stacked,
     )

@@ -95,6 +95,7 @@ class RecoveryPath:
     """
     mean: float = 0.0
     std: float = 0.0
+    regressor_name: str = ""
 
 
 @dataclass
@@ -172,7 +173,8 @@ class MethodResult:
     coefficient_recovery: SnapshotSummary = field(default_factory=SnapshotSummary)
     # NPZ-only fields — not in JSON
     per_path_raw_values: Dict[str, np.ndarray] = field(default_factory=dict)
-    # key: "{mixer_name}.{formula_tag}" → shape (n_fixed_steps, holdout)
+    per_path_regressor_values: Dict[str, np.ndarray] = field(default_factory=dict)
+    # both keyed "{mixer_name}.{formula_tag}" → shape (n_fixed_steps, holdout)
     pred_errors: np.ndarray = field(default_factory=lambda: np.array([]))
     # shape (n_fixed_steps, holdout, n_outputs)
 
@@ -289,13 +291,16 @@ class TaskResult:
                 # Coefficient recovery from JSON
                 summary = _summary_from_json(method_dict.get("coefficient_recovery", {}))
 
-                # Per-path raw values from NPZ
+                # Per-path raw values + regressors from NPZ
                 per_path_raw_values: Dict[str, np.ndarray] = {}
+                per_path_regressor_values: Dict[str, np.ndarray] = {}
                 raw_prefix = f"{ck}/{label}/raw_values/"
+                reg_prefix = f"{ck}/{label}/regressors/"
                 for key, arr in raw_npz.items():
                     if key.startswith(raw_prefix):
-                        path_key = key[len(raw_prefix):]
-                        per_path_raw_values[path_key] = arr
+                        per_path_raw_values[key[len(raw_prefix):]] = arr
+                    elif key.startswith(reg_prefix):
+                        per_path_regressor_values[key[len(reg_prefix):]] = arr
 
                 pred_errors = raw_npz.get(
                     f"{ck}/{label}/pred_errors", np.array([])
@@ -305,6 +310,7 @@ class TaskResult:
                     fine_tune=fine_tune,
                     coefficient_recovery=summary,
                     per_path_raw_values=per_path_raw_values,
+                    per_path_regressor_values=per_path_regressor_values,
                     pred_errors=pred_errors,
                 )
 
@@ -385,9 +391,11 @@ class TaskResult:
                 for mname, arr in method.fine_tune.per_mixer_holdout_losses.items():
                     npz[f"{ck}/{label}/fine_tune/{mname}/holdout_losses"] = arr
 
-                # Per-path raw values
+                # Per-path raw values + regressors
                 for path_key, arr in method.per_path_raw_values.items():
                     npz[f"{ck}/{label}/raw_values/{path_key}"] = arr
+                for path_key, arr in method.per_path_regressor_values.items():
+                    npz[f"{ck}/{label}/regressors/{path_key}"] = arr
 
                 # Prediction residuals
                 if method.pred_errors.size > 0:
@@ -502,6 +510,7 @@ def build_method_result(
     true_coefficients: Dict[str, float],
     per_step_extractions: List[Dict[str, Dict[str, RecoveryPath]]],
     per_path_raw_values: Dict[str, np.ndarray],
+    per_path_regressor_values: Optional[Dict[str, np.ndarray]] = None,
     pred_snapshots: Optional[np.ndarray] = None,
 ) -> MethodResult:
     """Build a MethodResult from per-mixer fine-tune output + per-step extractions.
@@ -578,6 +587,7 @@ def build_method_result(
         fine_tune=fine_tune_result,
         coefficient_recovery=summary,
         per_path_raw_values=per_path_raw_values,
+        per_path_regressor_values=per_path_regressor_values or {},
         pred_errors=pred_snapshots if pred_snapshots is not None else np.array([]),
     )
 
@@ -630,7 +640,7 @@ def _summary_to_json(summary: SnapshotSummary) -> Dict[str, Any]:
             "per_step": [
                 {
                     "recoveries": {
-                        path: {"mean": rp.mean, "std": rp.std}
+                        path: {"mean": rp.mean, "std": rp.std, "regressor_name": rp.regressor_name}
                         for path, rp in ps.recoveries.items()
                     },
                     "cross_path_mean": ps.cross_path_mean,
@@ -654,7 +664,7 @@ def _summary_from_json(d: Dict[str, Any]) -> SnapshotSummary:
         per_step: List[PerStepRecovery] = []
         for ps_dict in snap_dict.get("per_step", []):
             recoveries = {
-                path: RecoveryPath(mean=rp["mean"], std=rp["std"])
+                path: RecoveryPath(mean=rp["mean"], std=rp["std"], regressor_name=rp.get("regressor_name", ""))
                 for path, rp in ps_dict.get("recoveries", {}).items()
             }
             per_step.append(PerStepRecovery(
