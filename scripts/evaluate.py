@@ -46,6 +46,7 @@ from src.training.imaml import kendall_total_loss
 from src.evaluation.metrics import compress_step_ranges
 from src.evaluation.eval_types import MixerFineTuneOutput, assemble_method_result
 from src.evaluation.results import (
+    BestComboData,
     MethodResult,
     ComboResult,
     TaskResult,
@@ -123,7 +124,7 @@ def load_mixer_from_checkpoint(
         input_bypass=input_bypass,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
-    return model.to(device)
+    return model.to(device).double()
 
 
 def fine_tune(
@@ -642,18 +643,12 @@ def evaluate_task(
                 sys.exit(1)
 
     # ─── Best-combo prediction capture ─────────────────────────────────────
-    # TODO(M7.2b): re-enable best-combo prediction capture under the mixer
-    # method. The old path called fine_tune(model, features, ...) with an
-    # `on_step` callback that snapshotted `model(features)` at each step for
-    # spatial visualization. Under the new per-mixer fine_tune, we'd need to
-    # (a) re-fine-tune the best combo per-mixer, (b) collect predictions via
-    # `forward_one(i, ...)` per mixer per fixed_step, (c) stack them into a
-    # (n_steps, holdout, n_outputs) array matching the old BestComboData
-    # shape. For now, leave best_combo empty — visualize.py should handle
-    # empty BestComboData gracefully (checked via `if bc.combo_key`).
+    # Re-fine-tune θ* on the best combo's data and snapshot the full-model
+    # predictions at each fixed_step. Two snapshots for L-BFGS
+    # (step 0 = θ* pre-adapt, step max_steps = post-adapt). The predictions
+    # array is (n_fixed_steps, holdout, n_outputs) for tricontourf
+    # spatial visualization in plot_best_combo_scatter.
     if task_result.combos:
-        # Pick the combo with the lowest overall avg_error_pct (for future
-        # best_combo re-fine-tune).
         best = min(
             task_result.combos,
             key=lambda c: (
@@ -662,7 +657,95 @@ def evaluate_task(
                 else float("inf")
             ),
         )
-        print(f"    Best combo: {best.combo_key} (best_combo prediction capture SKIPPED in M7.2)")
+
+        bc_k = best.k
+        bc_noise = best.noise
+        bc_k_idx = list(k_values).index(bc_k)
+        bc_noise_idx = list(noise_levels).index(bc_noise)
+        bc_k_seed = seed + bc_k_idx * 100
+        bc_actual_holdout = min(holdout_size, task.n_samples - bc_k)
+
+        bc_noise_gen: Optional[torch.Generator] = None
+        if bc_noise > 0.0:
+            bc_noise_gen = torch.Generator(device=device).manual_seed(
+                bc_k_seed + bc_noise_idx * 1000
+            )
+
+        bc_support, bc_holdout, _bc_support_coords, bc_holdout_coords = task.get_support_query_split(
+            K_shot=bc_k,
+            query_size=bc_actual_holdout,
+            k_seed=bc_k_seed,
+            snapshot_seed=seed,
+            noise_level=bc_noise,
+            noise_generator=bc_noise_gen,
+        )
+        bc_support_features, bc_support_targets = bc_support
+        bc_holdout_features, bc_holdout_targets = bc_holdout
+        bc_x_pts, bc_y_pts = bc_holdout_coords
+
+        # Fresh θ* deepcopy for re-fine-tuning.
+        bc_model = copy.deepcopy(theta_star)
+
+        # Step 0: pre-adapt prediction.
+        with torch.no_grad():
+            pred_step0 = bc_model.forward(bc_holdout_features).detach().cpu().numpy()
+
+        # Pre-adapt theta snapshots for the proximal term.
+        bc_theta_snapshots: List[torch.Tensor] = [
+            torch.cat([
+                p.detach().flatten()
+                for p in bc_model.mixer_outer_params(i)  # type: ignore[attr-defined]
+            ])
+            for i in range(n_outputs)
+        ]
+
+        # Fine-tune all mixers (same args as the combo loop).
+        for mixer_idx in range(n_outputs):
+            fine_tune(
+                fast_model=bc_model,
+                task=task,
+                mixer_idx=mixer_idx,
+                mixer_name=mixer_names[mixer_idx],
+                mixer_outer_params=bc_model.mixer_outer_params(mixer_idx),  # type: ignore[attr-defined]
+                inner_params=bc_model.mixer_inner_params(mixer_idx, anil_mode_effective),  # type: ignore[attr-defined]
+                features=bc_support_features[mixer_idx],
+                targets=bc_support_targets,
+                holdout_features=bc_holdout_features[mixer_idx],
+                holdout_targets=bc_holdout_targets,
+                support_coords=_bc_support_coords,
+                holdout_coords=bc_holdout_coords,
+                cost_function=cost_function,
+                aux_losses_enabled=aux_losses_enabled,
+                inner_steps=max_steps,
+                inner_lr=fine_tune_lr,
+                inner_optimizer=inner_optimizer,
+                lam=proximal_lam,
+                theta_snapshot=bc_theta_snapshots[mixer_idx],
+                fixed_steps=fixed_steps,
+                max_grad_norm=max_grad_norm,
+                slope_recovery_inner=slope_recovery_inner,
+            )
+
+        # Post-adapt prediction.
+        with torch.no_grad():
+            pred_final = bc_model.forward(bc_holdout_features).detach().cpu().numpy()
+
+        bc_predictions = np.stack([pred_step0, pred_final], axis=0)
+        bc_coeff_errors = np.array(
+            best.maml.coefficient_recovery.avg_error_pct_per_step,
+            dtype=np.float64,
+        )
+
+        task_result.best_combo = BestComboData(
+            combo_key=best.combo_key,
+            predictions=bc_predictions,
+            true_targets=bc_holdout_targets.detach().cpu().numpy(),
+            x_pts=bc_x_pts.detach().cpu().numpy(),
+            y_pts=bc_y_pts.detach().cpu().numpy(),
+            steps=np.array(fixed_steps, dtype=np.int64),
+            coeff_error=bc_coeff_errors,
+        )
+        print(f"    Best combo: {best.combo_key} → captured predictions ({bc_predictions.shape})")
 
     return task_result
 
