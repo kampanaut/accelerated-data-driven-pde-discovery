@@ -218,11 +218,11 @@ def plot_train_holdout_convergence(
             holdout_curve = holdout_dict[mname]
             color = MIXER_COLORS.get(mname, "#7f7f7f")
 
-            ax.semilogy(
+            ax.plot(
                 steps, train_curve, color=color, linestyle="-", linewidth=2,
                 label=f"[{mname}] Train{k_suffix}",
             )
-            ax.semilogy(
+            ax.plot(
                 steps, holdout_curve, color=color, linestyle="--", linewidth=2,
                 alpha=0.7, label=f"[{mname}] Holdout{h_suffix}",
             )
@@ -280,8 +280,11 @@ def plot_train_holdout_convergence(
     )
 
     # --- Labels and formatting ---
+    # symlog handles negative Kendall losses from aux runs cleanly.
+    for ax in (ax1, ax2):
+        ax.set_yscale("symlog", linthresh=0.1)
     ax1.set_xlabel("Gradient Steps")
-    ax1.set_ylabel("MSE Loss")
+    ax1.set_ylabel("Loss")
     ax1.set_title("MAML (θ*)")
     ax1.legend(fontsize=7)
     ax1.grid(True, alpha=0.3)

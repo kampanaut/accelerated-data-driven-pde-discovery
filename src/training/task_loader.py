@@ -2454,18 +2454,18 @@ class NLHeatEquationTask(PDETask):
         """Recover K via regression slope on the mixer's per-point partials.
 
         The mixer ideally learns `f(a, b) ≈ K·a·b` where a = 1-u and
-        b = u_xx+u_yy. The partial ∂f/∂a equals K·b at every point. A
-        least-squares slope of (∂f/∂a) against b recovers K.
+        b = u_xx+u_yy. The partial ∂f/∂b equals K·a at every point. A
+        least-squares slope of (∂f/∂b) against a recovers K.
+
+        We regress ∂f/∂lap against (1-u) rather than ∂f/∂(1-u) against
+        lap because (1-u) has a large nonzero mean (~0.9) giving a
+        well-conditioned denominator Σ((1-u)²), while lap centres near
+        zero on clean data (especially smooth ICs like Gaussian bumps),
+        making Σ(lap²) near-degenerate.
 
         Returns a nested dict `{coeff_name: {formula_tag: CoefficientExtraction}}`.
         The single formula tag here is `"regression"`, reflecting the
         least-squares slope extraction.
-
-        The reported `mean` is the regression slope (numerically stable
-        across the full batch). The `values` tensor carries the *per-point*
-        ratio `jvp_1_minus_u / (u_xx+u_yy)`, safely clamped away from zero
-        denominators. This is noisier than the regression slope but gives
-        a meaningful distribution across the holdout for histogram plots.
         """
         if mixer_idx != 0:
             raise ValueError(
@@ -2479,23 +2479,23 @@ class NLHeatEquationTask(PDETask):
             create_graph=False,
             retain_graph=False,
         )[0]  # (N, 2)
-        jvp_1_minus_u = grads[:, 0].detach()  # ≈ K * (u_xx+u_yy) per point
-        lap = features[:, 1].detach()  # (u_xx+u_yy) per point
-        numer = (jvp_1_minus_u * lap).sum()
-        denom = (lap * lap).sum().clamp(min=1e-12)
+        jvp_lap = grads[:, 1].detach()  # ∂f/∂lap ≈ K * (1-u) per point
+        one_minus_u = features[:, 0].detach()  # (1-u) per point
+        numer = (jvp_lap * one_minus_u).sum()
+        denom = (one_minus_u * one_minus_u).sum().clamp(min=1e-12)
         K_slope = numer / denom
-        K_std = jvp_1_minus_u.std()  # per-point dispersion (linearity check)
+        K_std = jvp_lap.std()  # per-point dispersion (linearity check)
         # Per-point ratio as the `values` tensor. Guard against near-zero
-        # denominators: where |lap| < eps, fall back to the regression
-        # slope (a neutral filler that doesn't skew histograms).
+        # denominators: where |(1-u)| < eps, fall back to the regression
+        # slope (a neutral filler that doesn't skew scatter plots).
         eps = 1e-6
-        safe_lap = torch.where(
-            lap.abs() > eps, lap, torch.ones_like(lap)
+        safe_a = torch.where(
+            one_minus_u.abs() > eps, one_minus_u, torch.ones_like(one_minus_u)
         )
         per_point_K = torch.where(
-            lap.abs() > eps,
-            jvp_1_minus_u / safe_lap,
-            K_slope.expand_as(lap),
+            one_minus_u.abs() > eps,
+            jvp_lap / safe_a,
+            K_slope.expand_as(one_minus_u),
         )
         return {
             "K": {
@@ -2503,8 +2503,8 @@ class NLHeatEquationTask(PDETask):
                     mean=K_slope.detach(),
                     std=K_std.detach(),
                     values=per_point_K.detach(),
-                    regressor=lap,
-                    regressor_name="u_xx+u_yy",
+                    regressor=one_minus_u,
+                    regressor_name="1-u",
                 ),
             },
         }
