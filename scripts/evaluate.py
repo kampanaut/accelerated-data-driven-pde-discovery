@@ -881,9 +881,11 @@ def main():
         )
 
     task_pattern = "*_fourier.npz"
+    input_mode = cfg.training.input_mode
 
     test_loader = MetaLearningDataLoader(
-        test_dir, task_class=task_class, task_pattern=task_pattern, device=device
+        test_dir, task_class=task_class, task_pattern=task_pattern, device=device,
+        input_mode=input_mode,
     )
     print()
     print(f"Meta-test tasks: {len(test_loader)}")

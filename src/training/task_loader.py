@@ -111,9 +111,10 @@ class PDETask(ABC):
     n_targets: int = 2  # Override in subclass for scalar PDEs (e.g., heat: 1)
     jacobian_plot_type: str = "histogram"  # Override in subclass (e.g., nl_heat: "scatter")
 
-    def __init__(self, npz_path: Path, device: str = "cuda"):
+    def __init__(self, npz_path: Path, device: str = "cuda", input_mode: str = "library"):
         self.npz_path = Path(npz_path)
         self.device = device
+        self.input_mode = input_mode
         self.storage_device = "cpu"  # where *_hat tensors live; promoted to GPU if room
         data = np.load(npz_path, allow_pickle=True)
 
@@ -630,6 +631,22 @@ class BrusselatorTask(PDETask):
     Reaction coefficients: k1, k2
     """
 
+    def __init__(self, npz_path: Path, device: str = "cuda", input_mode: str = "library"):
+        super().__init__(npz_path, device, input_mode=input_mode)
+        if self.input_mode == "raw":
+            self._structural_names = [
+                ["u", "v", "u_xx", "u_yy"],
+                ["u", "v", "v_xx", "v_yy"],
+            ]
+            self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
+            self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
+            self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
+        else:
+            self._structural_names = [
+                ["u", "u²v", "u_xx+u_yy"],
+                ["u", "u²v", "v_xx+v_yy"],
+            ]
+
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
@@ -779,10 +796,7 @@ class BrusselatorTask(PDETask):
 
     @property
     def structural_feature_names(self) -> list[list[str]]:
-        return [
-            ["u", "u²v", "u_xx+u_yy"],
-            ["u", "u²v", "v_xx+v_yy"],
-        ]
+        return self._structural_names
 
     @property
     def aux_loss_names(self) -> list[list[str]]:
@@ -908,6 +922,163 @@ class BrusselatorTask(PDETask):
         jvp_lap_v = grads[:, 2]
         aux_D_v = _nmse(jvp_lap_v, self.D_v)
         aux_k2 = _nmse(jvp_u, self.k2)
+        return {"D_v": aux_D_v, "k2": aux_k2}
+
+    # ── Raw-features implementations (input_mode="raw") ────────────
+
+    def _evaluate_collocations_raw(
+        self,
+        snap_idx_list: torch.Tensor,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Raw features [u, v, u_xx, u_yy] / [u, v, v_xx, v_yy] — no pre-composition."""
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)
+
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+        v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat, "v_hat": v_hat}, noise_level, noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+            v_hat = noisy["v_hat"]
+
+        coeff_batch = torch.stack([
+            u_hat, v_hat,
+            neg_kx2 * u_hat, neg_ky2 * u_hat,
+            neg_kx2 * v_hat, neg_ky2 * v_hat,
+        ], dim=0)
+
+        u, v, u_xx, u_yy, v_xx, v_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device,
+        )
+
+        mixer_u_features = torch.stack([u, v, u_xx, u_yy], dim=2)
+        mixer_v_features = torch.stack([u, v, v_xx, v_yy], dim=2)
+
+        u_sq_v = u * u * v
+        u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + u_sq_v
+        v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - u_sq_v
+        targets = torch.stack([u_t, v_t], dim=2)
+
+        return [mixer_u_features.double(), mixer_v_features.double()], targets.double()
+
+    def _extract_coefficients_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
+        """Recover BR coefficients from raw features [u, v, u_xx, u_yy] / [u, v, v_xx, v_yy].
+
+        D_u/D_v: clean from ∂f/∂u_xx or ∂f/∂v_xx.
+        k2: corrected for nonlinear leak (∂f/∂u includes 2uv from u²v).
+        k1: PDE residual after subtracting all other terms.
+        """
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Brusselator has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=False, retain_graph=False,
+        )[0].detach()  # (N, 4)
+
+        feats = features.detach()
+        u, v = feats[:, 0], feats[:, 1]
+
+        if mixer_idx == 0:
+            # features: [u, v, u_xx, u_yy]
+            jvp_u = grads[:, 0]      # ≈ -(k2+1) + 2uv
+            jvp_u_xx = grads[:, 2]   # ≈ D_u
+            jvp_u_yy = grads[:, 3]   # ≈ D_u
+
+            # D_u: clean
+            D_u_vals = jvp_u_xx
+
+            # k2: correct for nonlinear leak
+            k2_vals = -1.0 - jvp_u + 2.0 * u * v
+
+            # k1: PDE residual = output - (D_u·(u_xx+u_yy) - (k2+1)·u + u²v)
+            mixer_output = fast_model.forward_one(0, feats).detach()
+            u_xx, u_yy = feats[:, 2], feats[:, 3]
+            k1_vals = mixer_output - D_u_vals * (u_xx + u_yy) + (k2_vals + 1.0) * u - u * u * v
+
+            return {
+                "D_u": {"jvp_u_xx":  CoefficientExtraction(mean=D_u_vals.mean(), std=D_u_vals.std(), values=D_u_vals, regressor=u_xx, regressor_name="u_xx")},
+                "k2":  {"corrected": CoefficientExtraction(mean=k2_vals.mean(),  std=k2_vals.std(),  values=k2_vals,  regressor=u,    regressor_name="u")},
+                "k1":  {"residual":  CoefficientExtraction(mean=k1_vals.mean(),  std=k1_vals.std(),  values=k1_vals,  regressor=u,    regressor_name="u")},
+            }
+
+        # mixer_v (idx == 1): features [u, v, v_xx, v_yy]
+        jvp_u = grads[:, 0]      # ≈ k2 - 2uv
+        jvp_v_xx = grads[:, 2]   # ≈ D_v
+
+        D_v_vals = jvp_v_xx
+        k2_vals = jvp_u + 2.0 * u * v  # correct for -2uv leak
+
+        return {
+            "D_v": {"jvp_v_xx":  CoefficientExtraction(mean=D_v_vals.mean(), std=D_v_vals.std(), values=D_v_vals, regressor=feats[:, 2], regressor_name="v_xx")},
+            "k2":  {"corrected": CoefficientExtraction(mean=k2_vals.mean(),  std=k2_vals.std(),  values=k2_vals,  regressor=u,           regressor_name="u")},
+        }
+
+    def _auxiliary_losses_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Aux losses for raw features. Same coefficients, targets adjusted for nonlinearity."""
+        del targets
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Brusselator has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=True, retain_graph=True,
+        )[0]  # (N, 4)
+
+        u, v = features_grad[:, 0], features_grad[:, 1]
+
+        def _nmse(quantity: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            diff = quantity - target
+            mse = (diff * diff).mean()
+            denom = (target * target).mean().clamp(min=1e-12)
+            return mse / denom
+
+        if mixer_idx == 0:
+            # ∂f/∂u_xx should be D_u
+            aux_D_u = _nmse(grads[:, 2], torch.full_like(grads[:, 2], self.D_u))
+            # ∂f/∂u should be -(k2+1) + 2uv
+            target_jvp_u = -(self.k2 + 1) + 2.0 * u * v
+            aux_k2 = _nmse(grads[:, 0], target_jvp_u)
+            # k1 via PDE residual
+            mixer_output = fast_model.forward_one(0, features_grad)
+            u_xx, u_yy = features_grad[:, 2], features_grad[:, 3]
+            reconstructed = self.D_u * (u_xx + u_yy) - (self.k2 + 1) * u + u * u * v
+            residual = mixer_output - reconstructed
+            aux_k1 = _nmse(residual, torch.full_like(residual, self.k1))
+            return {"D_u": aux_D_u, "k2": aux_k2, "k1": aux_k1}
+
+        # mixer_v (idx == 1)
+        # ∂f/∂v_xx should be D_v
+        aux_D_v = _nmse(grads[:, 2], torch.full_like(grads[:, 2], self.D_v))
+        # ∂f/∂u should be k2 - 2uv
+        target_jvp_u = self.k2 - 2.0 * u * v
+        aux_k2 = _nmse(grads[:, 0], target_jvp_u)
         return {"D_v": aux_D_v, "k2": aux_k2}
 
     def inject_noise_at_source(
@@ -2309,6 +2480,16 @@ class NLHeatEquationTask(PDETask):
     n_targets: int = 1
     jacobian_plot_type: str = "scatter"
 
+    def __init__(self, npz_path: Path, device: str = "cuda", input_mode: str = "library"):
+        super().__init__(npz_path, device, input_mode=input_mode)
+        if self.input_mode == "raw":
+            self._structural_names = [["u", "u_xx", "u_yy"]]
+            self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
+            self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
+            self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
+        else:
+            self._structural_names = [["1-u", "u_xx+u_yy"]]
+
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
@@ -2439,7 +2620,7 @@ class NLHeatEquationTask(PDETask):
 
     @property
     def structural_feature_names(self) -> list[list[str]]:
-        return [["1-u", "u_xx+u_yy"]]
+        return self._structural_names
 
     @property
     def aux_loss_names(self) -> list[list[str]]:
@@ -2516,11 +2697,13 @@ class NLHeatEquationTask(PDETask):
         features: torch.Tensor,
         targets: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Form 1 per-point JVP target for K.
+        """Form 1 per-point JVP target for K (library mode).
 
-        Pushes ∂(mixer)/∂(1-u) toward K·(u_xx+u_yy) at every collocation
-        point. Differentiable — contributes gradient to the mixer's
-        weights via create_graph=True on the inner autograd.grad call.
+        Pushes ∂(mixer)/∂lap toward K·(1-u) at every collocation point.
+        Uses the lap partial (grads[:, 1]) rather than the (1-u) partial
+        because (1-u) has a large nonzero mean (~0.9) giving a well-
+        conditioned nMSE denominator, while K·lap centres near zero on
+        smooth ICs.
         """
         if mixer_idx != 0:
             raise ValueError(
@@ -2534,14 +2717,119 @@ class NLHeatEquationTask(PDETask):
             create_graph=True,
             retain_graph=True,
         )[0]  # (N, 2)
-        jvp_1_minus_u = grads[:, 0]  # (N,)
-        lap = features[:, 1]
-        target_per_point = self.K * lap
-        diff = jvp_1_minus_u - target_per_point
+        jvp_lap = grads[:, 1]  # ∂f/∂lap ≈ K·(1-u)
+        one_minus_u = features[:, 0]  # (1-u) from library features
+        target_per_point = self.K * one_minus_u
+        diff = jvp_lap - target_per_point
         mse = (diff * diff).mean()
         denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
-        aux_K = mse / denom
-        return {"K": aux_K}
+        return {"K": mse / denom}
+
+    # ── Raw-features implementations (input_mode="raw") ────────────
+
+    def _evaluate_collocations_raw(
+        self,
+        snap_idx_list: torch.Tensor,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Raw features [u, u_xx, u_yy] — no pre-composition."""
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat}, noise_level, noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+
+        coeff_batch = torch.stack(
+            [u_hat, neg_kx2 * u_hat, neg_ky2 * u_hat], dim=0,
+        )
+        u, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
+
+        mixer_0_features = torch.stack([u, u_xx, u_yy], dim=2)
+        u_t = self.K * (1.0 - u) * (u_xx + u_yy)
+        targets = torch.stack([u_t], dim=2)
+        return [mixer_0_features.double()], targets.double()
+
+    def _extract_coefficients_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
+        """Recover K from raw features [u, u_xx, u_yy].
+
+        ∂f/∂u_xx ≈ K·(1-u). Regress against (1-u) = 1 - features[:, 0].
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=False, retain_graph=False,
+        )[0]  # (N, 3)
+        jvp_u_xx = grads[:, 1].detach()  # ∂f/∂u_xx ≈ K·(1-u)
+        one_minus_u = (1.0 - features[:, 0]).detach()
+        numer = (jvp_u_xx * one_minus_u).sum()
+        denom = (one_minus_u * one_minus_u).sum().clamp(min=1e-12)
+        K_slope = numer / denom
+        K_std = jvp_u_xx.std()
+        eps = 1e-6
+        safe_a = torch.where(
+            one_minus_u.abs() > eps, one_minus_u, torch.ones_like(one_minus_u)
+        )
+        per_point_K = torch.where(
+            one_minus_u.abs() > eps,
+            jvp_u_xx / safe_a,
+            K_slope.expand_as(one_minus_u),
+        )
+        return {
+            "K": {
+                "regression": CoefficientExtraction(
+                    mean=K_slope.detach(), std=K_std.detach(),
+                    values=per_point_K.detach(),
+                    regressor=one_minus_u, regressor_name="1-u",
+                ),
+            },
+        }
+
+    def _auxiliary_losses_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Aux loss for raw features [u, u_xx, u_yy].
+
+        Pushes ∂f/∂u_xx toward K·(1-u). Target is well-conditioned
+        because (1-u) has large nonzero mean.
+        """
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=True, retain_graph=True,
+        )[0]  # (N, 3)
+        jvp_u_xx = grads[:, 1]  # ∂f/∂u_xx ≈ K·(1-u)
+        one_minus_u = 1.0 - features[:, 0]
+        target_per_point = self.K * one_minus_u
+        diff = jvp_u_xx - target_per_point
+        mse = (diff * diff).mean()
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        return {"K": mse / denom}
 
     def inject_noise_at_source(
         self,
@@ -2595,10 +2883,12 @@ class MetaLearningDataLoader:
         task_class: Type[PDETask] = NavierStokesTask,
         task_pattern: str = "*_fourier.npz",
         device: str = "cuda",
+        input_mode: str = "library",
     ):
         self.data_dir = Path(data_dir)
         self.task_class = task_class
         self.device = device
+        self.input_mode = input_mode
         npz_files = sorted(self.data_dir.glob(task_pattern))
 
         if len(npz_files) == 0:
@@ -2614,7 +2904,7 @@ class MetaLearningDataLoader:
         print(f"Loading tasks from {data_dir}...")
         for npz_path in npz_files:
             try:
-                task = self.task_class(npz_path, device=self.device)
+                task = self.task_class(npz_path, device=self.device, input_mode=self.input_mode)
                 self.tasks.append(task)
                 self.task_names.append(npz_path.stem)
             except (ValueError, Exception) as e:

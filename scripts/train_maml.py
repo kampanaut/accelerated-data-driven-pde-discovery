@@ -168,9 +168,11 @@ def main():
     print(f"PDE type: {pde_type} ({task_class.__name__})")
 
     task_pattern = "*_fourier.npz"
+    input_mode = cfg.training.input_mode
 
     train_loader = MetaLearningDataLoader(
-        train_dir, task_class=task_class, task_pattern=task_pattern, device=device
+        train_dir, task_class=task_class, task_pattern=task_pattern, device=device,
+        input_mode=input_mode,
     )
 
     # Val loader only needed for patience mode (early stopping)
@@ -179,7 +181,8 @@ def main():
         if not val_dir.exists():
             raise FileNotFoundError(f"Meta-val directory not found: {val_dir}")
         val_loader = MetaLearningDataLoader(
-            val_dir, task_class=task_class, task_pattern=task_pattern, device=device
+            val_dir, task_class=task_class, task_pattern=task_pattern, device=device,
+            input_mode=input_mode,
         )
 
     print()

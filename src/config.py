@@ -122,6 +122,7 @@ class TrainingSection:
     output_dim: Optional[int] = None
     layers: Optional[list] = None
     input_bypass: bool = False
+    input_mode: str = "library"
     adaptive_scales: bool = False
     adaptive_scale_n: float = 1.0
     conv_filters: int = 0
