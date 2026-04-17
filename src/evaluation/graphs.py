@@ -988,50 +988,62 @@ def plot_coefficient_extraction_scatter(
         ):
             fill, _edge = _ESTIMATE_COLORS[i % len(_ESTIMATE_COLORS)]
 
+            # Plot Euler contribution: y = values × regressor.
+            # For direct-JVP coefficients (BR D_u): vals=D_u, regs=u_xx
+            #   → y = D_u·u_xx, truth slope = D_u.
+            # For regression coefficients (NLHeat K): vals=K, regs=(1-u)
+            #   → y = K·(1-u) = raw JVP, truth slope = K.
+            y_contrib = vals * regs
+
             # Subsample for rendering if too many points
             n = len(vals)
             if n > 5000:
                 idx = np.random.RandomState(42 + i).choice(n, 5000, replace=False)
-                x_plot, y_plot = regs[idx], vals[idx]
+                x_plot, y_plot = regs[idx], y_contrib[idx]
             else:
-                x_plot, y_plot = regs, vals
+                x_plot, y_plot = regs, y_contrib
 
             ax.scatter(
                 x_plot, y_plot, s=1, alpha=0.3, color=fill, rasterized=True,
             )
 
-            # Regression line through (regressor, values)
+            # Regression line through origin: y = slope · x
             mean_val = float(np.mean(vals))
-            std_val = float(np.std(vals))
             if len(regs) >= 2 and float(np.std(regs)) > 1e-12:
-                slope, intercept = np.polyfit(regs, vals, 1)
-                ss_res = float(np.sum((vals - (slope * regs + intercept)) ** 2))
-                ss_tot = float(np.sum((vals - np.mean(vals)) ** 2))
+                # OLS through origin: slope = Σ(x·y) / Σ(x²)
+                slope = float((regs * y_contrib).sum() / (regs * regs).sum())
+                ss_res = float(np.sum((y_contrib - slope * regs) ** 2))
+                ss_tot = float(np.sum((y_contrib - np.mean(y_contrib)) ** 2))
                 r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else float("nan")
                 x_line = np.linspace(float(regs.min()), float(regs.max()), 100)
                 ax.plot(
-                    x_line, slope * x_line + intercept,
+                    x_line, slope * x_line,
                     color=fill, linewidth=2, alpha=0.8,
-                    label=f"{label}: μ={mean_val:.4f}, slope={slope:.4f}, R²={r2:.4f}",
+                    label=f"{symbol}={slope:.4f} (R²={r2:.4f})",
                 )
             else:
+                std_val = float(np.std(vals))
                 ax.axhline(
                     mean_val, color=fill, linewidth=2, alpha=0.8,
                     label=f"{label}: μ={mean_val:.4f}, σ={std_val:.4f}",
                 )
 
+        # Truth line: y = coeff_true · x (through origin)
+        x_lo, x_hi = ax.get_xlim()
+        x_truth = np.linspace(x_lo, x_hi, 100)
         truth_label = (
             "Perfect recovery (1.0)" if ratio_mode
-            else f"True {symbol} = {coeff_true:.4f}"
+            else f"True {symbol}={coeff_true:.4f}"
         )
-        ax.axhline(
-            coeff_true, color="red", linewidth=2, linestyle="--",
+        ax.plot(
+            x_truth, coeff_true * x_truth,
+            color="green", linewidth=2, linestyle="--",
             alpha=0.6, label=truth_label,
         )
 
         x_label = next((n for n in (regressor_names or []) if n), "Feature column value")
         ax.set_xlabel(x_label, fontsize=9)
-        ax.set_ylabel(f"{symbol} extracted value", fontsize=9)
+        ax.set_ylabel(f"JVP contribution", fontsize=9)
         ax.set_title(panel_title)
         ax.legend(fontsize=7)
         ax.grid(True, alpha=0.3)
