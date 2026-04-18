@@ -2647,16 +2647,19 @@ class NLHeatEquationTask(PDETask):
         super().__init__(npz_path, device, input_mode=input_mode)
         if self.input_mode == "raw":
             self._structural_names = [["u", "u_xx", "u_yy"]]
+            self._aux_names = [["K_from_uxx", "K_from_uyy"]]
             self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
         elif self.input_mode == "raw_raw":
             self._structural_names = [["u", "u_x", "u_y", "u_xx", "u_yy"]]
+            self._aux_names = [["K_from_uxx", "K_from_uyy"]]
             self.evaluate_collocations = self._evaluate_collocations_raw_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw_raw  # type: ignore[assignment]
         else:
             self._structural_names = [["1-u", "u_xx+u_yy"]]
+            self._aux_names = [["K"]]
 
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
@@ -2792,7 +2795,7 @@ class NLHeatEquationTask(PDETask):
 
     @property
     def aux_loss_names(self) -> list[list[str]]:
-        return [["K"]]
+        return self._aux_names
 
     def extract_coefficients(
         self,
@@ -2978,8 +2981,10 @@ class NLHeatEquationTask(PDETask):
     ) -> dict[str, torch.Tensor]:
         """Aux loss for raw features [u, u_xx, u_yy].
 
-        Pushes ∂f/∂u_xx toward K·(1-u). Target is well-conditioned
-        because (1-u) has large nonzero mean.
+        Pushes both ∂f/∂u_xx and ∂f/∂u_yy toward K·(1-u). Two losses
+        enforce symmetric Laplacian weights (same as Heat's two-path
+        aux). Target is well-conditioned because (1-u) has large
+        nonzero mean.
         """
         if mixer_idx != 0:
             raise ValueError(
@@ -2991,13 +2996,19 @@ class NLHeatEquationTask(PDETask):
             output.sum(), features_grad,
             create_graph=True, retain_graph=True,
         )[0]  # (N, 3)
-        jvp_u_xx = grads[:, 1]  # ∂f/∂u_xx ≈ K·(1-u)
         one_minus_u = 1.0 - features[:, 0]
         target_per_point = self.K * one_minus_u
-        diff = jvp_u_xx - target_per_point
-        mse = (diff * diff).mean()
         denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
-        return {"K": mse / denom}
+
+        jvp_u_xx = grads[:, 1]  # ∂f/∂u_xx ≈ K·(1-u)
+        diff_xx = jvp_u_xx - target_per_point
+        aux_K_xx = (diff_xx * diff_xx).mean() / denom
+
+        jvp_u_yy = grads[:, 2]  # ∂f/∂u_yy ≈ K·(1-u)
+        diff_yy = jvp_u_yy - target_per_point
+        aux_K_yy = (diff_yy * diff_yy).mean() / denom
+
+        return {"K_from_uxx": aux_K_xx, "K_from_uyy": aux_K_yy}
 
     # ── Raw-raw implementations (input_mode="raw_raw") ───────────
     #    [u, u_x, u_y, u_xx, u_yy] — includes non-RHS distractors
@@ -3083,7 +3094,7 @@ class NLHeatEquationTask(PDETask):
         features: torch.Tensor,
         targets: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Aux loss for [u, u_x, u_y, u_xx, u_yy]. Pushes ∂f/∂u_xx → K·(1-u)."""
+        """Aux loss for [u, u_x, u_y, u_xx, u_yy]. Pushes both ∂f/∂u_xx and ∂f/∂u_yy → K·(1-u)."""
         if mixer_idx != 0:
             raise ValueError(
                 f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
@@ -3094,13 +3105,19 @@ class NLHeatEquationTask(PDETask):
             output.sum(), features_grad,
             create_graph=True, retain_graph=True,
         )[0]  # (N, 5)
-        jvp_u_xx = grads[:, 3]  # ∂f/∂u_xx ≈ K·(1-u)
         one_minus_u = 1.0 - features[:, 0]
         target_per_point = self.K * one_minus_u
-        diff = jvp_u_xx - target_per_point
-        mse = (diff * diff).mean()
         denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
-        return {"K": mse / denom}
+
+        jvp_u_xx = grads[:, 3]  # ∂f/∂u_xx ≈ K·(1-u)
+        diff_xx = jvp_u_xx - target_per_point
+        aux_K_xx = (diff_xx * diff_xx).mean() / denom
+
+        jvp_u_yy = grads[:, 4]  # ∂f/∂u_yy ≈ K·(1-u)
+        diff_yy = jvp_u_yy - target_per_point
+        aux_K_yy = (diff_yy * diff_yy).mean() / denom
+
+        return {"K_from_uxx": aux_K_xx, "K_from_uyy": aux_K_yy}
 
     def inject_noise_at_source(
         self,
