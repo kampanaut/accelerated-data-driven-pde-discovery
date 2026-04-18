@@ -115,6 +115,17 @@ class PDETask(ABC):
         self.npz_path = Path(npz_path)
         self.device = device
         self.input_mode = input_mode
+        valid_modes = ("library", "raw", "raw_raw")
+        if input_mode not in valid_modes:
+            raise ValueError(
+                f"Unknown input_mode '{input_mode}'. Must be one of {valid_modes}."
+            )
+        supported = getattr(self, "_supported_input_modes", ("library",))
+        if input_mode not in supported:
+            raise NotImplementedError(
+                f"{type(self).__name__} does not support input_mode='{input_mode}'. "
+                f"Supported: {supported}"
+            )
         self.storage_device = "cpu"  # where *_hat tensors live; promoted to GPU if room
         data = np.load(npz_path, allow_pickle=True)
 
@@ -630,6 +641,8 @@ class BrusselatorTask(PDETask):
     Diffusion coefficients: D_u, D_v
     Reaction coefficients: k1, k2
     """
+
+    _supported_input_modes = ("library", "raw", "raw_raw")
 
     def __init__(self, npz_path: Path, device: str = "cuda", input_mode: str = "library"):
         super().__init__(npz_path, device, input_mode=input_mode)
@@ -2625,6 +2638,7 @@ class NLHeatEquationTask(PDETask):
     Diffusion coefficient: K
     """
 
+    _supported_input_modes = ("library", "raw", "raw_raw")
     n_features: int = 5
     n_targets: int = 1
     jacobian_plot_type: str = "scatter"
