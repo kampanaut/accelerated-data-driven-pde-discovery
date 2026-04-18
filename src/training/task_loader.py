@@ -651,6 +651,10 @@ class BrusselatorTask(PDETask):
                 ["u", "v", "u_xx", "u_yy"],
                 ["u", "v", "v_xx", "v_yy"],
             ]
+            self._aux_names = [
+                ["D_u_from_uxx", "D_u_from_uyy", "k2", "k1"],
+                ["D_v_from_vxx", "D_v_from_vyy", "k2"],
+            ]
             self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
@@ -659,6 +663,10 @@ class BrusselatorTask(PDETask):
                 ["u", "v", "u_x", "u_y", "u_xx", "u_yy"],
                 ["u", "v", "v_x", "v_y", "v_xx", "v_yy"],
             ]
+            self._aux_names = [
+                ["D_u_from_uxx", "D_u_from_uyy", "k2", "k1"],
+                ["D_v_from_vxx", "D_v_from_vyy", "k2"],
+            ]
             self.evaluate_collocations = self._evaluate_collocations_raw_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw_raw  # type: ignore[assignment]
@@ -666,6 +674,10 @@ class BrusselatorTask(PDETask):
             self._structural_names = [
                 ["u", "u²v", "u_xx+u_yy"],
                 ["u", "u²v", "v_xx+v_yy"],
+            ]
+            self._aux_names = [
+                ["D_u", "k2", "k1"],
+                ["D_v", "k2"],
             ]
 
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
@@ -821,10 +833,7 @@ class BrusselatorTask(PDETask):
 
     @property
     def aux_loss_names(self) -> list[list[str]]:
-        return [
-            ["D_u", "k2", "k1"],
-            ["D_v", "k2"],
-        ]
+        return self._aux_names
 
     def extract_coefficients(
         self,
@@ -1081,8 +1090,10 @@ class BrusselatorTask(PDETask):
             return mse / denom
 
         if mixer_idx == 0:
-            # ∂f/∂u_xx should be D_u
-            aux_D_u = _nmse(grads[:, 2], torch.full_like(grads[:, 2], self.D_u))
+            # ∂f/∂u_xx and ∂f/∂u_yy should both be D_u
+            D_u_target = torch.full_like(grads[:, 2], self.D_u)
+            aux_D_u_xx = _nmse(grads[:, 2], D_u_target)
+            aux_D_u_yy = _nmse(grads[:, 3], D_u_target)
             # ∂f/∂u should be -(k2+1) + 2uv
             target_jvp_u = -(self.k2 + 1) + 2.0 * u * v
             aux_k2 = _nmse(grads[:, 0], target_jvp_u)
@@ -1092,15 +1103,17 @@ class BrusselatorTask(PDETask):
             reconstructed = self.D_u * (u_xx + u_yy) - (self.k2 + 1) * u + u * u * v
             residual = mixer_output - reconstructed
             aux_k1 = _nmse(residual, torch.full_like(residual, self.k1))
-            return {"D_u": aux_D_u, "k2": aux_k2, "k1": aux_k1}
+            return {"D_u_from_uxx": aux_D_u_xx, "D_u_from_uyy": aux_D_u_yy, "k2": aux_k2, "k1": aux_k1}
 
         # mixer_v (idx == 1)
-        # ∂f/∂v_xx should be D_v
-        aux_D_v = _nmse(grads[:, 2], torch.full_like(grads[:, 2], self.D_v))
+        # ∂f/∂v_xx and ∂f/∂v_yy should both be D_v
+        D_v_target = torch.full_like(grads[:, 2], self.D_v)
+        aux_D_v_xx = _nmse(grads[:, 2], D_v_target)
+        aux_D_v_yy = _nmse(grads[:, 3], D_v_target)
         # ∂f/∂u should be k2 - 2uv
         target_jvp_u = self.k2 - 2.0 * u * v
         aux_k2 = _nmse(grads[:, 0], target_jvp_u)
-        return {"D_v": aux_D_v, "k2": aux_k2}
+        return {"D_v_from_vxx": aux_D_v_xx, "D_v_from_vyy": aux_D_v_yy, "k2": aux_k2}
 
     # ── Raw-raw implementations (input_mode="raw_raw") ───────────
     #    mixer_u: [u, v, u_x, u_y, u_xx, u_yy] — includes non-RHS u_x, u_y
@@ -1227,7 +1240,10 @@ class BrusselatorTask(PDETask):
             return mse / denom
 
         if mixer_idx == 0:
-            aux_D_u = _nmse(grads[:, 4], torch.full_like(grads[:, 4], self.D_u))
+            # ∂f/∂u_xx and ∂f/∂u_yy should both be D_u
+            D_u_target = torch.full_like(grads[:, 4], self.D_u)
+            aux_D_u_xx = _nmse(grads[:, 4], D_u_target)
+            aux_D_u_yy = _nmse(grads[:, 5], D_u_target)
             target_jvp_u = -(self.k2 + 1) + 2.0 * u * v
             aux_k2 = _nmse(grads[:, 0], target_jvp_u)
             mixer_output = fast_model.forward_one(0, features_grad)
@@ -1235,13 +1251,15 @@ class BrusselatorTask(PDETask):
             reconstructed = self.D_u * (u_xx + u_yy) - (self.k2 + 1) * u + u * u * v
             residual = mixer_output - reconstructed
             aux_k1 = _nmse(residual, torch.full_like(residual, self.k1))
-            return {"D_u": aux_D_u, "k2": aux_k2, "k1": aux_k1}
+            return {"D_u_from_uxx": aux_D_u_xx, "D_u_from_uyy": aux_D_u_yy, "k2": aux_k2, "k1": aux_k1}
 
         # mixer_v
-        aux_D_v = _nmse(grads[:, 4], torch.full_like(grads[:, 4], self.D_v))
+        D_v_target = torch.full_like(grads[:, 4], self.D_v)
+        aux_D_v_xx = _nmse(grads[:, 4], D_v_target)
+        aux_D_v_yy = _nmse(grads[:, 5], D_v_target)
         target_jvp_u = self.k2 - 2.0 * u * v
         aux_k2 = _nmse(grads[:, 0], target_jvp_u)
-        return {"D_v": aux_D_v, "k2": aux_k2}
+        return {"D_v_from_vxx": aux_D_v_xx, "D_v_from_vyy": aux_D_v_yy, "k2": aux_k2}
 
     def inject_noise_at_source(
         self,
