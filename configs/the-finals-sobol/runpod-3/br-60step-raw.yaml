@@ -18,7 +18,7 @@ training:
   inner_steps: 60
   meta_batch_size: 28
   k_shot: 4000
-  query_size: 20000
+  query_size: 40000
   epochs: 1
   max_iterations: 2000
   patience: 0
@@ -80,7 +80,7 @@ evaluation:
   fixed_steps:
   - 0
   - 60
-  holdout_size: 20000
+  holdout_size: 40000
   log_weights: false
 visualization:
   dpi: 300
