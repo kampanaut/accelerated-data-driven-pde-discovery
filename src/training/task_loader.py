@@ -641,6 +641,14 @@ class BrusselatorTask(PDETask):
             self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
+        elif self.input_mode == "raw_raw":
+            self._structural_names = [
+                ["u", "v", "u_x", "u_y", "u_xx", "u_yy"],
+                ["u", "v", "v_x", "v_y", "v_xx", "v_yy"],
+            ]
+            self.evaluate_collocations = self._evaluate_collocations_raw_raw  # type: ignore[assignment]
+            self.extract_coefficients = self._extract_coefficients_raw_raw  # type: ignore[assignment]
+            self.auxiliary_losses = self._auxiliary_losses_raw_raw  # type: ignore[assignment]
         else:
             self._structural_names = [
                 ["u", "u²v", "u_xx+u_yy"],
@@ -1077,6 +1085,147 @@ class BrusselatorTask(PDETask):
         # ∂f/∂v_xx should be D_v
         aux_D_v = _nmse(grads[:, 2], torch.full_like(grads[:, 2], self.D_v))
         # ∂f/∂u should be k2 - 2uv
+        target_jvp_u = self.k2 - 2.0 * u * v
+        aux_k2 = _nmse(grads[:, 0], target_jvp_u)
+        return {"D_v": aux_D_v, "k2": aux_k2}
+
+    # ── Raw-raw implementations (input_mode="raw_raw") ───────────
+    #    mixer_u: [u, v, u_x, u_y, u_xx, u_yy] — includes non-RHS u_x, u_y
+    #    mixer_v: [u, v, v_x, v_y, v_xx, v_yy] — includes non-RHS v_x, v_y
+
+    def _evaluate_collocations_raw_raw(
+        self,
+        snap_idx_list: torch.Tensor,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Full derivative set per mixer — includes non-RHS first derivatives."""
+        ikx = 1j * self.kx.unsqueeze(0)
+        iky = 1j * self.ky.unsqueeze(1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)
+
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+        v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat, "v_hat": v_hat}, noise_level, noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+            v_hat = noisy["v_hat"]
+
+        coeff_batch = torch.stack([
+            u_hat, v_hat,
+            ikx * u_hat, iky * u_hat, neg_kx2 * u_hat, neg_ky2 * u_hat,
+            ikx * v_hat, iky * v_hat, neg_kx2 * v_hat, neg_ky2 * v_hat,
+        ], dim=0)
+
+        u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device,
+        )
+
+        mixer_u_features = torch.stack([u, v, u_x, u_y, u_xx, u_yy], dim=2)
+        mixer_v_features = torch.stack([u, v, v_x, v_y, v_xx, v_yy], dim=2)
+
+        u_sq_v = u * u * v
+        u_t = self.D_u * (u_xx + u_yy) + self.k1 - (self.k2 + 1) * u + u_sq_v
+        v_t = self.D_v * (v_xx + v_yy) + self.k2 * u - u_sq_v
+        targets = torch.stack([u_t, v_t], dim=2)
+
+        return [mixer_u_features.double(), mixer_v_features.double()], targets.double()
+
+    def _extract_coefficients_raw_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
+        """Recover BR coefficients from [u, v, u_x, u_y, u_xx, u_yy] / [u, v, v_x, v_y, v_xx, v_yy]."""
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Brusselator has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=False, retain_graph=False,
+        )[0].detach()  # (N, 6)
+
+        feats = features.detach()
+        u, v = feats[:, 0], feats[:, 1]
+
+        if mixer_idx == 0:
+            # [u, v, u_x, u_y, u_xx, u_yy]
+            jvp_u = grads[:, 0]      # ≈ -(k2+1) + 2uv
+            jvp_u_xx = grads[:, 4]   # ≈ D_u
+            D_u_vals = jvp_u_xx
+            k2_vals = -1.0 - jvp_u + 2.0 * u * v
+            mixer_output = fast_model.forward_one(0, feats).detach()
+            u_xx, u_yy = feats[:, 4], feats[:, 5]
+            k1_vals = mixer_output - D_u_vals * (u_xx + u_yy) + (k2_vals + 1.0) * u - u * u * v
+            return {
+                "D_u": {"jvp_u_xx":  CoefficientExtraction(mean=D_u_vals.mean(), std=D_u_vals.std(), values=D_u_vals, regressor=u_xx, regressor_name="u_xx")},
+                "k2":  {"corrected": CoefficientExtraction(mean=k2_vals.mean(),  std=k2_vals.std(),  values=k2_vals,  regressor=u,    regressor_name="u")},
+                "k1":  {"residual":  CoefficientExtraction(mean=k1_vals.mean(),  std=k1_vals.std(),  values=k1_vals,  regressor=u,    regressor_name="u")},
+            }
+
+        # mixer_v: [u, v, v_x, v_y, v_xx, v_yy]
+        jvp_u = grads[:, 0]      # ≈ k2 - 2uv
+        jvp_v_xx = grads[:, 4]   # ≈ D_v
+        D_v_vals = jvp_v_xx
+        k2_vals = jvp_u + 2.0 * u * v
+        return {
+            "D_v": {"jvp_v_xx":  CoefficientExtraction(mean=D_v_vals.mean(), std=D_v_vals.std(), values=D_v_vals, regressor=feats[:, 4], regressor_name="v_xx")},
+            "k2":  {"corrected": CoefficientExtraction(mean=k2_vals.mean(),  std=k2_vals.std(),  values=k2_vals,  regressor=u,           regressor_name="u")},
+        }
+
+    def _auxiliary_losses_raw_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Aux losses for [u, v, u_x, u_y, u_xx, u_yy] / [u, v, v_x, v_y, v_xx, v_yy]."""
+        del targets
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Brusselator has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=True, retain_graph=True,
+        )[0]  # (N, 6)
+
+        u, v = features_grad[:, 0], features_grad[:, 1]
+
+        def _nmse(quantity: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            diff = quantity - target
+            mse = (diff * diff).mean()
+            denom = (target * target).mean().clamp(min=1e-12)
+            return mse / denom
+
+        if mixer_idx == 0:
+            aux_D_u = _nmse(grads[:, 4], torch.full_like(grads[:, 4], self.D_u))
+            target_jvp_u = -(self.k2 + 1) + 2.0 * u * v
+            aux_k2 = _nmse(grads[:, 0], target_jvp_u)
+            mixer_output = fast_model.forward_one(0, features_grad)
+            u_xx, u_yy = features_grad[:, 4], features_grad[:, 5]
+            reconstructed = self.D_u * (u_xx + u_yy) - (self.k2 + 1) * u + u * u * v
+            residual = mixer_output - reconstructed
+            aux_k1 = _nmse(residual, torch.full_like(residual, self.k1))
+            return {"D_u": aux_D_u, "k2": aux_k2, "k1": aux_k1}
+
+        # mixer_v
+        aux_D_v = _nmse(grads[:, 4], torch.full_like(grads[:, 4], self.D_v))
         target_jvp_u = self.k2 - 2.0 * u * v
         aux_k2 = _nmse(grads[:, 0], target_jvp_u)
         return {"D_v": aux_D_v, "k2": aux_k2}
@@ -2487,6 +2636,11 @@ class NLHeatEquationTask(PDETask):
             self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
+        elif self.input_mode == "raw_raw":
+            self._structural_names = [["u", "u_x", "u_y", "u_xx", "u_yy"]]
+            self.evaluate_collocations = self._evaluate_collocations_raw_raw  # type: ignore[assignment]
+            self.extract_coefficients = self._extract_coefficients_raw_raw  # type: ignore[assignment]
+            self.auxiliary_losses = self._auxiliary_losses_raw_raw  # type: ignore[assignment]
         else:
             self._structural_names = [["1-u", "u_xx+u_yy"]]
 
@@ -2824,6 +2978,109 @@ class NLHeatEquationTask(PDETask):
             create_graph=True, retain_graph=True,
         )[0]  # (N, 3)
         jvp_u_xx = grads[:, 1]  # ∂f/∂u_xx ≈ K·(1-u)
+        one_minus_u = 1.0 - features[:, 0]
+        target_per_point = self.K * one_minus_u
+        diff = jvp_u_xx - target_per_point
+        mse = (diff * diff).mean()
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        return {"K": mse / denom}
+
+    # ── Raw-raw implementations (input_mode="raw_raw") ───────────
+    #    [u, u_x, u_y, u_xx, u_yy] — includes non-RHS distractors
+
+    def _evaluate_collocations_raw_raw(
+        self,
+        snap_idx_list: torch.Tensor,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Full derivative set [u, u_x, u_y, u_xx, u_yy] — includes non-RHS features."""
+        ikx = 1j * self.kx.unsqueeze(0)
+        iky = 1j * self.ky.unsqueeze(1)
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat}, noise_level, noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+
+        coeff_batch = torch.stack(
+            [u_hat, ikx * u_hat, iky * u_hat, neg_kx2 * u_hat, neg_ky2 * u_hat],
+            dim=0,
+        )
+        u, u_x, u_y, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
+
+        mixer_0_features = torch.stack([u, u_x, u_y, u_xx, u_yy], dim=2)
+        u_t = self.K * (1.0 - u) * (u_xx + u_yy)
+        targets = torch.stack([u_t], dim=2)
+        return [mixer_0_features.double()], targets.double()
+
+    def _extract_coefficients_raw_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
+        """Recover K from [u, u_x, u_y, u_xx, u_yy]. ∂f/∂u_xx ≈ K·(1-u)."""
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=False, retain_graph=False,
+        )[0]  # (N, 5)
+        jvp_u_xx = grads[:, 3].detach()  # ∂f/∂u_xx ≈ K·(1-u)
+        one_minus_u = (1.0 - features[:, 0]).detach()
+        numer = (jvp_u_xx * one_minus_u).sum()
+        denom = (one_minus_u * one_minus_u).sum().clamp(min=1e-12)
+        K_slope = numer / denom
+        K_std = jvp_u_xx.std()
+        eps = 1e-6
+        safe_a = torch.where(
+            one_minus_u.abs() > eps, one_minus_u, torch.ones_like(one_minus_u)
+        )
+        per_point_K = torch.where(
+            one_minus_u.abs() > eps,
+            jvp_u_xx / safe_a,
+            K_slope.expand_as(one_minus_u),
+        )
+        return {
+            "K": {
+                "regression": CoefficientExtraction(
+                    mean=K_slope.detach(), std=K_std.detach(),
+                    values=per_point_K.detach(),
+                    regressor=one_minus_u, regressor_name="1-u",
+                ),
+            },
+        }
+
+    def _auxiliary_losses_raw_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Aux loss for [u, u_x, u_y, u_xx, u_yy]. Pushes ∂f/∂u_xx → K·(1-u)."""
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=True, retain_graph=True,
+        )[0]  # (N, 5)
+        jvp_u_xx = grads[:, 3]  # ∂f/∂u_xx ≈ K·(1-u)
         one_minus_u = 1.0 - features[:, 0]
         target_per_point = self.K * one_minus_u
         diff = jvp_u_xx - target_per_point
