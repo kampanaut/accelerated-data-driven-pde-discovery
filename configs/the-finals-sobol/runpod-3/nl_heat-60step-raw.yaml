@@ -1,14 +1,14 @@
 experiment:
-  name: br-60step-raw
-  pde_type: br
-  seed: 2000000
+  name: nl_heat-60step-raw
+  pde_type: nl_heat
+  seed: 6000000
   device: cuda
 output:
-  base_dir: data/models/the-finals-sobol/runpod-2
+  base_dir: data/models/the-finals-sobol/runpod-3
 data:
-  meta_train_dir: data/datasets/br_train-2
-  meta_val_dir: data/datasets/br_val-2
-  meta_test_dir: data/datasets/br_test-2
+  meta_train_dir: data/datasets/nl_heat_train-2
+  meta_val_dir: data/datasets/nl_heat_val-1
+  meta_test_dir: data/datasets/nl_heat_test-1
 training:
   inner_lr: 0.01
   outer_lr: 0.0035
@@ -86,6 +86,6 @@ visualization:
   dpi: 300
   only: ""
   compare_experiments:
-  - br-60step-raw
+  - nl_heat-60step-raw
   exclude_suffixes_append: []
   exclude_max_iteration: 20
