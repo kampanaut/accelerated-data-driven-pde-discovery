@@ -109,8 +109,10 @@ def collect_features(
         f"Sampling {k_snapshots} timestep(s) per task, {n_points} spatial points each"
     )
 
-    # Build phase matrices once using first task's grid
-    first_task = task_class(files[0], device=device)
+    # Build phase matrices once using first task's grid.
+    # Force raw_raw to get the full derivative layout for collinearity analysis.
+    analyser_mode = "raw_raw" if "raw_raw" in getattr(task_class, "_supported_input_modes", ("library",)) else "library"
+    first_task = task_class(files[0], device=device, input_mode=analyser_mode)
     gen = torch.Generator(device=device)
     gen.manual_seed(seed)
     x_pts = (
@@ -139,16 +141,28 @@ def collect_features(
     all_targets = []
 
     for f in files:
-        task = task_class(f, device=device)
+        task = task_class(f, device=device, input_mode=analyser_mode)
         indices = np.linspace(0, task.n_snapshots - 1, k_snapshots, dtype=int)
 
         for idx in indices:
             snap_idx = torch.tensor([int(idx)])
-            feats, tgts = task.evaluate_collocations(
+            feats_list, tgts = task.evaluate_collocations(
                 snap_idx, E_x_batch, E_y_batch
             )
-            # feats: (1, n_points, n_features), tgts: (1, n_points, n_targets)
-            all_features.append(feats[0].cpu())
+            # feats_list: list of (1, n_points, n_mixer_feats) per mixer
+            # tgts: (1, n_points, n_targets)
+            # Reconstruct the old 10/5-column raw layout from per-mixer features.
+            if n_feat == 10:
+                # 2-field PDE: mixer_u has [u, v, u_x, u_y, u_xx, u_yy],
+                #              mixer_v has [u, v, v_x, v_y, v_xx, v_yy].
+                # Assemble: [u, v, u_x, u_y, u_xx, u_yy, v_x, v_y, v_xx, v_yy]
+                mu = feats_list[0][0]  # (n_points, 6)
+                mv = feats_list[1][0]  # (n_points, 6)
+                feats = torch.cat([mu[:, :2], mu[:, 2:], mv[:, 2:]], dim=1)
+            else:
+                # 1-field PDE: single mixer with [u, u_x, u_y, u_xx, u_yy]
+                feats = feats_list[0][0]  # (n_points, 5)
+            all_features.append(feats.cpu())
             all_targets.append(tgts[0].cpu())
 
     features = torch.cat(all_features, dim=0)
