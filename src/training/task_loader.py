@@ -115,7 +115,7 @@ class PDETask(ABC):
         self.npz_path = Path(npz_path)
         self.device = device
         self.input_mode = input_mode
-        valid_modes = ("library", "raw", "raw_raw")
+        valid_modes = ("library", "raw", "raw_raw", "precompose")
         if input_mode not in valid_modes:
             raise ValueError(
                 f"Unknown input_mode '{input_mode}'. Must be one of {valid_modes}."
@@ -2656,7 +2656,7 @@ class NLHeatEquationTask(PDETask):
     Diffusion coefficient: K
     """
 
-    _supported_input_modes = ("library", "raw", "raw_raw")
+    _supported_input_modes = ("library", "raw", "raw_raw", "precompose")
     n_features: int = 5
     n_targets: int = 1
     jacobian_plot_type: str = "scatter"
@@ -2675,6 +2675,12 @@ class NLHeatEquationTask(PDETask):
             self.evaluate_collocations = self._evaluate_collocations_raw_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw_raw  # type: ignore[assignment]
+        elif self.input_mode == "precompose":
+            self._structural_names = [["(1-u)(u_xx+u_yy)"]]
+            self._aux_names = [["K"]]
+            self.evaluate_collocations = self._evaluate_collocations_precompose  # type: ignore[assignment]
+            self.extract_coefficients = self._extract_coefficients_precompose  # type: ignore[assignment]
+            self.auxiliary_losses = self._auxiliary_losses_precompose  # type: ignore[assignment]
         else:
             self._structural_names = [["1-u", "u_xx+u_yy"]]
             self._aux_names = [["K"]]
@@ -3136,6 +3142,99 @@ class NLHeatEquationTask(PDETask):
         aux_K_yy = (diff_yy * diff_yy).mean() / denom
 
         return {"K_from_uxx": aux_K_xx, "K_from_uyy": aux_K_yy}
+
+    # ── Precomposed implementations (input_mode="precompose") ────
+    #    Feature: [(1-u)(u_xx+u_yy)] — single column, target is K · feature.
+    #    Mixer becomes a linear scalar f(c) = K·c. No bilinear cross-talk.
+
+    def _evaluate_collocations_precompose(
+        self,
+        snap_idx_list: torch.Tensor,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Single feature c = (1-u)(u_xx+u_yy). Target: u_t = K·c."""
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat}, noise_level, noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+
+        coeff_batch = torch.stack(
+            [u_hat, neg_kx2 * u_hat, neg_ky2 * u_hat], dim=0,
+        )
+        u, u_xx, u_yy = fourier_eval_2d(coeff_batch, E_x, E_y, self.device)
+
+        c = (1.0 - u) * (u_xx + u_yy)
+        mixer_0_features = torch.stack([c], dim=2)
+        u_t = self.K * c
+        targets = torch.stack([u_t], dim=2)
+        return [mixer_0_features.double()], targets.double()
+
+    def _extract_coefficients_precompose(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
+        """Recover K directly: ∂f/∂c ≈ K (constant). Regression slope = K."""
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=False, retain_graph=False,
+        )[0]  # (N, 1)
+        jvp_c = grads[:, 0].detach()  # ≈ K per point
+        c = features[:, 0].detach()
+        # Slope via OLS of jvp_c (constant ≈ K) against c — but since jvp is
+        # constant, this equals mean(jvp_c) when c has nonzero variance.
+        # Use mean extraction (simpler, direct for linear function).
+        K_slope = jvp_c.mean()
+        K_std = jvp_c.std()
+        return {
+            "K": {
+                "regression": CoefficientExtraction(
+                    mean=K_slope.detach(), std=K_std.detach(),
+                    values=jvp_c,
+                    regressor=c, regressor_name="(1-u)(u_xx+u_yy)",
+                ),
+            },
+        }
+
+    def _auxiliary_losses_precompose(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Aux loss: ∂f/∂c → K at every point. Scalar target, well-conditioned."""
+        if mixer_idx != 0:
+            raise ValueError(
+                f"NLHeat has n_outputs=1; mixer_idx must be 0, got {mixer_idx}"
+            )
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(0, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=True, retain_graph=True,
+        )[0]  # (N, 1)
+        jvp_c = grads[:, 0]  # ≈ K
+        target_per_point = torch.full_like(jvp_c, self.K)
+        diff = jvp_c - target_per_point
+        mse = (diff * diff).mean()
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        return {"K": mse / denom}
 
     def inject_noise_at_source(
         self,
