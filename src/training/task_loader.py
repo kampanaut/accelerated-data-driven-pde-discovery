@@ -2558,21 +2558,22 @@ class HeatEquationTask(PDETask):
         feats_det = features.detach()
         jvp_uxx = grads[:, 0].detach()  # ≈ D per point
         jvp_uyy = grads[:, 1].detach()  # ≈ D per point
+        lap = feats_det[:, 0] + feats_det[:, 1]
         return {
             "D": {
                 "from_uxx": CoefficientExtraction(
                     mean=jvp_uxx.mean(),
                     std=jvp_uxx.std(),
                     values=jvp_uxx.detach(),
-                    regressor=feats_det[:, 0],
-                    regressor_name="u_xx",
+                    regressor=lap,
+                    regressor_name="u_xx+u_yy",
                 ),
                 "from_uyy": CoefficientExtraction(
                     mean=jvp_uyy.mean(),
                     std=jvp_uyy.std(),
                     values=jvp_uyy.detach(),
-                    regressor=feats_det[:, 1],
-                    regressor_name="u_yy",
+                    regressor=lap,
+                    regressor_name="u_xx+uyy",
                 ),
             },
         }
