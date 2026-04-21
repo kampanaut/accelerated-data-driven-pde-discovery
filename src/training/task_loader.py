@@ -1032,7 +1032,7 @@ class BrusselatorTask(PDETask):
             jvp_u_yy = grads[:, 3]   # ≈ D_u
 
             # D_u: clean
-            D_u_vals = jvp_u_xx
+            D_u_vals = (jvp_u_xx + jvp_u_yy) / 2
 
             # k2: correct for nonlinear leak
             k2_vals = -1.0 - jvp_u + 2.0 * u * v
@@ -1043,7 +1043,7 @@ class BrusselatorTask(PDETask):
             k1_vals = mixer_output - D_u_vals * (u_xx + u_yy) + (k2_vals + 1.0) * u - u * u * v
 
             return {
-                "D_u": {"jvp_u_xx":  CoefficientExtraction(mean=D_u_vals.mean(), std=D_u_vals.std(), values=D_u_vals, regressor=u_xx, regressor_name="u_xx")},
+                "D_u": {"(jvp_u_xx + jvp_u_yy) / 2":  CoefficientExtraction(mean=D_u_vals.mean(), std=D_u_vals.std(), values=D_u_vals, regressor=u_xx, regressor_name="u_xx")},
                 "k2":  {"corrected": CoefficientExtraction(mean=k2_vals.mean(),  std=k2_vals.std(),  values=k2_vals,  regressor=u,    regressor_name="u")},
                 "k1":  {"residual":  CoefficientExtraction(mean=k1_vals.mean(),  std=k1_vals.std(),  values=k1_vals,  regressor=u,    regressor_name="u")},
             }
@@ -1051,12 +1051,13 @@ class BrusselatorTask(PDETask):
         # mixer_v (idx == 1): features [u, v, v_xx, v_yy]
         jvp_u = grads[:, 0]      # ≈ k2 - 2uv
         jvp_v_xx = grads[:, 2]   # ≈ D_v
+        jvp_v_yy = grads[:, 3]
 
-        D_v_vals = jvp_v_xx
+        D_v_vals = (jvp_v_xx + jvp_v_yy) / 2
         k2_vals = jvp_u + 2.0 * u * v  # correct for -2uv leak
 
         return {
-            "D_v": {"jvp_v_xx":  CoefficientExtraction(mean=D_v_vals.mean(), std=D_v_vals.std(), values=D_v_vals, regressor=feats[:, 2], regressor_name="v_xx")},
+            "D_v": {"(jvp_v_xx + jvp_v_yy) / 2":  CoefficientExtraction(mean=D_v_vals.mean(), std=D_v_vals.std(), values=D_v_vals, regressor=feats[:, 2], regressor_name="v_xx")},
             "k2":  {"corrected": CoefficientExtraction(mean=k2_vals.mean(),  std=k2_vals.std(),  values=k2_vals,  regressor=u,           regressor_name="u")},
         }
 
