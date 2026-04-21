@@ -549,7 +549,7 @@ def evaluate_task(
                         mixer_idx=mixer_idx,
                         mixer_name=mixer_name,
                         mixer_outer_params=baseline_model.mixer_outer_params(mixer_idx),  # type: ignore[attr-defined]
-                        inner_params=baseline_model.mixer_inner_params(mixer_idx, anil_mode_effective),  # type: ignore[attr-defined]
+                        inner_params=baseline_model.mixer_inner_params(mixer_idx, "all"),  # type: ignore[attr-defined]
                         features=support_x_i,
                         targets=support_targets,
                         holdout_features=holdout_x_i,
