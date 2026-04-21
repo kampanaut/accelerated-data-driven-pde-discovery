@@ -348,7 +348,7 @@ def _compute_worse_flags(
       `per_mixer_holdout_losses` arrays have length 2 and we index by
       position in `sorted(fixed_steps)`. For SGD, they have length
       `inner_steps + 1` and we index directly by the step value.
-    - `coeff_steps[name]`: steps where MAML's `abs_error` for coefficient
+    - `coeff_steps[name]`: steps where MAML's `score` for coefficient
       `name` exceeds baseline's. Indexes into each coefficient's `per_step`
       list positionally.
     """
@@ -388,7 +388,7 @@ def _compute_worse_flags(
         for step_pos, step_val in enumerate(sorted_fixed_steps):
             if step_pos >= len(maml_snap.per_step) or step_pos >= len(baseline_snap.per_step):
                 continue
-            if maml_snap.per_step[step_pos].abs_error > baseline_snap.per_step[step_pos].abs_error:
+            if maml_snap.per_step[step_pos].score > baseline_snap.per_step[step_pos].score:
                 coeff_worse_steps.setdefault(coeff_name, []).append(step_val)
 
     return WorseFlags(loss_steps=loss_worse_steps, coeff_steps=coeff_worse_steps)

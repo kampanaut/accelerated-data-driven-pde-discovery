@@ -81,7 +81,7 @@ def assemble_method_result(
        `per_step_extractions[step]` is `{coeff_name: {formula_tag: Extraction}}`.
        We prefix each `formula_tag` with the mixer's name to produce
        `path_key = f"{mixer_name}.{formula_tag}"`, and collect across
-       mixers into one `{coeff_name: {path_key: RecoveryPath}}` dict per
+       mixers into one `{coeff_name: {path_key: PathCoefficientExtraction}}` dict per
        step. For coefficients that appear in multiple mixers (BR's k2,
        λ-ω's c), the merged dict has one entry per (mixer, formula)
        combination — downstream cross-path reconciliation in
@@ -117,7 +117,7 @@ def assemble_method_result(
     # inside this function body at call time.
     from src.evaluation.results import (
         FineTuneResult,
-        RecoveryPath,
+        PathCoefficientExtraction,
         build_method_result,
     )
 
@@ -134,9 +134,9 @@ def assemble_method_result(
     )
 
     # 2. Cross-mixer merge of per-step extractions
-    per_step_merged: List[Dict[str, Dict[str, RecoveryPath]]] = []
+    per_step_merged: List[Dict[str, Dict[str, PathCoefficientExtraction]]] = []
     for step in sorted_fixed_steps:
-        merged_for_step: Dict[str, Dict[str, RecoveryPath]] = {}
+        merged_for_step: Dict[str, Dict[str, PathCoefficientExtraction]] = {}
         for mixer_output in mixer_outputs:
             assert step in mixer_output.per_step_extractions, (
                 f"mixer '{mixer_output.mixer_name}' missing extraction snapshot "
@@ -149,10 +149,28 @@ def assemble_method_result(
                     merged_for_step[coeff_name] = {}
                 for formula_tag, extraction in formulas.items():
                     path_key = f"{mixer_output.mixer_name}.{formula_tag}"
-                    merged_for_step[coeff_name][path_key] = RecoveryPath(
+                    x = extraction.regressor
+                    y = extraction.values * extraction.regressor
+                    sl = float(
+                        (x * y).sum()
+                        / ((x * x).sum() + 1e-30)
+                    )
+                    ss_res = float(
+                        ((y - sl * x) ** 2).sum()
+                    )
+                    ss_tot = float(
+                        ((y - y.mean()) ** 2).sum()
+                    )
+                    r2 = (
+                        1.0 - (ss_res / ss_tot)
+                        if ss_tot > 0
+                        else 0.0
+                    )
+                    merged_for_step[coeff_name][path_key] = PathCoefficientExtraction(
                         mean=float(extraction.mean.item()),
                         std=float(extraction.std.item()),
                         regressor_name=extraction.regressor_name,
+                        r2=r2
                     )
         per_step_merged.append(merged_for_step)
 

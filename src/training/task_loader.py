@@ -58,12 +58,12 @@ class CoefficientExtraction:
     - `mean`: scalar tensor — mean across the holdout collocation points
       of the per-point extracted value. The "recovered coefficient"
       reported as the final answer for this path. Used for the
-      `RecoveryPath.mean` entry in the JSON schema.
+      `PathCoefficientExtraction.mean` entry in the JSON schema.
     - `std`: scalar tensor — dispersion of the per-point extracted values
       across the holdout. Tells you "how consistent is this path's
       estimate across points" — small std = mixer is nearly linear on
       the relevant feature, clean recovery; large std = per-point noise
-      or nonlinearity. Used for `RecoveryPath.std`.
+      or nonlinearity. Used for `PathCoefficientExtraction.std`.
     - `values`: per-point tensor shape `(holdout,)` — the raw extracted
       value at each collocation point, before reduction to mean/std.
       This is what histogram plots consume. `scripts/evaluate.py` stashes
@@ -436,7 +436,7 @@ class PDETask(ABC):
             producing recovery path keys like "u.jvp_lap_u", "v.jvp_u",
             "u.from_u2v". The per-coefficient cross-path reconciliation
             (mean, std, abs_error, pct_error) is computed over these path
-            entries to produce the PerStepRecovery entries in results.json.
+            entries to produce the PerStepExtractions entries in results.json.
         """
         pass
 

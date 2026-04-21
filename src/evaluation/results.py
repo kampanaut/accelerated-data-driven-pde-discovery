@@ -33,10 +33,10 @@ results.json structure:
             │       │   │   ├── coefficients: Dict[coeff_name, CoefficientSnapshot]
             │       │   │   │   └── CoefficientSnapshot
             │       │   │   │       ├── true_value: float
-            │       │   │   │       └── per_step: List[PerStepRecovery]  (one per fixed_step)
-            │       │   │   │           └── PerStepRecovery
-            │       │   │   │               ├── recoveries: Dict[path_key, RecoveryPath]
-            │       │   │   │               │   └── RecoveryPath(mean, std)
+            │       │   │   │       └── per_step: List[PerStepExtractions]  (one per fixed_step)
+            │       │   │   │           └── PerStepExtractions
+            │       │   │   │               ├── recoveries: Dict[path_key, PathCoefficientExtraction]
+            │       │   │   │               │   └── PathCoefficientExtraction(mean, std)
             │       │   │   │               ├── cross_path_mean: float
             │       │   │   │               ├── cross_path_std: float
             │       │   │   │               ├── abs_error: float
@@ -83,7 +83,7 @@ class FineTuneResult:
 
 
 @dataclass
-class RecoveryPath:
+class PathCoefficientExtraction:
     """One recovery path's estimate from the holdout batch.
 
     `mean` is the mean across collocation points of the per-point extracted
@@ -96,10 +96,11 @@ class RecoveryPath:
     mean: float = 0.0
     std: float = 0.0
     regressor_name: str = ""
+    r2: float = 0.0
 
 
 @dataclass
-class PerStepRecovery:
+class PerStepExtractions:
     """All recovery paths for one coefficient at one fixed_step, with reconciliation.
 
     `recoveries` is keyed by path name like "u.jvp_lap_u" or "v.neg1_minus_jvp_u".
@@ -122,11 +123,12 @@ class PerStepRecovery:
     magnitudes (a 0.18 abs error on D_u=2.58 is ~7%, same abs error on k1=4.5
     is ~4%). Set to 0.0 when `true_value == 0` to avoid division by zero.
     """
-    recoveries: Dict[str, RecoveryPath] = field(default_factory=dict)
+    recoveries: Dict[str, PathCoefficientExtraction] = field(default_factory=dict)
     cross_path_mean: float = 0.0
     cross_path_std: float = 0.0
     abs_error: float = 0.0
     pct_error: float = 0.0
+    score: float = 0.0
 
 
 @dataclass
@@ -139,7 +141,7 @@ class CoefficientSnapshot:
     `per_step[0].abs_error - per_step[-1].abs_error`.
     """
     true_value: float = 0.0
-    per_step: List[PerStepRecovery] = field(default_factory=list)
+    per_step: List[PerStepExtractions] = field(default_factory=list)
 
 
 @dataclass
@@ -508,7 +510,7 @@ class EvaluationResults:
 def build_method_result(
     fine_tune_result: FineTuneResult,
     true_coefficients: Dict[str, float],
-    per_step_extractions: List[Dict[str, Dict[str, RecoveryPath]]],
+    per_step_extractions: List[Dict[str, Dict[str, PathCoefficientExtraction]]],
     per_path_raw_values: Dict[str, np.ndarray],
     per_path_regressor_values: Optional[Dict[str, np.ndarray]] = None,
     pred_snapshots: Optional[np.ndarray] = None,
@@ -520,7 +522,7 @@ def build_method_result(
         true_coefficients: ground-truth values from the task, e.g.
             {"D_u": 2.58, "k1": 4.5, "k2": 11.63, "D_v": 13.22}
         per_step_extractions: list of length len(fixed_steps). Entry `i` is a
-            dict {coeff_name: {path_key: RecoveryPath}} — the extracted
+            dict {coeff_name: {path_key: PathCoefficientExtraction}} — the extracted
             recoveries from all mixers for the i-th fixed_step. The caller
             builds this by merging task.extract_coefficients(...) outputs
             across mixers, keying each path by "{mixer_name}.{formula_tag}".
@@ -529,7 +531,7 @@ def build_method_result(
 
     Cross-path reconciliation (cross_path_mean, cross_path_std, abs_error,
     pct_error) is computed here from the per-path means in each
-    PerStepRecovery, then SnapshotSummary.avg_error_pct_per_step is
+    PerStepExtractions, then SnapshotSummary.avg_error_pct_per_step is
     aggregated as the mean of per-coefficient pct_error across all
     coefficients at each step.
     """
@@ -541,26 +543,30 @@ def build_method_result(
     coefficients: Dict[str, CoefficientSnapshot] = {}
     for name in sorted(all_coeff_names):
         true_val = float(true_coefficients.get(name, 0.0))
-        per_step_list: List[PerStepRecovery] = []
+        per_step_list: List[PerStepExtractions] = []
         for step_data in per_step_extractions:
             paths = step_data.get(name, {})
             path_means = [p.mean for p in paths.values()]
+            path_r2 = [p.r2 for p in paths.values()]
             if path_means:
                 cross_mean = float(np.mean(path_means))
                 cross_std = float(np.std(path_means)) if len(path_means) > 1 else 0.0
                 abs_err = abs(cross_mean - true_val)
                 pct_err = (100.0 * abs_err / abs(true_val)) if true_val != 0.0 else 0.0
+                score = float(pct_err * (1.0 - np.clip(np.mean(path_r2), -1, 1)))
             else:
                 cross_mean = 0.0
                 cross_std = 0.0
                 abs_err = 0.0
                 pct_err = 0.0
-            per_step_list.append(PerStepRecovery(
+                score = 0.0
+            per_step_list.append(PerStepExtractions(
                 recoveries=dict(paths),
                 cross_path_mean=cross_mean,
                 cross_path_std=cross_std,
                 abs_error=abs_err,
                 pct_error=pct_err,
+                score=score
             ))
         coefficients[name] = CoefficientSnapshot(
             true_value=true_val,
@@ -640,13 +646,14 @@ def _summary_to_json(summary: SnapshotSummary) -> Dict[str, Any]:
             "per_step": [
                 {
                     "recoveries": {
-                        path: {"mean": rp.mean, "std": rp.std, "regressor_name": rp.regressor_name}
+                        path: {"mean": rp.mean, "std": rp.std, "regressor_name": rp.regressor_name, "r2": rp.r2}
                         for path, rp in ps.recoveries.items()
                     },
                     "cross_path_mean": ps.cross_path_mean,
                     "cross_path_std": ps.cross_path_std,
                     "abs_error": ps.abs_error,
                     "pct_error": ps.pct_error,
+                    "score": ps.score
                 }
                 for ps in snap.per_step
             ],
@@ -661,18 +668,19 @@ def _summary_from_json(d: Dict[str, Any]) -> SnapshotSummary:
     """Inverse of `_summary_to_json`."""
     coefficients: Dict[str, CoefficientSnapshot] = {}
     for name, snap_dict in d.get("coefficients", {}).items():
-        per_step: List[PerStepRecovery] = []
+        per_step: List[PerStepExtractions] = []
         for ps_dict in snap_dict.get("per_step", []):
             recoveries = {
-                path: RecoveryPath(mean=rp["mean"], std=rp["std"], regressor_name=rp.get("regressor_name", ""))
+                path: PathCoefficientExtraction(mean=rp["mean"], std=rp["std"], regressor_name=rp.get("regressor_name", ""), r2=rp.get("r2", 0.0))
                 for path, rp in ps_dict.get("recoveries", {}).items()
             }
-            per_step.append(PerStepRecovery(
+            per_step.append(PerStepExtractions(
                 recoveries=recoveries,
                 cross_path_mean=ps_dict.get("cross_path_mean", 0.0),
                 cross_path_std=ps_dict.get("cross_path_std", 0.0),
                 abs_error=ps_dict.get("abs_error", 0.0),
                 pct_error=ps_dict.get("pct_error", 0.0),
+                score=ps_dict.get("score", 0.0)
             ))
         coefficients[name] = CoefficientSnapshot(
             true_value=snap_dict.get("true_value", 0.0),
