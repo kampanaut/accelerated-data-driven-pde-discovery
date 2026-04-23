@@ -63,7 +63,7 @@ uv sync
 chmod u+x scripts/*.sh
 
 # Download datasets
-# Usage: ./install.sh [heat|nl_heat|br|all]  (no flag = all)
+# Usage: ./install.sh [heat|nl_heat|br|fhn|all]  (no flag = all)
 REPO="kampanaut/maml-pde-datasets"
 
 download_heat() {
@@ -95,6 +95,15 @@ download_br() {
         hf download $REPO --repo-type dataset --include "br_test-2/*" --local-dir data/datasets
 }
 
+download_fhn() {
+    [ -d data/datasets/fhn_train-1 ] && echo "fhn_train-1 exists, skipping" || \
+        hf download $REPO --repo-type dataset --include "fhn_train-1/*" --local-dir data/datasets
+    [ -d data/datasets/fhn_val-1 ] && echo "fhn_val-1 exists, skipping" || \
+        hf download $REPO --repo-type dataset --include "fhn_val-1/*" --local-dir data/datasets
+    [ -d data/datasets/fhn_test-1 ] && echo "fhn_test-1 exists, skipping" || \
+        hf download $REPO --repo-type dataset --include "fhn_test-1/*" --local-dir data/datasets
+}
+
 download_dir() {
     local dir="$1"
     [ -d "data/datasets/$dir" ] && echo "$dir exists, skipping" || \
@@ -107,7 +116,8 @@ for ds in $DATASETS; do
         heat)    download_heat ;;
         nl_heat) download_nl_heat ;;
         br)      download_br ;;
-        all)     download_heat && download_nl_heat && download_br ;;
+        fhn)     download_fhn ;;
+        all)     download_heat && download_nl_heat && download_br && download_fhn ;;
         *)       download_dir "$ds" ;;
     esac
 done
