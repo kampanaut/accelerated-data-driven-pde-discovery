@@ -1705,6 +1705,32 @@ class LambdaOmegaTask(PDETask):
     Kinetic parameters: a, c
     """
 
+    _supported_input_modes = ("library", "raw")
+
+    def __init__(self, npz_path: Path, device: str = "cuda", input_mode: str = "library"):
+        super().__init__(npz_path, device, input_mode=input_mode)
+        if self.input_mode == "raw":
+            self._structural_names = [
+                ["u", "v", "u_xx", "u_yy"],
+                ["u", "v", "v_xx", "v_yy"],
+            ]
+            self._aux_names = [
+                ["D_u_from_uxx", "D_u_from_uyy", "a_jvp_u", "c_jvp_v"],
+                ["D_v_from_vxx", "D_v_from_vyy", "c_jvp_u", "a_jvp_v"],
+            ]
+            self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
+            self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
+            self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
+        else:
+            self._structural_names = [
+                ["u_xx+u_yy", "u", "u³", "u·v²", "u²·v", "v³"],
+                ["v_xx+v_yy", "v", "u³", "u·v²", "u²·v", "v³"],
+            ]
+            self._aux_names = [
+                ["D_u", "a_from_u", "c_from_u2v", "c_from_v3"],
+                ["D_v", "a_from_v", "c_from_u3", "c_from_uv2"],
+            ]
+
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
         self.ny, self.nx = data["u_hat"].shape[1], data["u_hat"].shape[2]
@@ -1886,17 +1912,11 @@ class LambdaOmegaTask(PDETask):
 
     @property
     def structural_feature_names(self) -> list[list[str]]:
-        return [
-            ["u_xx+u_yy", "u", "u³", "u·v²", "u²·v", "v³"],
-            ["v_xx+v_yy", "v", "u³", "u·v²", "u²·v", "v³"],
-        ]
+        return self._structural_names
 
     @property
     def aux_loss_names(self) -> list[list[str]]:
-        return [
-            ["D_u", "a_from_u", "c_from_u2v", "c_from_v3"],
-            ["D_v", "a_from_v", "c_from_u3", "c_from_uv2"],
-        ]
+        return self._aux_names
 
     def extract_coefficients(
         self,
@@ -2095,6 +2115,277 @@ class LambdaOmegaTask(PDETask):
             "a_from_v": aux_a_from_v,
             "c_from_u3": aux_c_from_u3,
             "c_from_uv2": aux_c_from_uv2,
+        }
+
+    # ── Raw-features implementations (input_mode="raw") ────────────
+
+    def _evaluate_collocations_raw(
+        self,
+        snap_idx_list: torch.Tensor,
+        E_x: torch.Tensor,
+        E_y: torch.Tensor,
+        noise_level: float = 0.0,
+        noise_generator: Optional[torch.Generator] = None,
+    ) -> Tuple[list[torch.Tensor], torch.Tensor]:
+        """Raw features [u, v, u_xx, u_yy] / [u, v, v_xx, v_yy] — no cubic pre-composition."""
+        neg_kx2 = -((self.kx.unsqueeze(0)) ** 2)
+        neg_ky2 = -((self.ky.unsqueeze(1)) ** 2)
+
+        u_hat = self.u_hat[snap_idx_list].to(device=self.device)
+        v_hat = self.v_hat[snap_idx_list].to(device=self.device)
+
+        if noise_level > 0.0:
+            noisy = self.inject_noise_at_source(
+                {"u_hat": u_hat, "v_hat": v_hat}, noise_level, noise_generator,
+            )
+            u_hat = noisy["u_hat"]
+            v_hat = noisy["v_hat"]
+
+        coeff_batch = torch.stack([
+            u_hat, v_hat,
+            neg_kx2 * u_hat, neg_ky2 * u_hat,
+            neg_kx2 * v_hat, neg_ky2 * v_hat,
+        ], dim=0)
+
+        u, v, u_xx, u_yy, v_xx, v_yy = fourier_eval_2d(
+            coeff_batch, E_x, E_y, self.device,
+        )
+
+        lap_u = u_xx + u_yy
+        lap_v = v_xx + v_yy
+        u3 = u * u * u
+        u_v2 = u * v * v
+        u2_v = u * u * v
+        v3 = v * v * v
+
+        u_t = self.D_u * lap_u + self.a * u - u3 - u_v2 - self.c * u2_v - self.c * v3
+        v_t = self.D_v * lap_v + self.a * v + self.c * u3 + self.c * u_v2 - u2_v - v3
+
+        mixer_u_features = torch.stack([u, v, u_xx, u_yy], dim=2)
+        mixer_v_features = torch.stack([u, v, v_xx, v_yy], dim=2)
+        targets = torch.stack([u_t, v_t], dim=2)
+
+        return [mixer_u_features.double(), mixer_v_features.double()], targets.double()
+
+    def _extract_coefficients_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+    ) -> dict[str, dict[str, CoefficientExtraction]]:
+        """Recover (D_u or D_v) via averaged Laplacian JVP, and (a, c) via joint OLS
+        over the two chain-rule Jacobian identities for this mixer.
+
+        Per-point (a_i, c_i) are computed from the exact pointwise solve and stored
+        as `values`. The `mean` is the OLS aggregate — which differs from per-point
+        mean by variance-weighting and is the principled estimate.
+        """
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Lambda-Omega has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=False, retain_graph=False,
+        )[0].detach()
+
+        feats = features.detach()
+        u = feats[:, 0]
+        v = feats[:, 1]
+        N = u.shape[0]
+
+        if mixer_idx == 0:
+            jvp_u = grads[:, 0]
+            jvp_v = grads[:, 1]
+            jvp_uxx = grads[:, 2]
+            jvp_uyy = grads[:, 3]
+
+            # D_u via averaged Laplacian JVPs (symmetric to training dual-aux)
+            D_u_vals = (jvp_uxx + jvp_uyy) / 2.0
+            lap_u = feats[:, 2] + feats[:, 3]
+
+            # Joint OLS for (a, c) using two identities:
+            #   jvp_u + 3u² + v² = a · 1 + c · (-2uv)          [∂u_t/∂u]
+            #   jvp_v + 2uv      = a · 0 + c · (-(u²+3v²))     [∂u_t/∂v]
+            y_A = jvp_u + 3.0 * u * u + v * v
+            y_B = jvp_v + 2.0 * u * v
+            X = torch.zeros(2 * N, 2, dtype=y_A.dtype, device=y_A.device)
+            X[:N, 0] = 1.0
+            X[:N, 1] = -2.0 * u * v
+            X[N:, 0] = 0.0
+            X[N:, 1] = -(u * u + 3.0 * v * v)
+            y = torch.cat([y_A, y_B], dim=0)
+            sol = torch.linalg.lstsq(X, y).solution
+            a_ols = sol[0].detach()
+            c_ols = sol[1].detach()
+
+            # Per-point pointwise solve (for values / R²)
+            denom = (u * u + 3.0 * v * v).clamp(min=1e-12)
+            c_vals = -(jvp_v + 2.0 * u * v) / denom
+            a_vals = jvp_u + 3.0 * u * u + v * v + 2.0 * u * v * c_vals
+
+            return {
+                "D_u": {
+                    "lap_avg": CoefficientExtraction(
+                        mean=D_u_vals.mean(),
+                        std=D_u_vals.std(),
+                        values=D_u_vals,
+                        regressor=lap_u,
+                        regressor_name="u_xx+u_yy",
+                    )
+                },
+                "a": {
+                    "ols_mixer_u": CoefficientExtraction(
+                        mean=a_ols,
+                        std=a_vals.std(),
+                        values=a_vals,
+                        regressor=u,
+                        regressor_name="u",
+                    )
+                },
+                "c": {
+                    "ols_mixer_u": CoefficientExtraction(
+                        mean=c_ols,
+                        std=c_vals.std(),
+                        values=c_vals,
+                        regressor=u * v,
+                        regressor_name="u·v",
+                    )
+                },
+            }
+
+        # mixer_idx == 1; features [u, v, v_xx, v_yy]
+        jvp_u = grads[:, 0]
+        jvp_v = grads[:, 1]
+        jvp_vxx = grads[:, 2]
+        jvp_vyy = grads[:, 3]
+
+        D_v_vals = (jvp_vxx + jvp_vyy) / 2.0
+        lap_v = feats[:, 2] + feats[:, 3]
+
+        # Joint OLS for (a, c) using two identities:
+        #   jvp_u + 2uv        = a · 0 + c · (3u²+v²)    [∂v_t/∂u]
+        #   jvp_v + u² + 3v²   = a · 1 + c · (2uv)       [∂v_t/∂v]
+        y_C = jvp_u + 2.0 * u * v
+        y_D = jvp_v + u * u + 3.0 * v * v
+        X = torch.zeros(2 * N, 2, dtype=y_C.dtype, device=y_C.device)
+        X[:N, 0] = 0.0
+        X[:N, 1] = 3.0 * u * u + v * v
+        X[N:, 0] = 1.0
+        X[N:, 1] = 2.0 * u * v
+        y = torch.cat([y_C, y_D], dim=0)
+        sol = torch.linalg.lstsq(X, y).solution
+        a_ols = sol[0].detach()
+        c_ols = sol[1].detach()
+
+        denom = (3.0 * u * u + v * v).clamp(min=1e-12)
+        c_vals = (jvp_u + 2.0 * u * v) / denom
+        a_vals = jvp_v + u * u + 3.0 * v * v - 2.0 * u * v * c_vals
+
+        return {
+            "D_v": {
+                "lap_avg": CoefficientExtraction(
+                    mean=D_v_vals.mean(),
+                    std=D_v_vals.std(),
+                    values=D_v_vals,
+                    regressor=lap_v,
+                    regressor_name="v_xx+v_yy",
+                )
+            },
+            "a": {
+                "ols_mixer_v": CoefficientExtraction(
+                    mean=a_ols,
+                    std=a_vals.std(),
+                    values=a_vals,
+                    regressor=v,
+                    regressor_name="v",
+                )
+            },
+            "c": {
+                "ols_mixer_v": CoefficientExtraction(
+                    mean=c_ols,
+                    std=c_vals.std(),
+                    values=c_vals,
+                    regressor=u * v,
+                    regressor_name="u·v",
+                )
+            },
+        }
+
+    def _auxiliary_losses_raw(
+        self,
+        mixer_idx: int,
+        fast_model,
+        features: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Aux losses for raw-mode λ-ω — supervises each Jacobian identity against
+        its chain-rule-corrected analytical target using known coefficients.
+        """
+        del targets
+        if mixer_idx not in (0, 1):
+            raise ValueError(
+                f"Lambda-Omega has n_outputs=2; mixer_idx must be 0 or 1, got {mixer_idx}"
+            )
+
+        features_grad = features.detach().clone().requires_grad_(True)
+        output = fast_model.forward_one(mixer_idx, features_grad)
+        grads = torch.autograd.grad(
+            output.sum(), features_grad,
+            create_graph=True, retain_graph=True,
+        )[0]  # (N, 4)
+
+        u = features_grad[:, 0]
+        v = features_grad[:, 1]
+
+        def _nmse(quantity: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+            diff = quantity - target
+            mse = (diff * diff).mean()
+            denom = (target * target).mean().clamp(min=1e-12)
+            return mse / denom
+
+        if mixer_idx == 0:
+            # Dual D_u — both Laplacian partials target the scalar D_u
+            D_u_target = torch.full_like(grads[:, 2], self.D_u)
+            aux_D_u_xx = _nmse(grads[:, 2], D_u_target)
+            aux_D_u_yy = _nmse(grads[:, 3], D_u_target)
+
+            # ∂u_t/∂u target: a - 3u² - v² - 2c·uv
+            target_jvp_u = self.a - 3.0 * u * u - v * v - 2.0 * self.c * u * v
+            aux_reaction_u = _nmse(grads[:, 0], target_jvp_u)
+
+            # ∂u_t/∂v target: -2uv - c·u² - 3c·v²
+            target_jvp_v = -2.0 * u * v - self.c * u * u - 3.0 * self.c * v * v
+            aux_reaction_v = _nmse(grads[:, 1], target_jvp_v)
+
+            return {
+                "D_u_from_uxx": aux_D_u_xx,
+                "D_u_from_uyy": aux_D_u_yy,
+                "a_jvp_u": aux_reaction_u,
+                "c_jvp_v": aux_reaction_v,
+            }
+
+        # mixer_idx == 1
+        D_v_target = torch.full_like(grads[:, 2], self.D_v)
+        aux_D_v_xx = _nmse(grads[:, 2], D_v_target)
+        aux_D_v_yy = _nmse(grads[:, 3], D_v_target)
+
+        # ∂v_t/∂u target: 3c·u² + c·v² - 2uv
+        target_jvp_u = 3.0 * self.c * u * u + self.c * v * v - 2.0 * u * v
+        aux_reaction_u = _nmse(grads[:, 0], target_jvp_u)
+
+        # ∂v_t/∂v target: a + 2c·uv - u² - 3v²
+        target_jvp_v = self.a + 2.0 * self.c * u * v - u * u - 3.0 * v * v
+        aux_reaction_v = _nmse(grads[:, 1], target_jvp_v)
+
+        return {
+            "D_v_from_vxx": aux_D_v_xx,
+            "D_v_from_vyy": aux_D_v_yy,
+            "c_jvp_u": aux_reaction_u,
+            "a_jvp_v": aux_reaction_v,
         }
 
     def inject_noise_at_source(

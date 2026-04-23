@@ -22,8 +22,9 @@ show the recovered points sitting exactly on the truth (or at the truth value
 in number-line mode), every histogram should be a delta spike, and MAML and
 Baseline panels should be visually identical.
 
-Currently implemented oracles: BR. Other PDEs (FHN, λ-ω, NS, Heat, NLHeat)
-will be added as separate oracle classes following the same pattern.
+Currently implemented oracles: BR, λ-ω (library + raw). Other PDEs (FHN, NS,
+Heat, NLHeat) will be added as separate oracle classes following the same
+pattern.
 
 Usage:
     uv run python scripts/oracle_eval.py --pde br
@@ -57,6 +58,7 @@ from src.evaluation.results import (
 )
 from src.training.task_loader import (
     BrusselatorTask,
+    LambdaOmegaTask,
     MetaLearningDataLoader,
     PDETask,
     TASK_REGISTRY,
@@ -109,6 +111,83 @@ class BrusselatorOracle(nn.Module):
         raise ValueError(f"BR has 2 mixers; got mixer_idx={mixer_idx}")
 
 
+class LambdaOmegaOracleLibrary(nn.Module):
+    """Functional oracle for λ-ω library mode. Implements the exact PDE RHS
+    as a linear combination over the pre-composed cubic features.
+
+    λ-ω equations (expanded form):
+        u_t = D_u·∇²u + a·u - u³ - u·v² - c·u²·v - c·v³
+        v_t = D_v·∇²v + a·v + c·u³ + c·u·v² - u²·v - v³
+
+    Mixer libraries:
+        mixer_u: [u_xx+u_yy, u, u³, u·v², u²·v, v³]
+            weights = (D_u, a, -1, -1, -c, -c)
+        mixer_v: [v_xx+v_yy, v, u³, u·v², u²·v, v³]
+            weights = (D_v, a, c, c, -1, -1)
+    """
+
+    def __init__(self, D_u: float, D_v: float, a: float, c: float):
+        super().__init__()
+        self.D_u = float(D_u)
+        self.D_v = float(D_v)
+        self.a = float(a)
+        self.c = float(c)
+
+    def forward_one(self, mixer_idx: int, features: torch.Tensor) -> torch.Tensor:
+        if mixer_idx == 0:
+            return (
+                self.D_u * features[:, 0] + self.a * features[:, 1]
+                - features[:, 2] - features[:, 3]
+                - self.c * features[:, 4] - self.c * features[:, 5]
+            )
+        if mixer_idx == 1:
+            return (
+                self.D_v * features[:, 0] + self.a * features[:, 1]
+                + self.c * features[:, 2] + self.c * features[:, 3]
+                - features[:, 4] - features[:, 5]
+            )
+        raise ValueError(f"λ-ω has 2 mixers; got mixer_idx={mixer_idx}")
+
+
+class LambdaOmegaOracleRaw(nn.Module):
+    """Functional oracle for λ-ω raw mode. Reconstructs the full cubic PDE
+    RHS from raw state + Laplacian features.
+
+    Mixer 0 features: [u, v, u_xx, u_yy]
+        u_t = D_u·(u_xx+u_yy) + a·u - u³ - u·v² - c·u²·v - c·v³
+    Mixer 1 features: [u, v, v_xx, v_yy]
+        v_t = D_v·(v_xx+v_yy) + a·v + c·u³ + c·u·v² - u²·v - v³
+    """
+
+    def __init__(self, D_u: float, D_v: float, a: float, c: float):
+        super().__init__()
+        self.D_u = float(D_u)
+        self.D_v = float(D_v)
+        self.a = float(a)
+        self.c = float(c)
+
+    def forward_one(self, mixer_idx: int, features: torch.Tensor) -> torch.Tensor:
+        u = features[:, 0]
+        v = features[:, 1]
+        u3 = u * u * u
+        u_v2 = u * v * v
+        u2_v = u * u * v
+        v3 = v * v * v
+        if mixer_idx == 0:
+            lap = features[:, 2] + features[:, 3]
+            return (
+                self.D_u * lap + self.a * u
+                - u3 - u_v2 - self.c * u2_v - self.c * v3
+            )
+        if mixer_idx == 1:
+            lap = features[:, 2] + features[:, 3]
+            return (
+                self.D_v * lap + self.a * v
+                + self.c * u3 + self.c * u_v2 - u2_v - v3
+            )
+        raise ValueError(f"λ-ω has 2 mixers; got mixer_idx={mixer_idx}")
+
+
 def build_oracle(task: PDETask) -> Any:
     """Dispatch to the per-PDE oracle constructor.
 
@@ -125,6 +204,11 @@ def build_oracle(task: PDETask) -> Any:
             k1=task.k1,
             k2=task.k2,
         )
+    if isinstance(task, LambdaOmegaTask):
+        kwargs = dict(D_u=task.D_u, D_v=task.D_v, a=task.a, c=task.c)
+        if task.input_mode == "raw":
+            return LambdaOmegaOracleRaw(**kwargs)
+        return LambdaOmegaOracleLibrary(**kwargs)
     raise NotImplementedError(
         f"Oracle for {type(task).__name__} not implemented yet. "
         f"Add a new *Oracle nn.Module and extend build_oracle()."
