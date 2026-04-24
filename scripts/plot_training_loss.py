@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import colorsys
 import json
 import sys
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ import numpy as np
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import yaml
 
@@ -30,6 +32,14 @@ PRECEDENCE = ["precompose", "library", "raw"]
 SMOOTH_WIN = 50
 PANEL_W = 5.0
 PANEL_H = 3.5
+AUX_LINESTYLES = [
+    "--",
+    ":",
+    "-.",
+    (0, (5, 1)),
+    (0, (3, 1, 1, 1)),
+    (0, (1, 1, 5, 1)),
+]
 
 
 @dataclass
@@ -168,22 +178,36 @@ def _exp_colors(exps: List[ExpData]) -> Dict[str, str]:
     return {e.name: cycle[i % len(cycle)] for i, e in enumerate(exps)}
 
 
+def _mixer_variant(base_color, mixer_idx: int):
+    """Lightness-shifted variant of base_color so mixers within an exp differ."""
+    offsets = [0.0, -0.22, 0.22, -0.40, 0.40]
+    r, g, b = mcolors.to_rgb(base_color)
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    delta = offsets[mixer_idx % len(offsets)]
+    new_l = max(0.15, min(0.85, l + delta))
+    return colorsys.hls_to_rgb(h, new_l, s)
+
+
+def _aux_style(aux_idx: int):
+    return AUX_LINESTYLES[aux_idx % len(AUX_LINESTYLES)]
+
+
 def plot_main_aux(exps: List[ExpData], out: Path) -> None:
     fig, ax = plt.subplots(figsize=(13, 7))
     exp_color = _exp_colors(exps)
     for e in exps:
-        for m_name, mh in e.mixers.items():
-            color = exp_color[e.name]
+        for mi, (m_name, mh) in enumerate(e.mixers.items()):
+            color = _mixer_variant(exp_color[e.name], mi)
             _plot_smoothed(
                 ax, e.iters, mh.mse_main,
                 label=f"{e.name} m[{m_name}] mse_main",
                 color=color, linestyle="-", linewidth=1.6,
             )
-            for aux_name, vals in mh.aux.items():
+            for ai, (aux_name, vals) in enumerate(sorted(mh.aux.items())):
                 _plot_smoothed(
                     ax, e.iters, vals,
                     label=f"{e.name} m[{m_name}] aux:{aux_name}",
-                    color=color, linestyle="--", linewidth=1.0, alpha=0.7,
+                    color=color, linestyle=_aux_style(ai), linewidth=1.0, alpha=0.85,
                 )
     _overlay_lr(ax, exps)
     ax.set_xlabel("Iteration")
@@ -216,18 +240,18 @@ def plot_kendall(exps: List[ExpData], out: Path) -> None:
     ax_top.grid(True, alpha=0.3)
 
     for e in exps:
-        for m_name, mh in e.mixers.items():
-            color = exp_color[e.name]
+        for mi, (m_name, mh) in enumerate(e.mixers.items()):
+            color = _mixer_variant(exp_color[e.name], mi)
             _plot_smoothed(
                 ax_bot, e.iters, mh.s_mse,
                 label=f"{e.name} m[{m_name}] s_mse",
                 color=color, linestyle="-", linewidth=1.4,
             )
-            for aux_name, vals in mh.s_aux.items():
+            for ai, (aux_name, vals) in enumerate(sorted(mh.s_aux.items())):
                 _plot_smoothed(
                     ax_bot, e.iters, vals,
                     label=f"{e.name} m[{m_name}] s_aux:{aux_name}",
-                    color=color, linestyle="--", linewidth=0.9, alpha=0.7,
+                    color=color, linestyle=_aux_style(ai), linewidth=0.9, alpha=0.85,
                 )
     _overlay_lr(ax_bot, exps)
     ax_bot.set_xlabel("Iteration")
