@@ -135,7 +135,12 @@ def plot_train_holdout_convergence(
     maml_plateau_step_std_per_mixer: Optional[dict[str, float]] = None,
     baseline_plateau_step_std_per_mixer: Optional[dict[str, float]] = None,
     fixed_steps: Optional[list[int]] = None,
-    loss_worse_steps: Optional[list[int]] = None,
+    kendall_worse_steps: Optional[list[int]] = None,
+    mse_worse_steps: Optional[list[int]] = None,
+    per_mixer_mse_main_holdout_maml: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
+    per_mixer_aux_holdout_maml: Optional[dict[str, dict[str, NDArray[np.floating[Any]]]]] = None,
+    per_mixer_mse_main_holdout_baseline: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
+    per_mixer_aux_holdout_baseline: Optional[dict[str, dict[str, NDArray[np.floating[Any]]]]] = None,
 ) -> pltf.Figure:
     """
     Generalization plot: per-mixer train vs holdout loss with plateau markers.
@@ -170,12 +175,39 @@ def plot_train_holdout_convergence(
         maml_plateau_step_std_per_mixer: per-mixer std for MAML plateau bands (agg mode)
         baseline_plateau_step_std_per_mixer: per-mixer std for baseline plateau bands (agg mode)
         fixed_steps: Steps at which Jacobian was extracted (for axvline markers)
-        loss_worse_steps: Subset of fixed_steps where MAML holdout > baseline
+        kendall_worse_steps: Subset of fixed_steps where MAML's Kendall-weighted
+            holdout > baseline. Used to color axvlines red.
+        mse_worse_steps: Subset of fixed_steps where MAML's per-mixer-summed
+            mse_main holdout > baseline. Unioned with kendall_worse_steps for
+            the axvline-color decision.
+        per_mixer_mse_main_holdout_maml: {mixer_name: array of length
+            len(fixed_steps)} for MAML's raw nMSE on holdout. When provided
+            (with the matching baseline argument), a second row of subplots
+            is added showing per-mixer mse_main + per-aux losses.
+        per_mixer_aux_holdout_maml: {mixer_name: {aux_name: array}} for
+            MAML aux losses, same shape semantics as the mse arg.
+        per_mixer_mse_main_holdout_baseline: same as above, baseline branch.
+        per_mixer_aux_holdout_baseline: same as above, baseline branch.
 
     Returns:
         matplotlib Figure object
     """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=True)
+    has_component_data = bool(
+        per_mixer_mse_main_holdout_maml or per_mixer_mse_main_holdout_baseline
+    )
+    if has_component_data:
+        fig, axes_2d = plt.subplots(
+            2, 2,
+            figsize=(figsize[0], int(figsize[1] * 1.6)),
+            gridspec_kw={"height_ratios": [1.0, 1.0]},
+        )
+        ax1, ax2 = axes_2d[0]
+        ax3, ax4 = axes_2d[1]
+        ax1.sharey(ax2)
+        ax3.sharey(ax4)
+    else:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=True)
+        ax3 = ax4 = None  # type: ignore[assignment]
 
     # Curve length: assume all mixers share the same x-axis (same fixed_steps
     # passed through fine_tune); use the first mixer to define `steps`.
@@ -193,8 +225,13 @@ def plot_train_holdout_convergence(
     h_suffix = f" (n={holdout_size})" if holdout_size is not None else ""
 
     # --- Fixed step markers (color-coded, drawn first so curves sit on top) ---
+    # MAML is "worse" at a step if either Kendall or MSE flag fires. Filename
+    # suffix preserves the per-axis distinction; this overlay just signals
+    # "something fired here".
     if fixed_steps is not None:
-        worse_set = set(loss_worse_steps) if loss_worse_steps is not None else set()
+        kendall_set = set(kendall_worse_steps) if kendall_worse_steps is not None else set()
+        mse_set = set(mse_worse_steps) if mse_worse_steps is not None else set()
+        worse_set = kendall_set | mse_set
         for s in fixed_steps:
             if s >= len(steps):
                 continue
@@ -314,6 +351,62 @@ def plot_train_holdout_convergence(
         va="bottom",
         ha="right",
     )
+
+    # --- Bottom row: per-mixer mse_main + per-aux holdout (if data present) ---
+    if has_component_data and ax3 is not None and ax4 is not None:
+        # Linestyles for per-aux disambiguation, matching plot_training_loss.py
+        aux_linestyles = ["--", ":", "-.", (0, (5, 1)), (0, (3, 1, 1, 1)), (0, (1, 1, 5, 1))]
+        # X-axis = sorted fixed_steps positions (one column per snapshot)
+        bottom_x = list(fixed_steps) if fixed_steps is not None else list(range(
+            max(
+                (len(arr) for arr in (per_mixer_mse_main_holdout_maml or {}).values()),
+                default=0,
+            )
+        ))
+
+        def _draw_bottom_panel(
+            ax: Any,
+            mse_dict: Optional[dict[str, NDArray[np.floating[Any]]]],
+            aux_dict: Optional[dict[str, dict[str, NDArray[np.floating[Any]]]]],
+            method_label: str,
+        ) -> None:
+            if mse_dict:
+                for mname, mse_arr in mse_dict.items():
+                    color = MIXER_COLORS.get(mname, "#7f7f7f")
+                    n = min(len(bottom_x), len(mse_arr))
+                    ax.plot(
+                        bottom_x[:n], mse_arr[:n],
+                        color=color, linestyle="-", linewidth=1.6,
+                        marker="o", markersize=4,
+                        label=f"[{mname}] mse_main",
+                    )
+            if aux_dict:
+                for mname, aux_per_name in aux_dict.items():
+                    color = MIXER_COLORS.get(mname, "#7f7f7f")
+                    for ai, (aname, aux_arr) in enumerate(sorted(aux_per_name.items())):
+                        n = min(len(bottom_x), len(aux_arr))
+                        ax.plot(
+                            bottom_x[:n], aux_arr[:n],
+                            color=color,
+                            linestyle=aux_linestyles[ai % len(aux_linestyles)],
+                            linewidth=1.0, alpha=0.8,
+                            label=f"[{mname}] aux:{aname}",
+                        )
+            ax.set_yscale("log")
+            ax.set_xlabel("Gradient Steps (fixed_steps only)")
+            ax.set_title(f"{method_label} — mse_main + aux (holdout)")
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=6, loc="best")
+
+        _draw_bottom_panel(
+            ax3, per_mixer_mse_main_holdout_maml, per_mixer_aux_holdout_maml,
+            "MAML (θ*)",
+        )
+        _draw_bottom_panel(
+            ax4, per_mixer_mse_main_holdout_baseline, per_mixer_aux_holdout_baseline,
+            "Baseline (θ₀)",
+        )
+        ax3.set_ylabel("Loss (raw nMSE / aux)")
 
     fig.suptitle(title)
     plt.tight_layout()
