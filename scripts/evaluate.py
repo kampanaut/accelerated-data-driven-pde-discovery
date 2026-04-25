@@ -362,16 +362,17 @@ def _compute_worse_flags(
       optimizer, the `per_mixer_holdout_losses` arrays have length 2 and we
       index by position in `sorted(fixed_steps)`. For SGD, they have length
       `inner_steps + 1` and we index directly by the step value.
-    - `mse_steps`: steps where MAML's per-mixer-summed `mse_main` (raw nMSE,
-      un-Kendall-weighted) on the holdout exceeds baseline's. Captured at
-      every fixed_step. Empty if `per_mixer_mse_main_holdout` arrays are
+    - `mse_steps`: per-mixer dict {mixer_name: [step values]} where MAML's
+      `mse_main` (raw nMSE, un-Kendall-weighted) on the holdout exceeds
+      baseline's at that mixer at that step. Each mixer evaluated
+      independently. Empty if `per_mixer_mse_main_holdout` arrays are
       missing (old NPZ).
     - `coeff_steps[name]`: steps where MAML's `score` for coefficient
       `name` exceeds baseline's. Indexes into each coefficient's `per_step`
       list positionally.
     """
     kendall_worse_steps: List[int] = []
-    mse_worse_steps: List[int] = []
+    mse_worse_steps: Dict[str, List[int]] = {}
     coeff_worse_steps: Dict[str, List[int]] = {}
     sorted_fixed_steps = sorted(fixed_steps)
 
@@ -399,20 +400,21 @@ def _compute_worse_flags(
         if maml_h > baseline_h:
             kendall_worse_steps.append(step_val)
 
-    # mse_main comparison — sum across mixers at each fixed_step. Empty if
-    # the per-mixer mse arrays are absent (backward compat with older eval).
+    # mse_main per-mixer comparison — each mixer evaluated independently.
+    # Empty if the per-mixer mse arrays are absent (backward compat with older eval).
     if maml.per_mixer_mse_main_holdout and baseline.per_mixer_mse_main_holdout:
-        for step_pos, step_val in enumerate(sorted_fixed_steps):
-            maml_mse = float(np.sum([
-                arr[step_pos] for arr in maml.per_mixer_mse_main_holdout.values()
-                if step_pos < len(arr)
-            ]))
-            baseline_mse = float(np.sum([
-                arr[step_pos] for arr in baseline.per_mixer_mse_main_holdout.values()
-                if step_pos < len(arr)
-            ]))
-            if maml_mse > baseline_mse:
-                mse_worse_steps.append(step_val)
+        common_mixers = sorted(
+            set(maml.per_mixer_mse_main_holdout.keys())
+            & set(baseline.per_mixer_mse_main_holdout.keys())
+        )
+        for mname in common_mixers:
+            maml_arr = maml.per_mixer_mse_main_holdout[mname]
+            baseline_arr = baseline.per_mixer_mse_main_holdout[mname]
+            for step_pos, step_val in enumerate(sorted_fixed_steps):
+                if step_pos >= len(maml_arr) or step_pos >= len(baseline_arr):
+                    continue
+                if float(maml_arr[step_pos]) > float(baseline_arr[step_pos]):
+                    mse_worse_steps.setdefault(mname, []).append(step_val)
 
     # Per-coefficient comparison — abs_error positionally in per_step list
     for coeff_name, maml_snap in maml.coefficient_recovery.coefficients.items():
@@ -637,9 +639,12 @@ def evaluate_task(
                 for step in worse.kendall_steps:
                     if step not in task_result.worse.kendall_steps:
                         task_result.worse.kendall_steps.append(step)
-                for step in worse.mse_steps:
-                    if step not in task_result.worse.mse_steps:
-                        task_result.worse.mse_steps.append(step)
+                for mname, steps in worse.mse_steps.items():
+                    if mname not in task_result.worse.mse_steps:
+                        task_result.worse.mse_steps[mname] = []
+                    for step in steps:
+                        if step not in task_result.worse.mse_steps[mname]:
+                            task_result.worse.mse_steps[mname].append(step)
                 for coeff_name, steps in worse.coeff_steps.items():
                     if coeff_name not in task_result.worse.coeff_steps:
                         task_result.worse.coeff_steps[coeff_name] = []
@@ -662,9 +667,13 @@ def evaluate_task(
                         f"kendall@[{compress_step_ranges(worse.kendall_steps, fixed_steps)}]"
                     )
                 if worse.mse_steps:
-                    flags.append(
-                        f"mse@[{compress_step_ranges(worse.mse_steps, fixed_steps)}]"
-                    )
+                    parts = [
+                        f"{mname};{compress_step_ranges(steps, fixed_steps)}"
+                        for mname, steps in sorted(worse.mse_steps.items())
+                        if steps
+                    ]
+                    if parts:
+                        flags.append(f"mse@[{','.join(parts)}]")
                 for coeff_name, steps in worse.coeff_steps.items():
                     if steps:
                         flags.append(
@@ -1172,7 +1181,7 @@ def main():
 
         for combo in task_result.combos:
             kendall_worse_any = len(combo.worse.kendall_steps) > 0
-            mse_worse_any = len(combo.worse.mse_steps) > 0
+            mse_worse_any = any(len(s) > 0 for s in combo.worse.mse_steps.values())
             coeff_worse_any = any(
                 len(s) > 0 for s in combo.worse.coeff_steps.values()
             )
@@ -1221,7 +1230,8 @@ def main():
     print("-" * 60)
     for ic_type, entries in sorted(combo_stats_by_ic.items()):
         n = len(entries)
-        loss_worse_n = sum(1 for e in entries if e["loss_worse"])
+        kendall_worse_n = sum(1 for e in entries if e["kendall_worse"])
+        mse_worse_n = sum(1 for e in entries if e["mse_worse"])
         coeff_worse_n = sum(1 for e in entries if e["coeff_worse"])
 
         maml_loss_avg = np.mean([e["maml_loss"] for e in entries])
@@ -1234,20 +1244,26 @@ def main():
 
         print(f"\n  {ic_type} ({n} combos):")
         print(
-            f"    Loss:  MAML={maml_loss_avg:.2e}  BL={bl_loss_avg:.2e}  MAML worse: {loss_worse_n}/{n}"
+            f"    Loss:  MAML={maml_loss_avg:.2e}  BL={bl_loss_avg:.2e}  "
+            f"MAML worse: kendall={kendall_worse_n}/{n}, mse={mse_worse_n}/{n}"
         )
         if maml_cerrs:
             print(
                 f"    Coeff: MAML={np.mean(maml_cerrs):.1f}%  BL={np.mean(bl_cerrs):.1f}%  MAML worse: {coeff_worse_n}/{n}"
             )
 
-        underperformers = [e for e in entries if e["loss_worse"] or e["coeff_worse"]]
+        underperformers = [
+            e for e in entries
+            if e["kendall_worse"] or e["mse_worse"] or e["coeff_worse"]
+        ]
         if underperformers:
             print(f"    Underperforming ({len(underperformers)}/{n}):")
             for e in underperformers[:5]:
                 flags = []
-                if e["loss_worse"]:
-                    flags.append("loss")
+                if e["kendall_worse"]:
+                    flags.append("kendall")
+                if e["mse_worse"]:
+                    flags.append("mse")
                 if e["coeff_worse"]:
                     flags.append("coeff")
                 print(

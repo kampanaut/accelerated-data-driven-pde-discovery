@@ -187,19 +187,26 @@ from src.evaluation.graphs import (
 
 def _loss_worse_suffix(
     kendall_worse_steps: list[int],
-    mse_worse_steps: list[int],
+    mse_worse_steps: dict[str, list[int]],
     all_fixed_steps: list[int],
 ) -> str:
-    """Build WORSE(KENDALL[...],MSE[...]) suffix for loss-group figures.
+    """Build WORSE(KENDALL[...],MSE[u;...,v;...]) suffix for loss-group figures.
 
-    Includes only the tags whose step lists are non-empty. Returns empty
-    string if neither fired.
+    `mse_worse_steps` is per-mixer: each mixer that fired contributes a
+    `{mixer};{step_ranges}` segment. Includes only tags whose step lists are
+    non-empty. Returns empty string if neither fired.
     """
     parts: list[str] = []
     if kendall_worse_steps:
         parts.append(f"KENDALL[{compress_step_ranges(kendall_worse_steps, all_fixed_steps)}]")
     if mse_worse_steps:
-        parts.append(f"MSE[{compress_step_ranges(mse_worse_steps, all_fixed_steps)}]")
+        mixer_segs = [
+            f"{mname};{compress_step_ranges(steps, all_fixed_steps)}"
+            for mname, steps in sorted(mse_worse_steps.items())
+            if steps
+        ]
+        if mixer_segs:
+            parts.append(f"MSE[{','.join(mixer_segs)}]")
     if not parts:
         return ""
     return f"_WORSE({','.join(parts)})"
@@ -227,8 +234,13 @@ def _task_dir_worse_suffix(task: TaskResult, all_fixed_steps: list[int]) -> str:
         flags.append(f"KENDALL[{compressed}]")
 
     if task.worse.mse_steps:
-        compressed = compress_step_ranges(task.worse.mse_steps, all_fixed_steps)
-        flags.append(f"MSE[{compressed}]")
+        mixer_segs = [
+            f"{mname};{compress_step_ranges(steps, all_fixed_steps)}"
+            for mname, steps in sorted(task.worse.mse_steps.items())
+            if steps
+        ]
+        if mixer_segs:
+            flags.append(f"MSE[{','.join(mixer_segs)}]")
 
     for name, steps in task.worse.coeff_steps.items():
         if steps:

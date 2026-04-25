@@ -192,14 +192,19 @@ class MethodResult:
 class WorseFlags:
     """MAML-worse-than-baseline flags at specific steps.
 
-    Two loss-axis flags:
-      - `kendall_steps`: MAML's Kendall-weighted holdout total > baseline's
-      - `mse_steps`: MAML's per-mixer mse_main sum > baseline's
+    Loss-axis flags:
+      - `kendall_steps`: MAML's mean Kendall-weighted holdout total > baseline's
+        (averaged across mixers, so a single per-step decision)
+      - `mse_steps`: per-mixer dict {mixer_name: [step values]}, where for each
+        (mixer, step) MAML's `mse_main` on holdout > baseline's same-mixer
+        same-step mse_main. Independent decisions per mixer — surfaces *which*
+        mixer underperformed at *which* step rather than collapsing to a sum.
+
     They can disagree — Kendall mixes main + aux + log-var regulariser,
     while mse focuses on prediction fit quality only.
     """
     kendall_steps: List[int] = field(default_factory=list)
-    mse_steps: List[int] = field(default_factory=list)
+    mse_steps: Dict[str, List[int]] = field(default_factory=dict)
     coeff_steps: Dict[str, List[int]] = field(default_factory=dict)
 
 
@@ -344,7 +349,7 @@ class TaskResult:
                 kendall_steps=worse_dict.get(
                     "kendall_steps", worse_dict.get("loss_steps", [])
                 ),
-                mse_steps=worse_dict.get("mse_steps", []),
+                mse_steps=worse_dict.get("mse_steps", {}),
                 coeff_steps=worse_dict.get("coeff_steps", {}),
             )
 
@@ -360,7 +365,7 @@ class TaskResult:
             kendall_steps=task_worse_dict.get(
                 "kendall_steps", task_worse_dict.get("loss_steps", [])
             ),
-            mse_steps=task_worse_dict.get("mse_steps", []),
+            mse_steps=task_worse_dict.get("mse_steps", {}),
             coeff_steps=task_worse_dict.get("coeff_steps", {}),
         )
 

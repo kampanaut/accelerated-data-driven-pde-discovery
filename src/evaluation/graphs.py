@@ -136,7 +136,7 @@ def plot_train_holdout_convergence(
     baseline_plateau_step_std_per_mixer: Optional[dict[str, float]] = None,
     fixed_steps: Optional[list[int]] = None,
     kendall_worse_steps: Optional[list[int]] = None,
-    mse_worse_steps: Optional[list[int]] = None,
+    mse_worse_steps: Optional[dict[str, list[int]]] = None,
     per_mixer_mse_main_holdout_maml: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
     per_mixer_aux_holdout_maml: Optional[dict[str, dict[str, NDArray[np.floating[Any]]]]] = None,
     per_mixer_mse_main_holdout_baseline: Optional[dict[str, NDArray[np.floating[Any]]]] = None,
@@ -230,7 +230,12 @@ def plot_train_holdout_convergence(
     # "something fired here".
     if fixed_steps is not None:
         kendall_set = set(kendall_worse_steps) if kendall_worse_steps is not None else set()
-        mse_set = set(mse_worse_steps) if mse_worse_steps is not None else set()
+        # mse_worse_steps is a per-mixer dict — union step-lists across mixers
+        # for the axvline-color decision (any mixer worse → "worse" overlay).
+        mse_set: set[int] = set()
+        if mse_worse_steps:
+            for mixer_steps in mse_worse_steps.values():
+                mse_set.update(mixer_steps)
         worse_set = kendall_set | mse_set
         for s in fixed_steps:
             if s >= len(steps):
