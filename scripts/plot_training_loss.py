@@ -55,6 +55,8 @@ class ExpData:
     name: str
     pde_type: str
     input_mode: str
+    variant: str
+    capacity: int
     iters: np.ndarray
     train_loss: np.ndarray
     mixers: Dict[str, MixerHist]
@@ -114,6 +116,9 @@ def load_exp(exp_dir: Path) -> Optional[ExpData]:
     pde_type = cfg.get("experiment", {}).get("pde_type", "?")
     t = cfg.get("training", {}) or {}
     input_mode = t.get("input_mode", "library")
+    hidden_dims = t.get("hidden_dims") or []
+    variant = "x".join(str(d) for d in hidden_dims) if hidden_dims else "?"
+    capacity = sum(int(d) for d in hidden_dims) if hidden_dims else 0
 
     train_loss = np.array(h.get("train_loss", []))
     iters = np.array(h.get("iteration", list(range(len(train_loss)))))
@@ -134,6 +139,8 @@ def load_exp(exp_dir: Path) -> Optional[ExpData]:
         name=exp_dir.name,
         pde_type=pde_type,
         input_mode=input_mode,
+        variant=variant,
+        capacity=capacity,
         iters=iters,
         train_loss=train_loss,
         mixers=mixers,
@@ -268,18 +275,42 @@ def plot_kendall(exps: List[ExpData], out: Path) -> None:
 
 def discover_ratio_pairs(
     exps: List[ExpData],
-) -> List[Tuple[str, ExpData, ExpData]]:
-    by_pde: Dict[str, Dict[str, ExpData]] = {}
+) -> List[Tuple[str, ExpData, ExpData, str]]:
+    """Pair (e1, e2) is valid when same pde_type and exactly one of
+    (input_mode, variant) differs. Numerator is the higher-expected-loss side:
+      - mode-axis: precompose < library < raw → num is later in PRECEDENCE
+      - variant-axis: smaller capacity → higher loss → num has smaller capacity
+    Returns (pde, num, den, axis) with axis ∈ {"mode", "variant"}.
+    """
+    panels: List[Tuple[str, ExpData, ExpData, str]] = []
+    by_pde: Dict[str, List[ExpData]] = {}
     for e in exps:
-        by_pde.setdefault(e.pde_type, {})[e.input_mode] = e
-    panels: List[Tuple[str, ExpData, ExpData]] = []
-    for pde, modes in by_pde.items():
-        for j in range(len(PRECEDENCE)):
-            for k in range(j):
-                num_mode = PRECEDENCE[j]
-                den_mode = PRECEDENCE[k]
-                if num_mode in modes and den_mode in modes:
-                    panels.append((pde, modes[num_mode], modes[den_mode]))
+        by_pde.setdefault(e.pde_type, []).append(e)
+
+    for pde, group in by_pde.items():
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                same_mode = a.input_mode == b.input_mode
+                same_variant = a.variant == b.variant
+                if same_mode == same_variant:
+                    continue
+                if not same_mode and same_variant:
+                    if a.input_mode not in PRECEDENCE or b.input_mode not in PRECEDENCE:
+                        continue
+                    if PRECEDENCE.index(a.input_mode) > PRECEDENCE.index(b.input_mode):
+                        num, den = a, b
+                    else:
+                        num, den = b, a
+                    panels.append((pde, num, den, "mode"))
+                else:
+                    if a.capacity < b.capacity:
+                        num, den = a, b
+                    elif b.capacity < a.capacity:
+                        num, den = b, a
+                    else:
+                        continue
+                    panels.append((pde, num, den, "variant"))
     return panels
 
 
@@ -297,12 +328,21 @@ def plot_ratios(exps: List[ExpData], out: Path) -> None:
     )
     cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
-    for idx, (pde, e_num, e_den) in enumerate(panels):
+    for idx, (pde, e_num, e_den, axis) in enumerate(panels):
         r, c = divmod(idx, ncols)
         ax = axes[r][c]
+        if axis == "mode":
+            num_lab = f"{e_num.input_mode} [{e_num.variant}]"
+            den_lab = f"{e_den.input_mode} [{e_den.variant}]"
+        else:
+            num_lab = f"{e_num.variant} [{e_num.input_mode}]"
+            den_lab = f"{e_den.variant} [{e_den.input_mode}]"
+        title = f"{pde}: {num_lab} / {den_lab}"
+        ylabel = f"{num_lab} / {den_lab}"
+
         common_mixers = sorted(set(e_num.mixers.keys()) & set(e_den.mixers.keys()))
         if not common_mixers:
-            ax.set_title(f"{pde}: {e_num.input_mode} / {e_den.input_mode}\n(no shared mixers)")
+            ax.set_title(f"{title}\n(no shared mixers)")
             ax.axis("off")
             continue
         for mi, m_name in enumerate(common_mixers):
@@ -323,8 +363,8 @@ def plot_ratios(exps: List[ExpData], out: Path) -> None:
             )
         ax.set_yscale("log")
         ax.set_xlabel("Iteration")
-        ax.set_ylabel(f"{e_num.input_mode} / {e_den.input_mode}")
-        ax.set_title(f"{pde}: {e_num.input_mode} / {e_den.input_mode}")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
         ax.axhline(1.0, color="gray", linestyle=":", linewidth=0.8, alpha=0.5)
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
