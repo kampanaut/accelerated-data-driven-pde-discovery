@@ -185,12 +185,24 @@ from src.evaluation.graphs import (
 
 
 
-def _loss_worse_suffix(loss_worse_steps: list[int], all_fixed_steps: list[int]) -> str:
-    """Build WORSE(LOSS[...]) suffix for loss-group figures."""
-    if not loss_worse_steps:
+def _loss_worse_suffix(
+    kendall_worse_steps: list[int],
+    mse_worse_steps: list[int],
+    all_fixed_steps: list[int],
+) -> str:
+    """Build WORSE(KENDALL[...],MSE[...]) suffix for loss-group figures.
+
+    Includes only the tags whose step lists are non-empty. Returns empty
+    string if neither fired.
+    """
+    parts: list[str] = []
+    if kendall_worse_steps:
+        parts.append(f"KENDALL[{compress_step_ranges(kendall_worse_steps, all_fixed_steps)}]")
+    if mse_worse_steps:
+        parts.append(f"MSE[{compress_step_ranges(mse_worse_steps, all_fixed_steps)}]")
+    if not parts:
         return ""
-    compressed = compress_step_ranges(loss_worse_steps, all_fixed_steps)
-    return f"_WORSE(LOSS[{compressed}])"
+    return f"_WORSE({','.join(parts)})"
 
 
 def _coeff_worse_suffix_at_step(
@@ -210,9 +222,13 @@ def _task_dir_worse_suffix(task: TaskResult, all_fixed_steps: list[int]) -> str:
     """Build task-level directory WORSE suffix with step ranges."""
     flags = []
 
-    if task.worse.loss_steps:
-        compressed = compress_step_ranges(task.worse.loss_steps, all_fixed_steps)
-        flags.append(f"LOSS[{compressed}]")
+    if task.worse.kendall_steps:
+        compressed = compress_step_ranges(task.worse.kendall_steps, all_fixed_steps)
+        flags.append(f"KENDALL[{compressed}]")
+
+    if task.worse.mse_steps:
+        compressed = compress_step_ranges(task.worse.mse_steps, all_fixed_steps)
+        flags.append(f"MSE[{compressed}]")
 
     for name, steps in task.worse.coeff_steps.items():
         if steps:
@@ -467,9 +483,10 @@ def generate_per_task_figures(
                     if not maml_train_pm or not baseline_train_pm:
                         continue
 
-                    combo_loss_steps = combo.worse.loss_steps
+                    combo_kendall_steps = combo.worse.kendall_steps
+                    combo_mse_steps = combo.worse.mse_steps
                     loss_suffix = _loss_worse_suffix(
-                        combo_loss_steps, fixed_steps.tolist()
+                        combo_kendall_steps, combo_mse_steps, fixed_steps.tolist()
                     )
 
                     fs_list = fixed_steps.tolist()
@@ -487,7 +504,12 @@ def generate_per_task_figures(
                         holdout_size=holdout_size,
                         deriv_threshold=deriv_threshold,
                         fixed_steps=fs_list,
-                        loss_worse_steps=combo_loss_steps,
+                        kendall_worse_steps=combo_kendall_steps,
+                        mse_worse_steps=combo_mse_steps,
+                        per_mixer_mse_main_holdout_maml=combo.maml.per_mixer_mse_main_holdout,
+                        per_mixer_aux_holdout_maml=combo.maml.per_mixer_aux_holdout,
+                        per_mixer_mse_main_holdout_baseline=combo.baseline.per_mixer_mse_main_holdout,
+                        per_mixer_aux_holdout_baseline=combo.baseline.per_mixer_aux_holdout,
                     )
                     plt.close(fig)
 

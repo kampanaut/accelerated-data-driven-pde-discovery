@@ -129,6 +129,45 @@ def kendall_total_loss(
     return total
 
 
+def compute_raw_losses(
+    fast_model: nn.Module,
+    mixer_idx: int,
+    features: torch.Tensor,
+    targets: torch.Tensor,
+    coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
+    *,
+    cost_function: Callable[
+        [torch.Tensor, torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]],
+        torch.Tensor,
+    ],
+    aux_losses_enabled: bool,
+    task: Optional["PDETask"],
+) -> Tuple[float, Dict[str, float]]:
+    """Raw unweighted main MSE + per-name aux scalars for one mixer.
+
+    Counterpart to `kendall_total_loss` — same forward pass, but returns the
+    component scalars directly (detached) instead of folding them into the
+    Kendall-weighted sum. Used by trainer history logging and by
+    `scripts/evaluate.py` when per-component fit/aux signal is needed.
+
+    Returns `(mse_main_scalar, aux_dict)`. Both are Python floats — no
+    autograd graph retained after return.
+    """
+    pred = fast_model.forward_one(mixer_idx, features)  # type: ignore[attr-defined]
+    target_i = targets[:, mixer_idx]
+    mse_scalar = cost_function(pred, target_i, coords).item()
+
+    aux_raw: Dict[str, float] = {}
+    if aux_losses_enabled and task is not None:
+        aux_tensors = task.auxiliary_losses(
+            mixer_idx, fast_model, features, targets
+        )
+        for name, loss in aux_tensors.items():
+            aux_raw[name] = loss.item()
+
+    return mse_scalar, aux_raw
+
+
 class iMAMLTrainer:
     """
     iMAML trainer for meta-learning PDE operator initialization.
@@ -633,26 +672,18 @@ class iMAMLTrainer:
         targets: torch.Tensor,
         coords: Optional[Tuple[torch.Tensor, torch.Tensor]],
     ) -> Tuple[float, Dict[str, float]]:
-        """Raw unweighted mse_main + per-name aux loss scalars for logging.
+        """Trainer-side thin wrapper over module-level `compute_raw_losses`.
 
-        Returns (mse_main_scalar, aux_dict). Detached scalars — no autograd
-        graph retained after the function returns. Intended for history
-        logging only, not for optimization. One extra forward pass per call
-        (plus one aux-loss computation when aux_losses_enabled is true).
+        Binds `cost_function`, `aux_losses_enabled`, and the current task
+        from trainer state so the trainer's history-logging path can call
+        without threading those args through every call site.
         """
-        pred = fast_model.forward_one(mixer_idx, features)  # type: ignore[attr-defined]
-        target_i = targets[:, mixer_idx]
-        mse_scalar = self.cost_function(pred, target_i, coords).item()
-
-        aux_raw: Dict[str, float] = {}
-        if self.aux_losses_enabled and self._current_task is not None:
-            aux_tensors = self._current_task.auxiliary_losses(
-                mixer_idx, fast_model, features, targets
-            )
-            for name, loss in aux_tensors.items():
-                aux_raw[name] = loss.item()
-
-        return mse_scalar, aux_raw
+        return compute_raw_losses(
+            fast_model, mixer_idx, features, targets, coords,
+            cost_function=self.cost_function,
+            aux_losses_enabled=self.aux_losses_enabled,
+            task=self._current_task,
+        )
 
     # ------------------------------------------------------------------
     # Inner solvers (bound in __init__)

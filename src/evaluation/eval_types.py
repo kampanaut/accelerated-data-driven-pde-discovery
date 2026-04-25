@@ -61,6 +61,11 @@ class MixerFineTuneOutput:
     holdout_losses: np.ndarray
     per_step_extractions: Dict[int, Dict[str, Dict[str, CoefficientExtraction]]] = field(default_factory=dict)
     pred_errors_per_step: Dict[int, np.ndarray] = field(default_factory=dict)
+    # Raw (un-Kendall-weighted) holdout component losses captured at each
+    # fixed_step. Counterpart to `holdout_losses` (Kendall total) for the
+    # report's fit-quality vs optimizer-objective separation.
+    per_step_mse_main_holdout: Dict[int, float] = field(default_factory=dict)
+    per_step_aux_holdout: Dict[int, Dict[str, float]] = field(default_factory=dict)
 
 
 def assemble_method_result(
@@ -203,6 +208,31 @@ def assemble_method_result(
             per_step_stacked.append(np.stack(cols, axis=-1))
         pred_errors_stacked = np.stack(per_step_stacked, axis=0)
 
+    # 5. Per-mixer raw mse_main + per-aux losses on holdout, stacked across
+    # fixed_steps. Empty for old NPZ where these weren't captured.
+    per_mixer_mse_main_holdout: Dict[str, np.ndarray] = {}
+    per_mixer_aux_holdout: Dict[str, Dict[str, np.ndarray]] = {}
+    for out in mixer_outputs:
+        if not out.per_step_mse_main_holdout:
+            continue
+        per_mixer_mse_main_holdout[out.mixer_name] = np.array(
+            [out.per_step_mse_main_holdout.get(step, float("nan"))
+             for step in sorted_fixed_steps],
+            dtype=np.float64,
+        )
+        if out.per_step_aux_holdout:
+            aux_names: set = set()
+            for d in out.per_step_aux_holdout.values():
+                aux_names.update(d.keys())
+            aux_arrs: Dict[str, np.ndarray] = {}
+            for name in sorted(aux_names):
+                aux_arrs[name] = np.array(
+                    [out.per_step_aux_holdout.get(step, {}).get(name, float("nan"))
+                     for step in sorted_fixed_steps],
+                    dtype=np.float64,
+                )
+            per_mixer_aux_holdout[out.mixer_name] = aux_arrs
+
     return build_method_result(
         fine_tune_result=fine_tune_result,
         true_coefficients=true_coefficients,
@@ -210,4 +240,6 @@ def assemble_method_result(
         per_path_raw_values=per_path_raw_values,
         per_path_regressor_values=per_path_regressor_values,
         pred_snapshots=pred_errors_stacked,
+        per_mixer_mse_main_holdout=per_mixer_mse_main_holdout,
+        per_mixer_aux_holdout=per_mixer_aux_holdout,
     )

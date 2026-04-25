@@ -179,12 +179,27 @@ class MethodResult:
     # both keyed "{mixer_name}.{formula_tag}" → shape (n_fixed_steps, holdout)
     pred_errors: np.ndarray = field(default_factory=lambda: np.array([]))
     # shape (n_fixed_steps, holdout, n_outputs)
+    # Raw (un-Kendall-weighted) per-mixer holdout component losses, captured at
+    # each fixed_step. Counterpart to Kendall-total `fine_tune.per_mixer_holdout_losses`
+    # for the fit-quality vs optimizer-objective decomposition.
+    per_mixer_mse_main_holdout: Dict[str, np.ndarray] = field(default_factory=dict)
+    # mixer_name → shape (n_fixed_steps,)
+    per_mixer_aux_holdout: Dict[str, Dict[str, np.ndarray]] = field(default_factory=dict)
+    # mixer_name → aux_name → shape (n_fixed_steps,)
 
 
 @dataclass
 class WorseFlags:
-    """MAML-worse-than-baseline flags at specific steps."""
-    loss_steps: List[int] = field(default_factory=list)
+    """MAML-worse-than-baseline flags at specific steps.
+
+    Two loss-axis flags:
+      - `kendall_steps`: MAML's Kendall-weighted holdout total > baseline's
+      - `mse_steps`: MAML's per-mixer mse_main sum > baseline's
+    They can disagree — Kendall mixes main + aux + log-var regulariser,
+    while mse focuses on prediction fit quality only.
+    """
+    kendall_steps: List[int] = field(default_factory=list)
+    mse_steps: List[int] = field(default_factory=list)
     coeff_steps: Dict[str, List[int]] = field(default_factory=dict)
 
 
@@ -265,18 +280,24 @@ class TaskResult:
                 # Per-mixer fine-tune losses — prefer NPZ, fall back to JSON list
                 per_mixer_train: Dict[str, np.ndarray] = {}
                 per_mixer_holdout: Dict[str, np.ndarray] = {}
+                per_mixer_mse_main_holdout: Dict[str, np.ndarray] = {}
+                per_mixer_aux_holdout: Dict[str, Dict[str, np.ndarray]] = {}
                 ft_prefix = f"{ck}/{label}/fine_tune/"
                 for key, arr in raw_npz.items():
                     if not key.startswith(ft_prefix):
                         continue
                     rest = key[len(ft_prefix):].split("/")
-                    if len(rest) != 2:
-                        continue
-                    mname, subfield = rest
-                    if subfield == "train_losses":
-                        per_mixer_train[mname] = arr
-                    elif subfield == "holdout_losses":
-                        per_mixer_holdout[mname] = arr
+                    if len(rest) == 2:
+                        mname, subfield = rest
+                        if subfield == "train_losses":
+                            per_mixer_train[mname] = arr
+                        elif subfield == "holdout_losses":
+                            per_mixer_holdout[mname] = arr
+                        elif subfield == "mse_main_holdout":
+                            per_mixer_mse_main_holdout[mname] = arr
+                    elif len(rest) == 3 and rest[1] == "aux_holdout":
+                        mname, _, aname = rest
+                        per_mixer_aux_holdout.setdefault(mname, {})[aname] = arr
 
                 if not per_mixer_train or not per_mixer_holdout:
                     ft_json = method_dict.get("fine_tune", {})
@@ -314,11 +335,16 @@ class TaskResult:
                     per_path_raw_values=per_path_raw_values,
                     per_path_regressor_values=per_path_regressor_values,
                     pred_errors=pred_errors,
+                    per_mixer_mse_main_holdout=per_mixer_mse_main_holdout,
+                    per_mixer_aux_holdout=per_mixer_aux_holdout,
                 )
 
             worse_dict = combo_dict.get("worse", {})
             worse = WorseFlags(
-                loss_steps=worse_dict.get("loss_steps", []),
+                kendall_steps=worse_dict.get(
+                    "kendall_steps", worse_dict.get("loss_steps", [])
+                ),
+                mse_steps=worse_dict.get("mse_steps", []),
                 coeff_steps=worse_dict.get("coeff_steps", {}),
             )
 
@@ -331,7 +357,10 @@ class TaskResult:
 
         task_worse_dict = task_dict.get("worse", {})
         task_worse = WorseFlags(
-            loss_steps=task_worse_dict.get("loss_steps", []),
+            kendall_steps=task_worse_dict.get(
+                "kendall_steps", task_worse_dict.get("loss_steps", [])
+            ),
+            mse_steps=task_worse_dict.get("mse_steps", []),
             coeff_steps=task_worse_dict.get("coeff_steps", {}),
         )
 
@@ -366,7 +395,8 @@ class TaskResult:
             "ic_type": self.ic_type,
             "n_samples": self.n_samples,
             "worse": {
-                "loss_steps": self.worse.loss_steps,
+                "kendall_steps": self.worse.kendall_steps,
+                "mse_steps": self.worse.mse_steps,
                 "coeff_steps": self.worse.coeff_steps,
             },
             "combos": [_combo_to_json(c) for c in self.combos],
@@ -402,6 +432,13 @@ class TaskResult:
                 # Prediction residuals
                 if method.pred_errors.size > 0:
                     npz[f"{ck}/{label}/pred_errors"] = method.pred_errors
+
+                # Raw per-mixer mse_main + per-aux holdout (n_fixed_steps,)
+                for mname, arr in method.per_mixer_mse_main_holdout.items():
+                    npz[f"{ck}/{label}/fine_tune/{mname}/mse_main_holdout"] = arr
+                for mname, aux_dict in method.per_mixer_aux_holdout.items():
+                    for aname, arr in aux_dict.items():
+                        npz[f"{ck}/{label}/fine_tune/{mname}/aux_holdout/{aname}"] = arr
 
         # Best combo prediction data (unchanged from old schema)
         if self.best_combo.combo_key:
@@ -514,6 +551,8 @@ def build_method_result(
     per_path_raw_values: Dict[str, np.ndarray],
     per_path_regressor_values: Optional[Dict[str, np.ndarray]] = None,
     pred_snapshots: Optional[np.ndarray] = None,
+    per_mixer_mse_main_holdout: Optional[Dict[str, np.ndarray]] = None,
+    per_mixer_aux_holdout: Optional[Dict[str, Dict[str, np.ndarray]]] = None,
 ) -> MethodResult:
     """Build a MethodResult from per-mixer fine-tune output + per-step extractions.
 
@@ -595,6 +634,8 @@ def build_method_result(
         per_path_raw_values=per_path_raw_values,
         per_path_regressor_values=per_path_regressor_values or {},
         pred_errors=pred_snapshots if pred_snapshots is not None else np.array([]),
+        per_mixer_mse_main_holdout=per_mixer_mse_main_holdout or {},
+        per_mixer_aux_holdout=per_mixer_aux_holdout or {},
     )
 
 
@@ -611,7 +652,8 @@ def _combo_to_json(combo: ComboResult) -> Dict[str, Any]:
         "maml": _method_to_json(combo.maml),
         "baseline": _method_to_json(combo.baseline),
         "worse": {
-            "loss_steps": combo.worse.loss_steps,
+            "kendall_steps": combo.worse.kendall_steps,
+            "mse_steps": combo.worse.mse_steps,
             "coeff_steps": combo.worse.coeff_steps,
         },
     }

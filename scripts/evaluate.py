@@ -42,7 +42,7 @@ from src.training.task_loader import (
     CoefficientExtraction,
 )
 from src.training.maml import LSLRSchedule
-from src.training.imaml import kendall_total_loss
+from src.training.imaml import kendall_total_loss, compute_raw_losses
 from src.training.spectral_loss import compute_spectral_loss
 from src.evaluation.metrics import compress_step_ranges
 from src.evaluation.eval_types import MixerFineTuneOutput, assemble_method_result
@@ -235,6 +235,8 @@ def fine_tune(
     # Snapshot helper — fires at each configured fixed_step.
     per_step_extractions: Dict[int, Dict[str, Dict[str, CoefficientExtraction]]] = {}
     pred_errors_per_step: Dict[int, np.ndarray] = {}
+    per_step_mse_main_holdout: Dict[int, float] = {}
+    per_step_aux_holdout: Dict[int, Dict[str, float]] = {}
 
     def _snapshot(step_num: int) -> None:
         if step_num not in fixed_steps_set:
@@ -244,6 +246,16 @@ def fine_tune(
         per_step_extractions[step_num] = task.extract_coefficients(
             mixer_idx, fast_model, holdout_features
         )
+        # Raw (un-Kendall-weighted) per-component losses on the HOLDOUT for the
+        # fit-quality vs optimizer-objective decomposition.
+        mse_raw, aux_raw = compute_raw_losses(
+            fast_model, mixer_idx, holdout_features, holdout_targets, holdout_coords,
+            cost_function=cost_function,
+            aux_losses_enabled=aux_losses_enabled,
+            task=task,
+        )
+        per_step_mse_main_holdout[step_num] = mse_raw
+        per_step_aux_holdout[step_num] = aux_raw
         # Prediction residuals on the holdout for the prediction-scatter viz.
         with torch.no_grad():
             pred = fast_model.forward_one(mixer_idx, holdout_features)  # type: ignore[attr-defined]
@@ -331,6 +343,8 @@ def fine_tune(
         holdout_losses=np.array(holdout_losses, dtype=np.float64),
         per_step_extractions=per_step_extractions,
         pred_errors_per_step=pred_errors_per_step,
+        per_step_mse_main_holdout=per_step_mse_main_holdout,
+        per_step_aux_holdout=per_step_aux_holdout,
     )
 
 
@@ -342,17 +356,22 @@ def _compute_worse_flags(
 ) -> WorseFlags:
     """Compare MAML to baseline — flag steps where MAML did worse.
 
-    Two signals:
-    - `loss_steps`: steps where MAML's mean holdout loss (averaged across
-      mixers) exceeds baseline's. For L-BFGS inner optimizer, the
-      `per_mixer_holdout_losses` arrays have length 2 and we index by
-      position in `sorted(fixed_steps)`. For SGD, they have length
+    Three signals:
+    - `kendall_steps`: steps where MAML's mean Kendall-weighted holdout loss
+      (averaged across mixers) exceeds baseline's. For L-BFGS inner
+      optimizer, the `per_mixer_holdout_losses` arrays have length 2 and we
+      index by position in `sorted(fixed_steps)`. For SGD, they have length
       `inner_steps + 1` and we index directly by the step value.
+    - `mse_steps`: steps where MAML's per-mixer-summed `mse_main` (raw nMSE,
+      un-Kendall-weighted) on the holdout exceeds baseline's. Captured at
+      every fixed_step. Empty if `per_mixer_mse_main_holdout` arrays are
+      missing (old NPZ).
     - `coeff_steps[name]`: steps where MAML's `score` for coefficient
       `name` exceeds baseline's. Indexes into each coefficient's `per_step`
       list positionally.
     """
-    loss_worse_steps: List[int] = []
+    kendall_worse_steps: List[int] = []
+    mse_worse_steps: List[int] = []
     coeff_worse_steps: Dict[str, List[int]] = {}
     sorted_fixed_steps = sorted(fixed_steps)
 
@@ -367,7 +386,7 @@ def _compute_worse_flags(
         # L-BFGS length-2 path
         return float(arr[step_pos])
 
-    # Loss-level comparison — mean across mixers at each step
+    # Kendall-total comparison — mean across mixers at each step
     for step_pos, step_val in enumerate(sorted_fixed_steps):
         maml_h = float(np.mean([
             _loss_at_step(arr, step_pos, step_val)
@@ -378,7 +397,22 @@ def _compute_worse_flags(
             for arr in baseline.fine_tune.per_mixer_holdout_losses.values()
         ]))
         if maml_h > baseline_h:
-            loss_worse_steps.append(step_val)
+            kendall_worse_steps.append(step_val)
+
+    # mse_main comparison — sum across mixers at each fixed_step. Empty if
+    # the per-mixer mse arrays are absent (backward compat with older eval).
+    if maml.per_mixer_mse_main_holdout and baseline.per_mixer_mse_main_holdout:
+        for step_pos, step_val in enumerate(sorted_fixed_steps):
+            maml_mse = float(np.sum([
+                arr[step_pos] for arr in maml.per_mixer_mse_main_holdout.values()
+                if step_pos < len(arr)
+            ]))
+            baseline_mse = float(np.sum([
+                arr[step_pos] for arr in baseline.per_mixer_mse_main_holdout.values()
+                if step_pos < len(arr)
+            ]))
+            if maml_mse > baseline_mse:
+                mse_worse_steps.append(step_val)
 
     # Per-coefficient comparison — abs_error positionally in per_step list
     for coeff_name, maml_snap in maml.coefficient_recovery.coefficients.items():
@@ -391,7 +425,11 @@ def _compute_worse_flags(
             if maml_snap.per_step[step_pos].score > baseline_snap.per_step[step_pos].score:
                 coeff_worse_steps.setdefault(coeff_name, []).append(step_val)
 
-    return WorseFlags(loss_steps=loss_worse_steps, coeff_steps=coeff_worse_steps)
+    return WorseFlags(
+        kendall_steps=kendall_worse_steps,
+        mse_steps=mse_worse_steps,
+        coeff_steps=coeff_worse_steps,
+    )
 
 
 def evaluate_task(
@@ -596,9 +634,12 @@ def evaluate_task(
                 )
 
                 # Accumulate task-level worse flags (union across combos)
-                for step in worse.loss_steps:
-                    if step not in task_result.worse.loss_steps:
-                        task_result.worse.loss_steps.append(step)
+                for step in worse.kendall_steps:
+                    if step not in task_result.worse.kendall_steps:
+                        task_result.worse.kendall_steps.append(step)
+                for step in worse.mse_steps:
+                    if step not in task_result.worse.mse_steps:
+                        task_result.worse.mse_steps.append(step)
                 for coeff_name, steps in worse.coeff_steps.items():
                     if coeff_name not in task_result.worse.coeff_steps:
                         task_result.worse.coeff_steps[coeff_name] = []
@@ -616,9 +657,13 @@ def evaluate_task(
                 baseline_holdout_final = _final_mean(baseline_method.fine_tune.per_mixer_holdout_losses)
 
                 flags: List[str] = []
-                if worse.loss_steps:
+                if worse.kendall_steps:
                     flags.append(
-                        f"loss@[{compress_step_ranges(worse.loss_steps, fixed_steps)}]"
+                        f"kendall@[{compress_step_ranges(worse.kendall_steps, fixed_steps)}]"
+                    )
+                if worse.mse_steps:
+                    flags.append(
+                        f"mse@[{compress_step_ranges(worse.mse_steps, fixed_steps)}]"
                     )
                 for coeff_name, steps in worse.coeff_steps.items():
                     if steps:
@@ -1126,7 +1171,8 @@ def main():
             combo_stats_by_ic[ic_type] = []
 
         for combo in task_result.combos:
-            loss_worse_any = len(combo.worse.loss_steps) > 0
+            kendall_worse_any = len(combo.worse.kendall_steps) > 0
+            mse_worse_any = len(combo.worse.mse_steps) > 0
             coeff_worse_any = any(
                 len(s) > 0 for s in combo.worse.coeff_steps.values()
             )
@@ -1144,7 +1190,8 @@ def main():
                 "noise": combo.noise,
                 "maml_loss": _final_holdout_mean(combo.maml),
                 "baseline_loss": _final_holdout_mean(combo.baseline),
-                "loss_worse": loss_worse_any,
+                "kendall_worse": kendall_worse_any,
+                "mse_worse": mse_worse_any,
                 "coeff_worse": coeff_worse_any,
             }
 
