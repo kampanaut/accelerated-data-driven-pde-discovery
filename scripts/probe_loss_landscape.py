@@ -364,6 +364,7 @@ def build_plane(
     sd_bl_n01: "OrderedDict[str, torch.Tensor]",
     sd_theta_star: Optional["OrderedDict[str, torch.Tensor]"] = None,
     sd_theta_zero: Optional["OrderedDict[str, torch.Tensor]"] = None,
+    sd_bl_n0: Optional["OrderedDict[str, torch.Tensor]"] = None,
     mixer_filter: Optional[int] = None,
 ):
     """Option B: trajectory-aligned 2D plane spanning the three landing points.
@@ -409,6 +410,10 @@ def build_plane(
     if sd_theta_zero is not None:
         coords["theta_zero"] = _project_onto(
             flatten_params(sd_theta_zero, mixer_filter=mixer_filter), origin, dir1, dir2,
+        )
+    if sd_bl_n0 is not None:
+        coords["bl_n0"] = _project_onto(
+            flatten_params(sd_bl_n0, mixer_filter=mixer_filter), origin, dir1, dir2,
         )
 
     return origin, dir1, dir2, coords
@@ -538,7 +543,9 @@ def _interp_loss_at(alphas, betas, grid, a, b) -> float:
 
 
 def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0",
-                landing_losses: Optional[Dict[str, float]] = None):
+                landing_losses: Optional[Dict[str, float]] = None,
+                target_noise: float = 0.01,
+                landing_losses_true: Optional[Dict[str, float]] = None):
     """Single panel: log-scale filled contour + line contour overlay + landing/start points.
 
     `panel_noise` controls which fine_tune trajectory the arrows target — the arrow
@@ -599,34 +606,26 @@ def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0",
             return landing_losses[key]
         return _interp_loss_at(alphas, betas, grid, a, b)
 
-    landings = [
-        ("maml_n0",  "o", "tab:purple",  "MAML(n=0)"),
-        ("maml_n01", "s", "tab:orange",  "MAML(n=.01)"),
-        ("bl_n01",   "^", "tab:cyan",    "BL(n=.01)"),
+    tgt_label = f"{target_noise:.2f}".rstrip("0").rstrip(".") or "0"
+    points = [
+        ("theta_star", "#b56cf3",         "θ* (MAML start)"),
+        ("theta_zero", "#7ad1f0",         "θ₀ (BL start)"),
+        ("maml_n0",    "tab:purple",      "MAML(n=0)"),
+        ("maml_n01",   "tab:orange",     f"MAML(n={tgt_label})"),
+        ("bl_n0",      "tab:cyan",        "BL(n=0)"),
+        ("bl_n01",     "tab:red",        f"BL(n={tgt_label})"),
     ]
-    for key, marker, color, label in landings:
+    for key, color, label in points:
         if key not in coords:
             continue
         a, b = coords[key]
         loss_here = _label_loss(key, a, b)
-        ax.scatter([a], [b], s=130, marker=marker, color=color,
-                   edgecolor="black", linewidth=0.9, zorder=6,
-                   label=f"{label}  L={loss_here:.4e}")
-
-    # Starting points — hollow markers (pre-fine_tune; projected onto plane,
-    # in general not exactly in plane but loss read at the projection).
-    starts = [
-        ("theta_star", "*", "tab:purple", "θ*  (MAML start)"),
-        ("theta_zero", "X", "tab:cyan",   "θ₀  (BL start)"),
-    ]
-    for key, marker, color, label in starts:
-        if key not in coords:
-            continue
-        a, b = coords[key]
-        loss_here = _label_loss(key, a, b)
-        ax.scatter([a], [b], s=180, marker=marker, color="white",
-                   edgecolor=color, linewidth=2.0, zorder=7,
-                   label=f"{label}  L={loss_here:.4e}")
+        legend_text = f"{label}  L={loss_here:.4e}"
+        if landing_losses_true is not None and key in landing_losses_true:
+            legend_text += f"  (true: {landing_losses_true[key]:.4e})"
+        ax.scatter([a], [b], s=30, marker="o", color=color,
+                   edgecolor="black", linewidth=0.4, zorder=7,
+                   label=legend_text)
 
     # Arrows: starts → landings (visualise fine_tune trajectory direction in this plane).
     # Targets are panel-noise-dependent: the noise=0.01 panel shows arrows ending at
@@ -642,8 +641,8 @@ def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0",
             ax.annotate("", xy=(a1, b1), xytext=(a0, b0),
                         arrowprops=dict(arrowstyle="->", color=color, lw=1.2, alpha=0.6))
 
-    ax.set_xlabel("α (dir-1: MAML(n0)→MAML(n01))", fontsize=9)
-    ax.set_ylabel("β (dir-2: ⊥ toward BL(n01))",   fontsize=9)
+    ax.set_xlabel(f"α  (dir-1: MAML(n=0) → MAML(n={tgt_label}))", fontsize=9)
+    ax.set_ylabel(f"β  (dir-2: ⊥ toward BL(n={tgt_label}))",       fontsize=9)
     ax.set_title(title, fontsize=10)
     ax.legend(loc="upper left", bbox_to_anchor=(1.18, 1.0),
               fontsize=7, framealpha=0.9, borderpad=0.5)
@@ -661,21 +660,25 @@ def plot_task(
     target_noise: float,
     landing_losses_ref: Optional[Dict[str, float]] = None,
     landing_losses_tgt: Optional[Dict[str, float]] = None,
+    landing_losses_true_ref: Optional[Dict[str, float]] = None,
+    landing_losses_true_tgt: Optional[Dict[str, float]] = None,
 ):
     fig, axes = plt.subplots(1, 2, figsize=(18, 7))
     suptitle = (
         f"{task_name}  —  noise={target_noise:.2f}  Δ={gap:+.4e}   "
         f"(MAML={m_total:.4e}, BL={b_total:.4e})\n"
         "Contour = mixer NMSE on the body+head subspace (log_vars excluded). "
-        "Landing-point losses are evaluated exactly (not interpolated from the grid)."
+        "In-plane losses are exact at the marker; off-plane points (θ*, θ₀, BL(n=0)) also report true 5000-D loss."
     )
     fig.suptitle(suptitle, fontsize=9)
     _plot_panel(axes[0], alphas, betas, grid_n0,  coords,
                 f"Loss surface @ noise={reference_noise:.2f}", panel_noise="n0",
-                landing_losses=landing_losses_ref)
+                landing_losses=landing_losses_ref, target_noise=target_noise,
+                landing_losses_true=landing_losses_true_ref)
     _plot_panel(axes[1], alphas, betas, grid_n01, coords,
                 f"Loss surface @ noise={target_noise:.2f}",    panel_noise="n01",
-                landing_losses=landing_losses_tgt)
+                landing_losses=landing_losses_tgt, target_noise=target_noise,
+                landing_losses_true=landing_losses_true_tgt)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(out_path, dpi=160, bbox_inches="tight")
     plt.close(fig)
@@ -850,6 +853,7 @@ def main():
                         sds[f"baseline_n{target_noise:.2f}"],
                         sd_theta_star=sd_theta_star,
                         sd_theta_zero=sd_theta_zero,
+                        sd_bl_n0=sds[f"baseline_n{args.reference_noise:.2f}"],
                         mixer_filter=mixer_idx,
                     )
                 except RuntimeError as e:
@@ -890,13 +894,40 @@ def main():
 
                 landing_losses_ref = {
                     name: _exact_loss(coords[name], hf_ref, ht_ref)
-                    for name in ("maml_n0", "maml_n01", "bl_n01", "theta_star", "theta_zero")
+                    for name in ("maml_n0", "maml_n01", "bl_n0", "bl_n01", "theta_star", "theta_zero")
                     if name in coords
                 }
                 landing_losses_tgt = {
                     name: _exact_loss(coords[name], hf_tgt, ht_tgt)
-                    for name in ("maml_n0", "maml_n01", "bl_n01", "theta_star", "theta_zero")
+                    for name in ("maml_n0", "maml_n01", "bl_n0", "bl_n01", "theta_star", "theta_zero")
                     if name in coords
+                }
+
+                # True (un-projected) losses for the off-plane points. The three
+                # plane anchors (maml_n0, maml_n01, bl_n01) are in-plane by
+                # construction and don't need a "true" entry — their projected
+                # value already equals their true value.
+                _true_sources = {
+                    "theta_star": sd_theta_star,
+                    "theta_zero": sd_theta_zero,
+                    "bl_n0":      sds[f"baseline_n{args.reference_noise:.2f}"],
+                }
+
+                def _true_loss(sd, hf_holdout, ht_holdout):
+                    flat_pt = flatten_params(sd, mixer_filter=mixer_idx)
+                    return eval_loss_at(
+                        eval_model, template, flat_pt,
+                        hf_holdout, ht_holdout, bundle["n_outputs"],
+                        target_mixer=mixer_idx, mixer_filter=mixer_idx,
+                    )
+
+                landing_losses_true_ref = {
+                    name: _true_loss(sd, hf_ref, ht_ref)
+                    for name, sd in _true_sources.items()
+                }
+                landing_losses_true_tgt = {
+                    name: _true_loss(sd, hf_tgt, ht_tgt)
+                    for name, sd in _true_sources.items()
                 }
 
                 fname = f"{task_name}_mixer{mixer_idx}_{mixer_name}_target{t_key}_landscape"
@@ -908,6 +939,8 @@ def main():
                     args.reference_noise, target_noise,
                     landing_losses_ref=landing_losses_ref,
                     landing_losses_tgt=landing_losses_tgt,
+                    landing_losses_true_ref=landing_losses_true_ref,
+                    landing_losses_true_tgt=landing_losses_true_tgt,
                 )
 
                 np.savez(
@@ -919,14 +952,23 @@ def main():
                     coords_bl_n01=np.array(coords["bl_n01"]),
                     coords_theta_star=np.array(coords.get("theta_star", (np.nan, np.nan))),
                     coords_theta_zero=np.array(coords.get("theta_zero", (np.nan, np.nan))),
+                    coords_bl_n0=np.array(coords.get("bl_n0", (np.nan, np.nan))),
                     landing_losses_ref=np.array([landing_losses_ref.get(k, np.nan)
-                                                 for k in ("maml_n0", "maml_n01", "bl_n01",
+                                                 for k in ("maml_n0", "maml_n01",
+                                                           "bl_n0", "bl_n01",
                                                            "theta_star", "theta_zero")]),
                     landing_losses_tgt=np.array([landing_losses_tgt.get(k, np.nan)
-                                                 for k in ("maml_n0", "maml_n01", "bl_n01",
+                                                 for k in ("maml_n0", "maml_n01",
+                                                           "bl_n0", "bl_n01",
                                                            "theta_star", "theta_zero")]),
-                    landing_loss_keys=np.array(["maml_n0", "maml_n01", "bl_n01",
+                    landing_loss_keys=np.array(["maml_n0", "maml_n01",
+                                                "bl_n0", "bl_n01",
                                                 "theta_star", "theta_zero"]),
+                    landing_losses_true_ref=np.array([landing_losses_true_ref.get(k, np.nan)
+                                                      for k in ("bl_n0", "theta_star", "theta_zero")]),
+                    landing_losses_true_tgt=np.array([landing_losses_true_tgt.get(k, np.nan)
+                                                      for k in ("bl_n0", "theta_star", "theta_zero")]),
+                    landing_loss_true_keys=np.array(["bl_n0", "theta_star", "theta_zero"]),
                     mixer_idx=mixer_idx,
                     reference_noise=args.reference_noise, target_noise=target_noise,
                 )
