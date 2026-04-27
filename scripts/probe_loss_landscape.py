@@ -297,28 +297,50 @@ def _is_excluded(key: str) -> bool:
     return any(sub in key for sub in EXCLUDED_KEY_SUBSTRINGS)
 
 
-def _key_in_scope(k: str, mixer_filter: Optional[int]) -> bool:
-    """True if `k` should participate in the trajectory directions.
+def _key_in_scope(
+    k: str,
+    mixer_filter: Optional[int],
+    keep_keys: Optional[set] = None,
+) -> bool:
+    """True if `k` should participate in the directions.
 
-    Excludes log_vars universally. If `mixer_filter` is not None, also excludes
-    parameters that don't belong to that mixer index — used for per-mixer
-    landscapes where direction vectors live in a single mixer's subspace.
+    Excludes log_vars universally. If `keep_keys` is given, that's the *only*
+    inclusion test (mixer_filter is ignored — `keep_keys` is already scoped).
+    Otherwise, if `mixer_filter` is set, restricts to that mixer's params.
     """
     if _is_excluded(k):
         return False
+    if keep_keys is not None:
+        return k in keep_keys
     if mixer_filter is not None and not k.startswith(f"mixers.{mixer_filter}."):
         return False
     return True
 
 
+def _head_keys_for_mixer(model, mixer_idx: int) -> set:
+    """Resolve which state_dict key names correspond to the head subspace of
+    a given mixer, by id-matching the parameters returned by
+    `model.mixer_inner_params(mixer_idx, "head")` against `named_parameters()`.
+    """
+    head_params = list(model.mixer_inner_params(mixer_idx, "head"))  # type: ignore[attr-defined]
+    head_ids = {id(p) for p in head_params}
+    keys: set = set()
+    for name, p in model.named_parameters():
+        if id(p) in head_ids:
+            keys.add(name)
+    return keys
+
+
 def flatten_params(
     state_dict: "OrderedDict[str, torch.Tensor]",
     mixer_filter: Optional[int] = None,
+    keep_keys: Optional[set] = None,
 ) -> torch.Tensor:
-    """Concat in-scope tensors (body+head; optionally filtered to one mixer) into a flat vector."""
+    """Concat in-scope tensors into a flat vector. `keep_keys` (if provided) is the
+    explicit allow-list of state_dict keys; takes precedence over `mixer_filter`."""
     parts = []
     for k in sorted(state_dict.keys()):
-        if not _key_in_scope(k, mixer_filter):
+        if not _key_in_scope(k, mixer_filter, keep_keys):
             continue
         parts.append(state_dict[k].detach().to(torch.float64).reshape(-1))
     return torch.cat(parts)
@@ -328,16 +350,16 @@ def unflatten_params(
     flat: torch.Tensor,
     reference: "OrderedDict[str, torch.Tensor]",
     mixer_filter: Optional[int] = None,
+    keep_keys: Optional[set] = None,
 ) -> "OrderedDict[str, torch.Tensor]":
-    """Inverse of flatten_params. Out-of-scope keys (log_vars; other-mixer params under
-    a mixer_filter) are copied verbatim from `reference` so the resulting state_dict
-    can be load_state_dict'd in strict mode.
+    """Inverse of flatten_params. Out-of-scope keys are copied verbatim from
+    `reference`; in-scope keys are filled from `flat`.
     """
     out: "OrderedDict[str, torch.Tensor]" = OrderedDict()
     cursor = 0
     for k in sorted(reference.keys()):
         ref = reference[k]
-        if not _key_in_scope(k, mixer_filter):
+        if not _key_in_scope(k, mixer_filter, keep_keys):
             out[k] = ref.detach().clone()
             continue
         n = ref.numel()
@@ -419,6 +441,61 @@ def build_plane(
     return origin, dir1, dir2, coords
 
 
+def build_plane_pca(
+    state_dicts: "OrderedDict[str, OrderedDict[str, torch.Tensor]]",
+    mixer_filter: Optional[int] = None,
+    keep_keys: Optional[set] = None,
+):
+    """PCA-basis 2D plane through all landing points.
+
+    Stack flattened (mixer-filtered, log_vars-excluded) parameter vectors of every
+    state_dict in `state_dicts` into X ∈ R^(N, P). Origin = column mean. Basis =
+    top-2 right singular vectors of (X − origin). Returns
+    (origin, dir1, dir2, coords, residuals, explained_var_frac):
+
+      coords[name]    = (α, β) projection
+      residuals[name] = ||v − (α·dir1 + β·dir2)||₂   (off-plane norm)
+      explained_var_frac = (σ₁² + σ₂²) / Σσᵢ²
+
+    Unlike the trajectory plane, **no point sits exactly in the plane** — every
+    landing has some residual. The residuals tell you how literal the in-plane
+    marker positions are.
+    """
+    names = list(state_dicts.keys())
+    flats = [
+        flatten_params(state_dicts[n], mixer_filter=mixer_filter, keep_keys=keep_keys)
+        for n in names
+    ]
+    X = torch.stack(flats, dim=0)  # (N, P) float64 already
+    origin = X.mean(dim=0)
+    Xc = X - origin
+    # economy SVD: when N < P, Vh is (N, P) — rows are right singular vectors.
+    _, S, Vh = torch.linalg.svd(Xc, full_matrices=False)
+    if Vh.shape[0] < 2:
+        raise RuntimeError(f"PCA needs ≥2 singular components; got {Vh.shape[0]}.")
+    dir1 = Vh[0]
+    dir2 = Vh[1]
+    # Renormalize defensively (SVD already orthonormal in principle).
+    dir1 = dir1 / (dir1.norm() + 1e-30)
+    dir2 = dir2 - (dir2 @ dir1) * dir1
+    dir2 = dir2 / (dir2.norm() + 1e-30)
+
+    coords: Dict[str, Tuple[float, float]] = {}
+    residuals: Dict[str, float] = {}
+    for n, x in zip(names, flats):
+        v = x - origin
+        a = float((v @ dir1).item())
+        b = float((v @ dir2).item())
+        coords[n] = (a, b)
+        recon = a * dir1 + b * dir2
+        residuals[n] = float((v - recon).norm().item())
+
+    total_var = float((S ** 2).sum().item())
+    top2_var = float((S[:2] ** 2).sum().item())
+    explained = top2_var / max(total_var, 1e-30)
+    return origin, dir1, dir2, coords, residuals, explained
+
+
 def grid_axes(
     coords: Dict[str, Tuple[float, float]], n_grid: int, pad_frac: float = 0.4
 ):
@@ -449,6 +526,7 @@ def eval_loss_at(
     n_outputs: int,
     target_mixer: Optional[int] = None,
     mixer_filter: Optional[int] = None,
+    keep_keys: Optional[set] = None,
 ) -> float:
     """Load `flat_point` into `model` and return mixer-target_mixer's NMSE on holdout
     (or summed-mixer NMSE if `target_mixer is None`).
@@ -459,7 +537,7 @@ def eval_loss_at(
     through mixer m, so mixer-m's NMSE depends only on mixer-m's parameters —
     other-mixer values can be anything without changing the result.
     """
-    sd = unflatten_params(flat_point, state_dict_template, mixer_filter=mixer_filter)
+    sd = unflatten_params(flat_point, state_dict_template, mixer_filter=mixer_filter, keep_keys=keep_keys)
     model.load_state_dict(sd)
     model.eval()
 
@@ -498,6 +576,7 @@ def evaluate_grid(
     n_outputs: int,
     target_mixer: Optional[int] = None,
     mixer_filter: Optional[int] = None,
+    keep_keys: Optional[set] = None,
 ) -> np.ndarray:
     """Return a (len(betas), len(alphas)) array of NMSE values.
 
@@ -513,6 +592,7 @@ def evaluate_grid(
                     model, template, point,
                     holdout_features_list, holdout_targets, n_outputs,
                     target_mixer=target_mixer, mixer_filter=mixer_filter,
+                    keep_keys=keep_keys,
                 )
             except Exception:
                 grid[j, i] = np.nan
@@ -685,6 +765,388 @@ def plot_task(
     print(f"  wrote {out_path}", flush=True)
 
 
+def _pca_marker_style(name: str) -> Tuple[str, str]:
+    """(color, display label) for a landing key on a PCA panel.
+
+    Shared 5-color palette across all panels: the branch (MAML vs BL) is
+    indicated by the row label, not by color. Color encodes only the role
+    within a branch — start point vs noise level.
+    """
+    # Shared palette — high-contrast hues, all distinct.
+    PALETTE = {
+        "start":    "#000000",  # black
+        "n_0.00":   "#1f77b4",  # blue
+        "n_0.01":   "#ff7f0e",  # orange
+        "n_0.05":   "#2ca02c",  # green
+        "n_0.10":   "#d62728",  # red
+    }
+    if name == "theta_star":
+        return (PALETTE["start"], "θ* (start)")
+    if name == "theta_zero":
+        return (PALETTE["start"], "θ₀ (start)")
+    # Format: "<init>_n<noise:.2f>"  e.g. "maml_n0.01"
+    if "_n" in name:
+        init, ns = name.split("_n")
+        try:
+            noise = float(ns)
+        except ValueError:
+            return ("#888888", name)
+        key = f"n_{noise:.2f}"
+        color = PALETTE.get(key, "#888888")
+        prefix = "MAML" if init == "maml" else ("BL" if init == "baseline" else init)
+        return (color, f"{prefix}(n={noise:.2f})")
+    return ("#888888", name)
+
+
+def _plot_panel_pca(ax, alphas, betas, grid, coords, residuals, explained,
+                    title, eval_noise: float,
+                    landing_losses: Optional[Dict[str, float]] = None,
+                    landing_losses_true: Optional[Dict[str, float]] = None):
+    """Single PCA-basis panel: log filled+line contour + every landing point."""
+    from matplotlib.colors import LogNorm
+    from matplotlib.ticker import LogLocator, LogFormatterSciNotation
+
+    A, B = np.meshgrid(alphas, betas)
+    finite = grid[np.isfinite(grid) & (grid > 0)]
+    if finite.size == 0:
+        ax.text(0.5, 0.5, "no finite values", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(title)
+        return
+    vmin = max(np.percentile(finite, 1), 1e-12)
+    vmax = np.percentile(finite, 99)
+    if not (vmax > vmin):
+        vmax = vmin * 10.0
+    safe_grid = np.clip(grid, vmin, vmax)
+
+    lo_dec = np.floor(np.log10(vmin))
+    hi_dec = np.ceil(np.log10(vmax))
+    n_decades = max(int(hi_dec - lo_dec), 1)
+    fill_levels = np.logspace(lo_dec, hi_dec, 12 * n_decades + 1)
+
+    cs = ax.contourf(
+        A, B, safe_grid, levels=fill_levels,
+        norm=LogNorm(vmin=vmin, vmax=vmax), cmap="viridis",
+    )
+    cb = plt.colorbar(
+        cs, ax=ax, fraction=0.046, pad=0.04, label="mixer NMSE (log)",
+        ticks=LogLocator(base=10, numticks=n_decades + 1),
+        format=LogFormatterSciNotation(base=10, labelOnlyBase=True),
+    )
+    cb.ax.tick_params(labelsize=8)
+
+    line_levels = np.logspace(lo_dec, hi_dec, n_decades + 1)
+    line_levels = line_levels[(line_levels >= vmin) & (line_levels <= vmax)]
+    if line_levels.size > 0:
+        cl = ax.contour(
+            A, B, safe_grid, levels=line_levels,
+            norm=LogNorm(vmin=vmin, vmax=vmax),
+            colors="black", linewidths=0.5, alpha=0.5,
+        )
+        ax.clabel(cl, fmt=lambda v: f"{v:.0e}", fontsize=6, inline=True)
+
+    # Every landing in coords gets a marker.
+    # Sort: starts first, then maml-by-noise, then bl-by-noise (legend readability)
+    def _sort_key(name: str) -> Tuple[int, float]:
+        if name == "theta_star":
+            return (0, 0.0)
+        if name == "theta_zero":
+            return (0, 1.0)
+        if name.startswith("maml_n"):
+            return (1, float(name.split("_n")[1]))
+        if name.startswith("baseline_n"):
+            return (2, float(name.split("_n")[1]))
+        return (3, 0.0)
+
+    for name in sorted(coords.keys(), key=_sort_key):
+        a, b = coords[name]
+        color, lab = _pca_marker_style(name)
+        in_plane = landing_losses.get(name, np.nan) if landing_losses else np.nan
+        true_loss = landing_losses_true.get(name, np.nan) if landing_losses_true else np.nan
+        resid = residuals.get(name, np.nan)
+        # Compact legend entry.
+        legend_text = f"{lab}  Lᵢₚ={in_plane:.2e}  Lₜ={true_loss:.2e}  r={resid:.2e}"
+        ax.scatter([a], [b], s=32, marker="o", color=color,
+                   edgecolor="black", linewidth=0.4, zorder=7,
+                   label=legend_text)
+
+    ax.set_xlabel("α  (PC1)", fontsize=9)
+    ax.set_ylabel("β  (PC2)", fontsize=9)
+    ax.set_title(f"{title}\nexplained var (PC1+PC2) = {explained * 100:.1f}%", fontsize=10)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.18, 1.0),
+              fontsize=6.5, framealpha=0.9, borderpad=0.4)
+    ax.tick_params(labelsize=8)
+    ax.grid(True, alpha=0.2)
+
+
+def plot_task_pca_split(
+    task_name: str,
+    maml_pd: Dict, bl_pd: Dict,
+    gap: float, m_total: float, b_total: float,
+    out_path: Path,
+    reference_noise: float,
+    target_noise: float,
+):
+    """4-panel figure: row 0 = MAML branch (ref / target), row 1 = BL branch."""
+    fig, axes = plt.subplots(2, 2, figsize=(20, 15))
+    suptitle = (
+        f"{task_name}  —  PCA (split)  —  noise={target_noise:.2f}  Δ={gap:+.4e}   "
+        f"(MAML={m_total:.4e}, BL={b_total:.4e})\n"
+        "Top row: MAML branch (basis from 4 adapted MAML heads, θ* as overlay).   "
+        "Bottom row: BL branch (basis from 4 adapted BL body+head, θ₀ as overlay).\n"
+        "Lᵢₚ = loss at projected (α,β);  Lₜ = loss at true 5000-D point;  r = ||off-plane residual||."
+    )
+    fig.suptitle(suptitle, fontsize=9)
+
+    for row, pd in enumerate([maml_pd, bl_pd]):
+        branch = "MAML" if row == 0 else "BL"
+        for col, (grid, ll, ll_true, n) in enumerate([
+            (pd["grid_ref"], pd["landing_losses_ref"], pd["landing_losses_true_ref"], reference_noise),
+            (pd["grid_tgt"], pd["landing_losses_tgt"], pd["landing_losses_true_tgt"], target_noise),
+        ]):
+            _plot_panel_pca(
+                axes[row, col],
+                pd["alphas"], pd["betas"], grid,
+                pd["coords"], pd["residuals"], pd["explained"],
+                f"{branch} branch — Loss surface @ noise={n:.2f}",
+                eval_noise=n,
+                landing_losses=ll,
+                landing_losses_true=ll_true,
+            )
+
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.savefig(out_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  wrote {out_path}", flush=True)
+
+
+def _compute_pca_pass(
+    *,
+    basis_label: str,
+    origin: torch.Tensor, dir1: torch.Tensor, dir2: torch.Tensor,
+    coords: Dict[str, Tuple[float, float]],
+    residuals: Dict[str, float],
+    explained: float,
+    frozen_body_template: "OrderedDict[str, torch.Tensor]",
+    keep_keys: Optional[set],
+    true_sources: Dict[str, "OrderedDict[str, torch.Tensor]"],
+    eval_model,
+    args,
+    target_noise: float,
+    hf_ref, ht_ref, hf_tgt, ht_tgt,
+    n_outputs: int,
+    mixer_idx: int,
+) -> Dict:
+    """Compute grid + exact landing losses + true losses for one PCA branch.
+
+    `frozen_body_template` is the state_dict whose out-of-`keep_keys` parameters
+    are held fixed for every grid evaluation. For head-only PCA (MAML branch,
+    `keep_keys = head_keys`) this should be θ* — the body stays frozen at the
+    meta-trained checkpoint, so the (α, β) sweep moves only the head. For
+    full-parameter PCA (BL branch, `keep_keys = None`) every parameter is in
+    scope and the template body is unused but still required by `unflatten_params`.
+
+    Returns a pass-data dict consumed by `plot_task_pca_split` and `_save_pca_pass_npz`.
+    """
+    template = frozen_body_template
+    mixer_arg = mixer_idx if keep_keys is None else None
+    alphas, betas = grid_axes(coords, args.grid, pad_frac=args.pad_frac)
+    print(f"      [{basis_label}] grid {args.grid}×{args.grid}  "
+          f"α∈[{alphas[0]:.3e},{alphas[-1]:.3e}]  "
+          f"β∈[{betas[0]:.3e},{betas[-1]:.3e}]", flush=True)
+    print(f"      [{basis_label}] evaluating reference noise={args.reference_noise:.2f} ...",
+          flush=True)
+    grid_ref = evaluate_grid(
+        eval_model, template, origin, dir1, dir2, alphas, betas,
+        hf_ref, ht_ref, n_outputs,
+        target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+    )
+    print(f"      [{basis_label}] evaluating target noise={target_noise:.2f} ...", flush=True)
+    grid_tgt = evaluate_grid(
+        eval_model, template, origin, dir1, dir2, alphas, betas,
+        hf_tgt, ht_tgt, n_outputs,
+        target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+    )
+
+    def _exact_loss(point_coords, hf_holdout, ht_holdout):
+        a, b = point_coords
+        flat_pt = origin + float(a) * dir1 + float(b) * dir2
+        return eval_loss_at(
+            eval_model, template, flat_pt,
+            hf_holdout, ht_holdout, n_outputs,
+            target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+        )
+
+    landing_losses_ref = {n: _exact_loss(coords[n], hf_ref, ht_ref) for n in coords}
+    landing_losses_tgt = {n: _exact_loss(coords[n], hf_tgt, ht_tgt) for n in coords}
+
+    def _true_loss(sd, hf_holdout, ht_holdout):
+        flat_pt = flatten_params(sd, mixer_filter=mixer_arg, keep_keys=keep_keys)
+        return eval_loss_at(
+            eval_model, template, flat_pt,
+            hf_holdout, ht_holdout, n_outputs,
+            target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+        )
+
+    landing_losses_true_ref = {n: _true_loss(sd, hf_ref, ht_ref)
+                               for n, sd in true_sources.items()}
+    landing_losses_true_tgt = {n: _true_loss(sd, hf_tgt, ht_tgt)
+                               for n, sd in true_sources.items()}
+
+    return {
+        "basis_label": basis_label,
+        "alphas": alphas, "betas": betas,
+        "grid_ref": grid_ref, "grid_tgt": grid_tgt,
+        "coords": coords, "residuals": residuals, "explained": explained,
+        "landing_losses_ref": landing_losses_ref,
+        "landing_losses_tgt": landing_losses_tgt,
+        "landing_losses_true_ref": landing_losses_true_ref,
+        "landing_losses_true_tgt": landing_losses_true_tgt,
+    }
+
+
+def _save_pca_pass_npz(pd: Dict, out_path: Path, mixer_idx: int, args, target_noise: float):
+    """Write per-branch npz for a PCA pass."""
+    coords = pd["coords"]
+    residuals = pd["residuals"]
+    landing_losses_ref = pd["landing_losses_ref"]
+    landing_losses_tgt = pd["landing_losses_tgt"]
+    landing_losses_true_ref = pd["landing_losses_true_ref"]
+    landing_losses_true_tgt = pd["landing_losses_true_tgt"]
+    coord_keys = list(coords.keys())
+    true_keys  = list(landing_losses_true_ref.keys())
+    np.savez(
+        out_path,
+        alphas=pd["alphas"], betas=pd["betas"],
+        grid_reference=pd["grid_ref"], grid_target=pd["grid_tgt"],
+        coord_keys=np.array(coord_keys),
+        coords=np.array([coords[k] for k in coord_keys]),
+        residuals=np.array([residuals.get(k, 0.0) for k in coord_keys]),
+        landing_losses_ref=np.array([landing_losses_ref.get(k, np.nan) for k in coord_keys]),
+        landing_losses_tgt=np.array([landing_losses_tgt.get(k, np.nan) for k in coord_keys]),
+        landing_loss_true_keys=np.array(true_keys),
+        landing_losses_true_ref=np.array([landing_losses_true_ref.get(k, np.nan) for k in true_keys]),
+        landing_losses_true_tgt=np.array([landing_losses_true_tgt.get(k, np.nan) for k in true_keys]),
+        explained_var_top2=float(pd["explained"]),
+        basis=pd["basis_label"],
+        mixer_idx=mixer_idx,
+        reference_noise=args.reference_noise, target_noise=target_noise,
+    )
+
+
+def _run_landscape_pass(
+    *,
+    basis_label: str,
+    origin: torch.Tensor, dir1: torch.Tensor, dir2: torch.Tensor,
+    coords: Dict[str, Tuple[float, float]],
+    residuals: Dict[str, float],
+    explained: float,
+    template: "OrderedDict[str, torch.Tensor]",
+    keep_keys: Optional[set],
+    true_sources: Dict[str, "OrderedDict[str, torch.Tensor]"],
+    eval_model,
+    args,
+    hf_ref, ht_ref, hf_tgt, ht_tgt,
+    n_outputs: int,
+    mixer_idx: int,
+    task_name: str,
+    mixer_name: str,
+    t_key: str,
+    target_noise: float,
+    out_dir: Path,
+    gap_caption: Tuple[float, float, float],
+):
+    """Run grid eval + exact/true loss + plot + npz for the trajectory basis.
+
+    `basis_label` is currently always "trajectory" — PCA branches go through
+    `_compute_pca_pass` + `plot_task_pca_split` instead. The label is still used
+    as the figure-tag in console output and the npz `basis` field. `residuals`
+    and `explained` are accepted for signature symmetry with the PCA path; for
+    trajectory they are written verbatim into the npz (residuals={} → zeros,
+    explained=1.0 by caller convention, since the three trajectory anchors are
+    in-plane by construction).
+    """
+    t_gap, t_m_total, t_b_total = gap_caption
+    mixer_arg = mixer_idx if keep_keys is None else None
+
+    alphas, betas = grid_axes(coords, args.grid, pad_frac=args.pad_frac)
+    print(f"      [{basis_label}] grid {args.grid}×{args.grid}  "
+          f"α∈[{alphas[0]:.3e},{alphas[-1]:.3e}]  "
+          f"β∈[{betas[0]:.3e},{betas[-1]:.3e}]", flush=True)
+    print(f"      [{basis_label}] evaluating reference noise={args.reference_noise:.2f} ...",
+          flush=True)
+    grid_ref = evaluate_grid(
+        eval_model, template, origin, dir1, dir2, alphas, betas,
+        hf_ref, ht_ref, n_outputs,
+        target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+    )
+    print(f"      [{basis_label}] evaluating target noise={target_noise:.2f} ...",
+          flush=True)
+    grid_tgt = evaluate_grid(
+        eval_model, template, origin, dir1, dir2, alphas, betas,
+        hf_tgt, ht_tgt, n_outputs,
+        target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+    )
+
+    def _exact_loss(point_coords, hf_holdout, ht_holdout):
+        a, b = point_coords
+        flat_pt = origin + float(a) * dir1 + float(b) * dir2
+        return eval_loss_at(
+            eval_model, template, flat_pt,
+            hf_holdout, ht_holdout, n_outputs,
+            target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+        )
+
+    landing_losses_ref = {n: _exact_loss(coords[n], hf_ref, ht_ref) for n in coords}
+    landing_losses_tgt = {n: _exact_loss(coords[n], hf_tgt, ht_tgt) for n in coords}
+
+    def _true_loss(sd, hf_holdout, ht_holdout):
+        flat_pt = flatten_params(sd, mixer_filter=mixer_arg, keep_keys=keep_keys)
+        return eval_loss_at(
+            eval_model, template, flat_pt,
+            hf_holdout, ht_holdout, n_outputs,
+            target_mixer=mixer_idx, mixer_filter=mixer_arg, keep_keys=keep_keys,
+        )
+
+    landing_losses_true_ref = {n: _true_loss(sd, hf_ref, ht_ref)
+                               for n, sd in true_sources.items()}
+    landing_losses_true_tgt = {n: _true_loss(sd, hf_tgt, ht_tgt)
+                               for n, sd in true_sources.items()}
+
+    fname = f"{task_name}_mixer{mixer_idx}_{mixer_name}_target{t_key}_landscape"
+    out_path = out_dir / f"{fname}.png"
+
+    plot_task(
+        f"{task_name} — mixer {mixer_idx} ({mixer_name})",
+        alphas, betas, grid_ref, grid_tgt, coords,
+        t_gap, t_m_total, t_b_total, out_path,
+        args.reference_noise, target_noise,
+        landing_losses_ref=landing_losses_ref,
+        landing_losses_tgt=landing_losses_tgt,
+        landing_losses_true_ref=landing_losses_true_ref,
+        landing_losses_true_tgt=landing_losses_true_tgt,
+    )
+
+    coord_keys = list(coords.keys())
+    true_keys  = list(landing_losses_true_ref.keys())
+    np.savez(
+        out_dir / f"{fname}.npz",
+        alphas=alphas, betas=betas,
+        grid_reference=grid_ref, grid_target=grid_tgt,
+        coord_keys=np.array(coord_keys),
+        coords=np.array([coords[k] for k in coord_keys]),
+        residuals=np.array([residuals.get(k, 0.0) for k in coord_keys]),
+        landing_losses_ref=np.array([landing_losses_ref.get(k, np.nan) for k in coord_keys]),
+        landing_losses_tgt=np.array([landing_losses_tgt.get(k, np.nan) for k in coord_keys]),
+        landing_loss_true_keys=np.array(true_keys),
+        landing_losses_true_ref=np.array([landing_losses_true_ref.get(k, np.nan) for k in true_keys]),
+        landing_losses_true_tgt=np.array([landing_losses_true_tgt.get(k, np.nan) for k in true_keys]),
+        explained_var_top2=float(explained),
+        basis=basis_label,
+        mixer_idx=mixer_idx,
+        reference_noise=args.reference_noise, target_noise=target_noise,
+    )
+
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -704,6 +1166,11 @@ def main():
                    help="Reference noise level (left panel)")
     p.add_argument("--selection-noise", type=float, default=0.01,
                    help="Noise level used for top-K task selection (gap = MAML-BL at this noise)")
+    p.add_argument("--basis", type=str, default="trajectory",
+                   choices=["trajectory", "pca"],
+                   help="Plane construction. 'trajectory' = Gram-Schmidt through "
+                        "{MAML(n=0), MAML(n=tgt), BL(n=tgt)}. 'pca' = top-2 SVD "
+                        "of all 10 landings centered at their mean.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--k-shot", type=int, default=None,
@@ -845,133 +1312,141 @@ def main():
             # Per-mixer probe at this target noise
             for mixer_idx in range(bundle["n_outputs"]):
                 mixer_name = name_to_task[task_name].mixer_names[mixer_idx]
-                print(f"    --- mixer {mixer_idx} ({mixer_name}) @ noise={target_noise:.2f} ---", flush=True)
-                try:
-                    origin, dir1, dir2, coords = build_plane(
-                        sds[f"maml_n{args.reference_noise:.2f}"],
-                        sds[f"maml_n{target_noise:.2f}"],
-                        sds[f"baseline_n{target_noise:.2f}"],
-                        sd_theta_star=sd_theta_star,
-                        sd_theta_zero=sd_theta_zero,
-                        sd_bl_n0=sds[f"baseline_n{args.reference_noise:.2f}"],
-                        mixer_filter=mixer_idx,
+                print(f"    --- mixer {mixer_idx} ({mixer_name}) @ noise={target_noise:.2f} "
+                      f"[basis={args.basis}] ---", flush=True)
+
+                # State_dicts available for this (task, mixer):
+                #   sd_theta_star, sd_theta_zero, sds[maml|baseline_n*]
+                # PCA mode splits into two branches with different scopes:
+                #   warm: head-only flatten, points = {θ*, MAML(n_i)}    (body frozen under ANIL)
+                #   cold: full body+head, points = {θ₀, BL(n_i)}         (BL adapts everything)
+                # Each branch builds its own basis, plots its own contour figure.
+
+                if args.basis == "trajectory":
+                    try:
+                        origin, dir1, dir2, coords = build_plane(
+                            sds[f"maml_n{args.reference_noise:.2f}"],
+                            sds[f"maml_n{target_noise:.2f}"],
+                            sds[f"baseline_n{target_noise:.2f}"],
+                            sd_theta_star=sd_theta_star,
+                            sd_theta_zero=sd_theta_zero,
+                            sd_bl_n0=sds[f"baseline_n{args.reference_noise:.2f}"],
+                            mixer_filter=mixer_idx,
+                        )
+                    except RuntimeError as e:
+                        print(f"      SKIP — {e}")
+                        continue
+                    n_dir1 = coords["maml_n01"][0]
+                    n_dir2 = coords["bl_n01"][1]
+                    print(f"      ||dir-1|| (head shift n=0→n={target_noise:.2f}) = {n_dir1:.4e}")
+                    print(f"      ||dir-2|| (⊥ shift toward BL)              = {n_dir2:.4e}")
+
+                    _run_landscape_pass(
+                        basis_label="trajectory",
+                        origin=origin, dir1=dir1, dir2=dir2,
+                        coords=coords, residuals={}, explained=1.0,
+                        template=template, keep_keys=None,
+                        true_sources={
+                            "theta_star": sd_theta_star,
+                            "theta_zero": sd_theta_zero,
+                            "bl_n0":      sds[f"baseline_n{args.reference_noise:.2f}"],
+                        },
+                        eval_model=eval_model, args=args,
+                        hf_ref=hf_ref, ht_ref=ht_ref, hf_tgt=hf_tgt, ht_tgt=ht_tgt,
+                        n_outputs=bundle["n_outputs"], mixer_idx=mixer_idx,
+                        task_name=task_name, mixer_name=mixer_name, t_key=t_key,
+                        target_noise=target_noise, out_dir=out_dir,
+                        gap_caption=(t_gap, t_m_total, t_b_total),
                     )
-                except RuntimeError as e:
-                    print(f"      SKIP — {e}")
                     continue
-                alphas, betas = grid_axes(coords, args.grid, pad_frac=args.pad_frac)
 
-                n_dir1 = coords["maml_n01"][0]
-                n_dir2 = coords["bl_n01"][1]
-                print(f"      ||dir-1|| (head shift n=0→n={target_noise:.2f}) = {n_dir1:.4e}")
-                print(f"      ||dir-2|| (⊥ shift toward BL)              = {n_dir2:.4e}")
-                print(f"      grid {args.grid}×{args.grid}  α∈[{alphas[0]:.3e},{alphas[-1]:.3e}]  "
-                      f"β∈[{betas[0]:.3e},{betas[-1]:.3e}]")
-                print(f"      evaluating reference noise={args.reference_noise:.2f} ...", flush=True)
-                grid_ref = evaluate_grid(
-                    eval_model, template, origin, dir1, dir2, alphas, betas,
-                    hf_ref, ht_ref, bundle["n_outputs"],
-                    target_mixer=mixer_idx, mixer_filter=mixer_idx,
-                )
-                print(f"      evaluating target noise={target_noise:.2f} ...", flush=True)
-                grid_tgt = evaluate_grid(
-                    eval_model, template, origin, dir1, dir2, alphas, betas,
-                    hf_tgt, ht_tgt, bundle["n_outputs"],
-                    target_mixer=mixer_idx, mixer_filter=mixer_idx,
-                )
+                # ----- PCA mode: MAML + BL split, merged into one figure -----
+                # Each branch's basis fits from its 4 adapted points; the start
+                # point (θ* on MAML, θ₀ on BL) is projected onto the resulting
+                # plane as an off-plane overlay marker.
+                head_keys = _head_keys_for_mixer(eval_model, mixer_idx)
 
-                # Evaluate the loss EXACTLY at each landing's (α, β) — no grid interp.
-                # This matters because a sharp basin can sit between grid nodes; the
-                # bilinear interp from neighbours will overestimate by orders of magnitude.
-                def _exact_loss(point_coords, hf_holdout, ht_holdout):
-                    a, b = point_coords
-                    flat_pt = origin + float(a) * dir1 + float(b) * dir2
-                    return eval_loss_at(
-                        eval_model, template, flat_pt,
-                        hf_holdout, ht_holdout, bundle["n_outputs"],
-                        target_mixer=mixer_idx, mixer_filter=mixer_idx,
+                maml_basis_sds: "OrderedDict[str, OrderedDict[str, torch.Tensor]]" = OrderedDict()
+                for nz in unique_noises:
+                    maml_basis_sds[f"maml_n{nz:.2f}"] = sds[f"maml_n{nz:.2f}"]
+
+                bl_basis_sds: "OrderedDict[str, OrderedDict[str, torch.Tensor]]" = OrderedDict()
+                for nz in unique_noises:
+                    bl_basis_sds[f"baseline_n{nz:.2f}"] = sds[f"baseline_n{nz:.2f}"]
+
+                pca_passes = [
+                    # (branch_label, scope_label, basis_sds, keep_keys, template,
+                    #  overlay_name, overlay_sd)
+                    ("MAML", "head-only", maml_basis_sds, head_keys, sd_theta_star,
+                     "theta_star", sd_theta_star),
+                    ("BL",   "body+head", bl_basis_sds,   None,      sd_theta_zero,
+                     "theta_zero", sd_theta_zero),
+                ]
+
+                pass_data: Dict[str, Dict] = {}
+                for (branch_label, scope_label, basis_sds, branch_keep, branch_template,
+                     overlay_name, overlay_sd) in pca_passes:
+                    mixer_arg_b = mixer_idx if branch_keep is None else None
+                    print(f"      [{branch_label}] PCA scope={scope_label}, "
+                          f"{len(basis_sds)} basis points + 1 overlay ({overlay_name})", flush=True)
+                    try:
+                        origin_b, dir1_b, dir2_b, coords_b, residuals_b, explained_b = build_plane_pca(
+                            basis_sds,
+                            mixer_filter=mixer_arg_b,
+                            keep_keys=branch_keep,
+                        )
+                    except RuntimeError as e:
+                        print(f"      SKIP {branch_label} — {e}")
+                        continue
+
+                    # Project overlay (start checkpoint) onto the basis plane.
+                    overlay_flat = flatten_params(
+                        overlay_sd, mixer_filter=mixer_arg_b, keep_keys=branch_keep,
                     )
+                    v = overlay_flat - origin_b
+                    a_o = float((v @ dir1_b).item())
+                    b_o = float((v @ dir2_b).item())
+                    recon = a_o * dir1_b + b_o * dir2_b
+                    coords_b[overlay_name] = (a_o, b_o)
+                    residuals_b[overlay_name] = float((v - recon).norm().item())
 
-                landing_losses_ref = {
-                    name: _exact_loss(coords[name], hf_ref, ht_ref)
-                    for name in ("maml_n0", "maml_n01", "bl_n0", "bl_n01", "theta_star", "theta_zero")
-                    if name in coords
-                }
-                landing_losses_tgt = {
-                    name: _exact_loss(coords[name], hf_tgt, ht_tgt)
-                    for name in ("maml_n0", "maml_n01", "bl_n0", "bl_n01", "theta_star", "theta_zero")
-                    if name in coords
-                }
+                    print(f"      [{branch_label}] explained var (PC1+PC2) = {explained_b * 100:.1f}%, "
+                          f"max basis residual = {max(residuals_b[k] for k in basis_sds):.4e}, "
+                          f"{overlay_name} overlay residual = {residuals_b[overlay_name]:.4e}")
 
-                # True (un-projected) losses for the off-plane points. The three
-                # plane anchors (maml_n0, maml_n01, bl_n01) are in-plane by
-                # construction and don't need a "true" entry — their projected
-                # value already equals their true value.
-                _true_sources = {
-                    "theta_star": sd_theta_star,
-                    "theta_zero": sd_theta_zero,
-                    "bl_n0":      sds[f"baseline_n{args.reference_noise:.2f}"],
-                }
+                    true_sources = dict(basis_sds)
+                    true_sources[overlay_name] = overlay_sd
 
-                def _true_loss(sd, hf_holdout, ht_holdout):
-                    flat_pt = flatten_params(sd, mixer_filter=mixer_idx)
-                    return eval_loss_at(
-                        eval_model, template, flat_pt,
-                        hf_holdout, ht_holdout, bundle["n_outputs"],
-                        target_mixer=mixer_idx, mixer_filter=mixer_idx,
+                    pd = _compute_pca_pass(
+                        basis_label=f"pca_{branch_label}",
+                        origin=origin_b, dir1=dir1_b, dir2=dir2_b,
+                        coords=coords_b, residuals=residuals_b, explained=explained_b,
+                        frozen_body_template=branch_template, keep_keys=branch_keep,
+                        true_sources=true_sources,
+                        eval_model=eval_model, args=args,
+                        target_noise=target_noise,
+                        hf_ref=hf_ref, ht_ref=ht_ref, hf_tgt=hf_tgt, ht_tgt=ht_tgt,
+                        n_outputs=bundle["n_outputs"], mixer_idx=mixer_idx,
                     )
+                    pass_data[branch_label] = pd
 
-                landing_losses_true_ref = {
-                    name: _true_loss(sd, hf_ref, ht_ref)
-                    for name, sd in _true_sources.items()
-                }
-                landing_losses_true_tgt = {
-                    name: _true_loss(sd, hf_tgt, ht_tgt)
-                    for name, sd in _true_sources.items()
-                }
-
-                fname = f"{task_name}_mixer{mixer_idx}_{mixer_name}_target{t_key}_landscape"
-                out_path = out_dir / f"{fname}.png"
-                plot_task(
-                    f"{task_name} — mixer {mixer_idx} ({mixer_name})",
-                    alphas, betas, grid_ref, grid_tgt, coords,
-                    t_gap, t_m_total, t_b_total, out_path,
-                    args.reference_noise, target_noise,
-                    landing_losses_ref=landing_losses_ref,
-                    landing_losses_tgt=landing_losses_tgt,
-                    landing_losses_true_ref=landing_losses_true_ref,
-                    landing_losses_true_tgt=landing_losses_true_tgt,
-                )
-
-                np.savez(
-                    out_dir / f"{fname}.npz",
-                    alphas=alphas, betas=betas,
-                    grid_reference=grid_ref, grid_target=grid_tgt,
-                    coords_maml_n0=np.array(coords["maml_n0"]),
-                    coords_maml_n01=np.array(coords["maml_n01"]),
-                    coords_bl_n01=np.array(coords["bl_n01"]),
-                    coords_theta_star=np.array(coords.get("theta_star", (np.nan, np.nan))),
-                    coords_theta_zero=np.array(coords.get("theta_zero", (np.nan, np.nan))),
-                    coords_bl_n0=np.array(coords.get("bl_n0", (np.nan, np.nan))),
-                    landing_losses_ref=np.array([landing_losses_ref.get(k, np.nan)
-                                                 for k in ("maml_n0", "maml_n01",
-                                                           "bl_n0", "bl_n01",
-                                                           "theta_star", "theta_zero")]),
-                    landing_losses_tgt=np.array([landing_losses_tgt.get(k, np.nan)
-                                                 for k in ("maml_n0", "maml_n01",
-                                                           "bl_n0", "bl_n01",
-                                                           "theta_star", "theta_zero")]),
-                    landing_loss_keys=np.array(["maml_n0", "maml_n01",
-                                                "bl_n0", "bl_n01",
-                                                "theta_star", "theta_zero"]),
-                    landing_losses_true_ref=np.array([landing_losses_true_ref.get(k, np.nan)
-                                                      for k in ("bl_n0", "theta_star", "theta_zero")]),
-                    landing_losses_true_tgt=np.array([landing_losses_true_tgt.get(k, np.nan)
-                                                      for k in ("bl_n0", "theta_star", "theta_zero")]),
-                    landing_loss_true_keys=np.array(["bl_n0", "theta_star", "theta_zero"]),
-                    mixer_idx=mixer_idx,
-                    reference_noise=args.reference_noise, target_noise=target_noise,
-                )
+                if "MAML" in pass_data and "BL" in pass_data:
+                    fname_base = f"{task_name}_mixer{mixer_idx}_{mixer_name}_target{t_key}_landscape_pca"
+                    out_path = out_dir / f"{fname_base}.png"
+                    plot_task_pca_split(
+                        f"{task_name} — mixer {mixer_idx} ({mixer_name})",
+                        pass_data["MAML"], pass_data["BL"],
+                        t_gap, t_m_total, t_b_total, out_path,
+                        args.reference_noise, target_noise,
+                    )
+                    _save_pca_pass_npz(
+                        pass_data["MAML"], out_dir / f"{fname_base}_MAML.npz",
+                        mixer_idx, args, target_noise,
+                    )
+                    _save_pca_pass_npz(
+                        pass_data["BL"], out_dir / f"{fname_base}_BL.npz",
+                        mixer_idx, args, target_noise,
+                    )
 
     print(f"\n[4/4] Done. Figures: {out_dir}")
 
