@@ -52,7 +52,20 @@ def analyze_experiment(exp_dir: Path) -> None:
     print(f"{'=' * 110}")
 
     for cname in coeff_names:
-        print(f"\n--- {cname} ---")
+        true_vals = [
+            tdata["coefficients"][cname]
+            for tdata in tasks.values()
+            if cname in tdata.get("coefficients", {})
+        ]
+        if true_vals:
+            arr = np.asarray(true_vals, dtype=float)
+            header_tag = (
+                f"{cname} [mean={arr.mean():.6f}, std={arr.std():.6f}, "
+                f"min={arr.min():.6f}, max={arr.max():.6f}, n={len(arr)}]"
+            )
+        else:
+            header_tag = cname
+        print(f"\n--- {header_tag} ---")
         header = (
             f"{'noise':>6s} {'method':>8s}  {'err mean±std':>16s}  "
             f"{'min':>7s}  {'max':>7s}  {'slope':>7s}  {'r':>6s}  "
