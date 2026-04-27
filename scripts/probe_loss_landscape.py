@@ -43,6 +43,7 @@ import matplotlib.pyplot as plt
 
 from src.config import ExperimentConfig
 from src.training.task_loader import TASK_REGISTRY, MetaLearningDataLoader, PDETask
+from src.training.imaml import compute_raw_losses
 
 
 # ============================================================================
@@ -536,7 +537,8 @@ def _interp_loss_at(alphas, betas, grid, a, b) -> float:
     )
 
 
-def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0"):
+def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0",
+                landing_losses: Optional[Dict[str, float]] = None):
     """Single panel: log-scale filled contour + line contour overlay + landing/start points.
 
     `panel_noise` controls which fine_tune trajectory the arrows target — the arrow
@@ -587,6 +589,16 @@ def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0")
         ax.clabel(cl, fmt=lambda v: f"{v:.0e}", fontsize=6, inline=True)
 
     # Landing points — filled markers (in-plane by construction).
+    # Loss labels: prefer EXACT evaluation passed via `landing_losses` (not bilinear
+    # interp from the grid). The grid samples discretely; if the loss-surface basin
+    # is narrower than the grid spacing, interp from neighbours overestimates by
+    # orders of magnitude. Exact landing losses come from a separate eval_loss_at
+    # call at the precise (α, β) of each landing.
+    def _label_loss(key: str, a: float, b: float) -> float:
+        if landing_losses is not None and key in landing_losses:
+            return landing_losses[key]
+        return _interp_loss_at(alphas, betas, grid, a, b)
+
     landings = [
         ("maml_n0",  "o", "tab:purple",  "MAML(n=0)"),
         ("maml_n01", "s", "tab:orange",  "MAML(n=.01)"),
@@ -596,7 +608,7 @@ def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0")
         if key not in coords:
             continue
         a, b = coords[key]
-        loss_here = _interp_loss_at(alphas, betas, grid, a, b)
+        loss_here = _label_loss(key, a, b)
         ax.scatter([a], [b], s=130, marker=marker, color=color,
                    edgecolor="black", linewidth=0.9, zorder=6,
                    label=f"{label}  L={loss_here:.4e}")
@@ -611,7 +623,7 @@ def _plot_panel(ax, alphas, betas, grid, coords, title, panel_noise: str = "n0")
         if key not in coords:
             continue
         a, b = coords[key]
-        loss_here = _interp_loss_at(alphas, betas, grid, a, b)
+        loss_here = _label_loss(key, a, b)
         ax.scatter([a], [b], s=180, marker=marker, color="white",
                    edgecolor=color, linewidth=2.0, zorder=7,
                    label=f"{label}  L={loss_here:.4e}")
@@ -647,20 +659,23 @@ def plot_task(
     out_path: Path,
     reference_noise: float,
     target_noise: float,
+    landing_losses_ref: Optional[Dict[str, float]] = None,
+    landing_losses_tgt: Optional[Dict[str, float]] = None,
 ):
     fig, axes = plt.subplots(1, 2, figsize=(18, 7))
     suptitle = (
         f"{task_name}  —  noise={target_noise:.2f}  Δ={gap:+.4e}   "
         f"(MAML={m_total:.4e}, BL={b_total:.4e})\n"
-        "Contour = summed-mixer raw NMSE (body+head subspace; log_vars excluded). "
-        "Landing points minimised Kendall-weighted total loss, "
-        "so they need NOT sit at NMSE basin floors."
+        "Contour = mixer NMSE on the body+head subspace (log_vars excluded). "
+        "Landing-point losses are evaluated exactly (not interpolated from the grid)."
     )
     fig.suptitle(suptitle, fontsize=9)
     _plot_panel(axes[0], alphas, betas, grid_n0,  coords,
-                f"Loss surface @ noise={reference_noise:.2f}", panel_noise="n0")
+                f"Loss surface @ noise={reference_noise:.2f}", panel_noise="n0",
+                landing_losses=landing_losses_ref)
     _plot_panel(axes[1], alphas, betas, grid_n01, coords,
-                f"Loss surface @ noise={target_noise:.2f}",    panel_noise="n01")
+                f"Loss surface @ noise={target_noise:.2f}",    panel_noise="n01",
+                landing_losses=landing_losses_tgt)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(out_path, dpi=160, bbox_inches="tight")
     plt.close(fig)
@@ -861,6 +876,29 @@ def main():
                     target_mixer=mixer_idx, mixer_filter=mixer_idx,
                 )
 
+                # Evaluate the loss EXACTLY at each landing's (α, β) — no grid interp.
+                # This matters because a sharp basin can sit between grid nodes; the
+                # bilinear interp from neighbours will overestimate by orders of magnitude.
+                def _exact_loss(point_coords, hf_holdout, ht_holdout):
+                    a, b = point_coords
+                    flat_pt = origin + float(a) * dir1 + float(b) * dir2
+                    return eval_loss_at(
+                        eval_model, template, flat_pt,
+                        hf_holdout, ht_holdout, bundle["n_outputs"],
+                        target_mixer=mixer_idx, mixer_filter=mixer_idx,
+                    )
+
+                landing_losses_ref = {
+                    name: _exact_loss(coords[name], hf_ref, ht_ref)
+                    for name in ("maml_n0", "maml_n01", "bl_n01", "theta_star", "theta_zero")
+                    if name in coords
+                }
+                landing_losses_tgt = {
+                    name: _exact_loss(coords[name], hf_tgt, ht_tgt)
+                    for name in ("maml_n0", "maml_n01", "bl_n01", "theta_star", "theta_zero")
+                    if name in coords
+                }
+
                 fname = f"{task_name}_mixer{mixer_idx}_{mixer_name}_target{t_key}_landscape"
                 out_path = out_dir / f"{fname}.png"
                 plot_task(
@@ -868,6 +906,8 @@ def main():
                     alphas, betas, grid_ref, grid_tgt, coords,
                     t_gap, t_m_total, t_b_total, out_path,
                     args.reference_noise, target_noise,
+                    landing_losses_ref=landing_losses_ref,
+                    landing_losses_tgt=landing_losses_tgt,
                 )
 
                 np.savez(
@@ -879,6 +919,14 @@ def main():
                     coords_bl_n01=np.array(coords["bl_n01"]),
                     coords_theta_star=np.array(coords.get("theta_star", (np.nan, np.nan))),
                     coords_theta_zero=np.array(coords.get("theta_zero", (np.nan, np.nan))),
+                    landing_losses_ref=np.array([landing_losses_ref.get(k, np.nan)
+                                                 for k in ("maml_n0", "maml_n01", "bl_n01",
+                                                           "theta_star", "theta_zero")]),
+                    landing_losses_tgt=np.array([landing_losses_tgt.get(k, np.nan)
+                                                 for k in ("maml_n0", "maml_n01", "bl_n01",
+                                                           "theta_star", "theta_zero")]),
+                    landing_loss_keys=np.array(["maml_n0", "maml_n01", "bl_n01",
+                                                "theta_star", "theta_zero"]),
                     mixer_idx=mixer_idx,
                     reference_noise=args.reference_noise, target_noise=target_noise,
                 )
