@@ -2952,7 +2952,7 @@ class NLHeatEquationTask(PDETask):
         super().__init__(npz_path, device, input_mode=input_mode)
         if self.input_mode == "raw":
             self._structural_names = [["u", "u_xx", "u_yy"]]
-            self._aux_names = [["K_from_uxx", "K_from_uyy"]]
+            self._aux_names = [["K_from_uxx", "K_from_uyy", "K_from_u"]]
             self.evaluate_collocations = self._evaluate_collocations_raw  # type: ignore[assignment]
             self.extract_coefficients = self._extract_coefficients_raw  # type: ignore[assignment]
             self.auxiliary_losses = self._auxiliary_losses_raw  # type: ignore[assignment]
@@ -2970,7 +2970,7 @@ class NLHeatEquationTask(PDETask):
             self.auxiliary_losses = self._auxiliary_losses_precompose  # type: ignore[assignment]
         else:
             self._structural_names = [["1-u", "u_xx+u_yy"]]
-            self._aux_names = [["K"]]
+            self._aux_names = [["K_from_lap", "K_from_one_minus_u"]]
 
     def _load_coefficients(self, data: np.lib.npyio.NpzFile) -> None:
         self.n_snapshots = data["u_hat"].shape[0]
@@ -3205,7 +3205,17 @@ class NLHeatEquationTask(PDETask):
         diff = jvp_lap - target_per_point
         mse = (diff * diff).mean()
         denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
-        return {"K": mse / denom}
+        K_from_lap = mse / denom
+
+        jvp_one_minus_u = grads[:, 0]
+        lap_u = features[:, 1]
+        target_per_point = self.K * (lap_u)
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        diff = jvp_one_minus_u - target_per_point
+        mse = (diff * diff).mean()
+        aux_K_from_one_minus_u = mse / denom
+
+        return {"K_from_lap": K_from_lap, "K_from_one_minus_u": aux_K_from_one_minus_u}
 
     # ── Raw-features implementations (input_mode="raw") ────────────
 
@@ -3319,7 +3329,13 @@ class NLHeatEquationTask(PDETask):
         diff_yy = jvp_u_yy - target_per_point
         aux_K_yy = (diff_yy * diff_yy).mean() / denom
 
-        return {"K_from_uxx": aux_K_xx, "K_from_uyy": aux_K_yy}
+        target_per_point = -self.K * (features[:, 1] + features[:, 2])
+        denom = (target_per_point * target_per_point).mean().clamp(min=1e-12)
+        jvp_u = grads[:, 0]
+        diff_u = jvp_u - target_per_point
+        aux_K_u = (diff_u * diff_u).mean() / denom
+
+        return {"K_from_uxx": aux_K_xx, "K_from_uyy": aux_K_yy, "K_from_u": aux_K_u}
 
     # ── Raw-raw implementations (input_mode="raw_raw") ───────────
     #    [u, u_x, u_y, u_xx, u_yy] — includes non-RHS distractors
