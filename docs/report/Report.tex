@@ -408,116 +408,319 @@ a neural network, the PDE operator network, learns the nonlinear mapping
 from spatial derivatives to the time derivative:
 %
 \begin{equation}
-u_t = \mathcal{N}(u, u_x, u_y, u_{xx}, u_{yy})
+u_t = \mathcal{N}(u, u_x, u_y, u_{xx}, u_{yy}, ...)
 \label{eq:pde_discovery}
 \end{equation}
 %
-Given solution data and its derivatives, the network is trained to approximate
+Given solution data and its derivatives, the network gets trained to approximate
 the right-hand side of the PDE. Once trained, the learned operator encodes the
-discovered physics: its weights implicitly represent the PDE coefficients,
-which can be extracted via Jacobian probing.
+discovered physics.
 
 In Raissi's formulation, two networks are trained in tandem: a \emph{solution
-network} that approximates the field $u(\mathbf{x}, t)$ from sparse
-observations, and the PDE operator network $\mathcal{N}$ that learns the
-right-hand side. The solution network provides spatial derivatives via
-automatic differentiation, while the operator network constrains the solution
-to satisfy the discovered PDE. When a high-fidelity numerical solver is
-available, however, the solution network becomes unnecessary: the solver
-provides exact solution fields and their spatial derivatives directly. This
-\emph{decoupled} setting --- which Raissi showed to be viable --- isolates the
-PDE discovery problem to learning the operator $\mathcal{N}$ alone, and is the
-setting adopted in this work.
-
-PARAPHRASE THIS: Representing the nonlinear function N by a deep neural network is the novelty
-of the current work. Deep neural networks are a richer family of function
-approximators and consequently we do not have to commit to a particular class
-of basis functions such as polynomials or sines and cosines. This
-expressiveness comes at the cost of losing interpretability of the learned
-dynamics. However, there is nothing hindering the use of a particular class of
-basis functions in order obtain more interpretable equations [35].
-
-However, this approach requires training a new network from scratch for each
-system encountered. Every new set of physical parameters --- a different
-viscosity, a different diffusion coefficient --- demands a full training run.
-This is expensive and fails to exploit the structural similarities that exist
-across related systems. For instance, a network trained on one viscosity of
-Navier-Stokes learns representations relevant to nearby viscosities, yet none
-of this knowledge transfers to the next training run.
+network} that approximates the field $u(\mathbf{x}, t)$ from sampled
+collocation points, and the PDE operator network $\mathcal{N}$ that learns the
+$\mathbf{RHS}$ equations. The solution network provides spatial derivatives
+via, trivially, automatic differentiation while the operator network acts as
+the regularisation agent to constrain and satisfy the discovered PDE. The
+operator network is implemented as a fast forward network with spatial
+derivatives as its input features and took around 150,000 steps to learn and
+converge to vorticity form Navier-stokes. This approach requires training a new
+randomly initialised network from scratch for each PDE instance encountered.
+Each PDE instance has its own assignment of PDE coefficients which demands its
+own full training. A network trained on a ground-truth function $f^*$ with
+coefficients $\mathcal{C}^*$ does not generalise to another instance $f^0$ with
+$\mathcal{C}^0 \neq \mathcal{C}^*$.
+ 
 
 Model-Agnostic Meta-Learning (MAML) \cite{finn2017} offers a solution to this
-training problem. Rather than learning a single set of weights for one system,
-MAML learns a meta-parameter \emph{initialisation} $\theta^*$ --- a starting point in the loss
-landscape from which the network can rapidly adapt to any system within a task
-family of one PDE. This solves the expensive training of a large model or scarce
+training problem. Rather than having to learn a new dataset with random
+initialised network $\mathcal{N}(\cdot|\theta*)$, MAML provides us with a model
+that can quickly adapt to any PDE instance within the family. Unlike
+traditional ML, learning a single set of weights for one system, MAML learns a
+meta-parameter \emph{initialisation} $\theta^*$ --- a starting point in the
+loss landscape from which the network can rapidly adapt to any PDE instance.
+This solves the expensive training of a model with few steps and scarce
 dataset.
 
-This work applies MAML to the decoupled PDE operator network to
-\emph{amortise} the discovery of PDE coefficients across a family of related
-systems. During meta-training, the algorithm samples tasks from a distribution
-of PDE instances --- each characterised by different physical parameters ---
-and learns an initialisation $\theta^*$ that minimises the expected
-post-adaptation loss across the family. Empirically, the resulting $\theta^*$ encodes a
-\emph{prior} over the coefficient space: before any task-specific fine-tuning,
-the network already represents a meaningful estimate of the PDE coefficients.
-Adaptation then refines this estimate toward the true parameters of the target
-system, reducing the per-instance cost from full training to a small number of
-gradient steps. The nature of this estimate --- whether it reflects a measure of central
-tendency, a minimax strategy over the task distribution, or an artefact of the
-loss landscape geometry --- is itself an empirical question examined in this paper.
+This paper makes two contributions. First, exemplifying an approach to the
+amortisation of continuous PDE functions learning along with a newfound trick
+on guaranteeing convergence during meta-training. Second, by varying the
+feature design by either \emph{linear-input} or \emph{spatial-input}, we
+measure how feature-design choices reshape both the meta-training loss floor
+and the meta-learned prior's value relative to a from-scratch baseline, which
+we observe as \emph{feature linearity tax}. The second contribution was
+birthed from the first contribution and was worth following through.
 
-Formally, let $\mathcal{N}_\theta$ denote the PDE operator network
-parameterised by $\theta$. For a PDE family $\rho$, the task distribution
-$\tau(\rho)$ generates tasks $\mathcal{T}_i$, each consisting of support and
-query sets of $\{(\mathbf{x}_j, \mathbf{y}_j)\}$ pairs, where $\mathbf{x}_j$
-are input spatial derivative features and $\mathbf{y}_j$ are target time
-derivatives. The MAML inner loop adapts $\theta^*$ to a task-specific
-$\theta'_i$ by gradient descent on the support set, traversing the loss
-landscape toward the task's local minimum. The outer loop then updates
-$\theta^*$ based on the query-set performance of the adapted parameters
-$\theta'_i$ across all sampled tasks which gives way to steering the next
-initialisation away from regions where task-specific adaptation fails to
-generalise.
+The objectives of this project centre on the proposal of an approach to
+amortise data-driven PDE discovery with scarce datapoints and few steps via
+MAML. The minimum objectives are to set up a workflow environment and
+successfully train a Heat-equation amortised MAML FFN model. As several
+objectives call for exploration, the intermediate tier extends the experiments
+to additional PDE families. The advanced deliverable is the feature-design
+ablation, from which the \emph{feature linearity tax} is observed.
 
-This work investigates whether MAML can amortise PDE coefficient recovery. 
+\begin{table*}[!t]
+\renewcommand{\arraystretch}{1.3}
+\caption{Project deliverables, organised by tier.}
+\label{table_deliverables}
+\centering
+\begin{tabular}{c l}
+\hline\hline
+Code & Deliverable \\
+\hline
+B1 & Dataset generation pipeline with spectral solver methodology. \\
+B2 & Meta-learning pipeline including training, evaluation, and visualisation. \\
+B3 & Successful training of a Heat-equation amortised MAML FFN model. \\
+I1 & Successful training of a Nonlinear Heat-equation MAML FFN model. \\
+I2 & Successful training of Brusselator and $\lambda$-$\omega$ MAML FFN models. \\
+A1 & Feature-design ablation contrasting \emph{linear-input} and \emph{spatial-input} modes. \\
+\hline\hline
+\end{tabular}
+\end{table*}
 
-$$
-u_t = D \nabla^2 u \text{ Heat equation}
-$$
+This work has investigated whether MAML algorithm can produce amortisation
+effect on PDE coefficient recovery, and how the choice of input-feature design
+reshapes the quality of that amortisation put against a from-scratch randomly
+initialised baseline, which is the initial model parameters of MAML model.
+Four PDE families --- the heat equation, the nonlinear heat equation, the
+Brusselator, and $\lambda$-$\omega$ system --- where observed under
+\emph{linear-input} and \emph{spatial-input} feature modes and four
+additive-noise levels on the input field with metrics both the meta-trained
+loss trajectories and per-coefficient recovery against ground truth.
 
-$$
-u_t = D (1-u)\nabla^2 u \text{ Nonlinear Heat equation}
-$$
+The remainder of this paper is organised as follows.
+Section~\ref{sec:related} reviews data-driven PDE discovery and meta-learning
+for scientific computing. Section~\ref{sec:methodology} details the
+architecture, the iMAML training procedure, and the evaluation protocol.
+Section~\ref{sec:results} presents the experimental results.
+Section~\ref{sec:evaluation} interprets the findings.
+Section~\ref{sec:conclusion} concludes.
 
-Heat equation and nonlinear heat equation are chosen to be the functions
-approximated by the MAML MLP. 
-
-Defining the requirements of amortisation is the objective of this paper. This
-work examines how the distribution of the training tasks affects the quality of
-amortisation, and what failure modes arise afterwards. 
-
-\section{Related Work}
+\section{Related Work}\label{sec:related}
 % --- Data-driven PDE discovery: the field ---
 % Raissi I/II/III (coupled U-net + N-net, decoupled setting)
 % SINDy / PDE-FIND (Rudy et al. 2017) — sparse regression on candidate library
 % Lü et al. 2024 (FBR-PDE-FIND) — forward-backward regression extension
-\subsection{Data-Driven PDE Discovery}
-% TODO(me): Raissi's operator network in more detail than the intro.
-% Contrast implicit (neural) vs explicit (library-based) coefficient recovery.
-% SINDy: build Theta, sparsity-promoting regression, ill-conditioning issues.
-% Lü et al.: FBR refinement, same library paradigm.
-% Close with: all per-system, none amortise across a family.
+\subsection{Data-Driven PDE Discovery}\label{subsec:pde_discovery}
 
-% --- Meta-learning applied to PDEs ---
-% FOMAML / Reptile (Nichol et al. 2018) — first-order approximations, Taylor analysis
-% Meta-PDE (Qin et al. 2022) — MAML + PINNs for forward solving (not discovery)
-% MeTAL (Baik et al. 2021) — task-adaptive inner loss
-\subsection{Meta-Learning for Scientific Computing}
-% TODO(me): MAML already introduced; here expand on variants.
-% Reptile: why multi-step inner loops matter (second-order term).
-% Meta-PDE: closest prior work, but forward solver not coefficient discovery.
-% MeTAL: learned inner loss, orthogonal to initialisation quality.
-% Close with: none apply meta-learning to coefficient recovery specifically.
+There exist many approaches to recovering governing PDEs from observed fields.
+All these share a common working pipeline which is a model being fitted to
+orchestrated input features entailing the evolution of a single observed
+system. The outcome fit is interpreted as the system's governing equation, and
+a new system requires a new fit. The method families differ by paradigm.
+
+The first method family, the \emph{dictionary-based} family,
+imposes the inductive bias externally as a \emph{candidate
+library} of nonlinear basis terms.
+SINDy~\cite{TODO_brunton2016} fits a sparse linear combination of
+pre-supplied basis functions to the time derivatives of an
+observed trajectory, recovering the governing ODE through the
+inferred sparsity pattern. PDE-FIND~\cite{TODO_rudy2017} extends
+the candidate library to include spatial derivatives, casting PDE
+discovery as a high-dimensional sparse regression problem; an
+$\ell_1$-regularised variant was developed in
+parallel by Schaeffer~\cite{TODO_schaeffer2017}. The dominant
+failure mode of these methods is multicollinearity among
+candidate columns: subsequent refinements address this through
+forward--backward regression
+(FBR-PDE-FIND~\cite{TODO_lu2024}) or through weak-form
+integration that smooths noise sensitivity
+(weak-SINDy~\cite{TODO_messenger2021}). Champion et
+al.~\cite{TODO_champion2019} relax the requirement that the
+candidate library be hand-supplied by jointly learning a
+coordinate transformation, via an autoencoder, alongside a sparse
+SINDy regression in the learned coordinate space.
+
+Another method family, the
+\emph{neural-function-approximation-based} family, replaces the
+candidate library with deep neural networks that approximate the
+right-hand-side operator directly.
+PDE-Net~\cite{TODO_long2018} and PDE-Net~2.0~\cite{TODO_long2019}
+parametrise spatial-derivative operators as constrained
+convolutional kernels --- restricted via moment-matrix conditions
+to approximate finite-difference stencils of specified orders ---
+and learn how those operators algebraically combine to predict
+the field at the next timestep. The inductive bias here is
+architectural: the kernels are constrained, but their algebraic
+combination is left to the network.
+
+The methodology to which this work directly attends sits in the same family:
+the \emph{Deep Hidden Physics Models} framework of Raissi~\cite{raissi2018}.
+The right-hand side of the PDE is approximated by a feedforward neural
+network $\mathcal{N}_\phi$ whose input features comprise some subset of the
+solution and its spatial derivatives, chosen by the practitioner. The
+inductive biases of this approach are, notably, the activation-function
+smoothness and the input-feature design: the operator network $\mathcal{N}_\phi$
+can only express algebraic combinations of those features, and the choice of
+which derivatives to include is a design decision the practitioner makes in
+advance. Training couples $\mathcal{N}_\phi$ with a solution network
+$u_\theta(t, x)$ that interpolates the field from sampled collocation points
+and from which spatial and temporal derivatives are obtained by automatic
+differentiation. Defining the PDE residual
+%
+\begin{equation}\label{eq:dhpm_residual}
+f_{\theta, \phi}(t, x) \;:=\;
+\partial_t u_\theta(t, x) - \mathcal{N}_\phi\bigl(u_\theta,\, \nabla u_\theta,\, \nabla^2 u_\theta,\, \ldots\bigr)\big|_{(t, x)},
+\end{equation}
+%
+both networks are trained jointly by minimising the sum of squared errors over
+the data-fit and PDE-residual terms,
+%
+\begin{equation}\label{eq:dhpm_loss}
+\min_{\theta, \phi}\;
+\sum_{i=1}^{N_u}\bigl|u_\theta(t^i, x^i) - u^i\bigr|^2
++ \sum_{j=1}^{N_f}\bigl|f_{\theta, \phi}(t^j, x^j)\bigr|^2,
+\end{equation}
+%
+where $\{(t^i, x^i), u^i\}_{i=1}^{N_u}$ are observed field measurements and
+$\{(t^j, x^j)\}_{j=1}^{N_f}$ are collocation points at which the PDE residual
+is enforced.
+
+The recovered PDE is identified with the trained network's input--output
+mapping; within the chosen feature set, the algebraic combination of those
+features is left to the network --- by the universal approximation
+theorem~\cite{TODO_cybenko1989, TODO_hornik1991}, a sufficiently wide
+feedforward network can approximate any continuous function on a compact
+domain to arbitrary precision. The published reference
+implementation~\cite{TODO_raissi_code} fits each network on the order of
+$150000$ gradient steps per system with the second-order optimiser L-BFGS, and
+the trained network carries no guarantee of generalising outside the single
+coefficient instance against which it was fitted.
+
+Several adjacent neural-operator frameworks should be
+distinguished from PDE discovery as understood here.
+Physics-informed neural networks~\cite{TODO_raissi2019pinn} use
+the PDE residual as a training signal but typically assume the
+equation form is known and solve forward (or
+inverse-coefficient) problems on a single system. Operator-learning
+frameworks such as DeepONet~\cite{TODO_lu2021deeponet} and the
+Fourier Neural Operator~\cite{TODO_li2021fno} learn families of
+forward-PDE solution maps but do not address the identification
+of the governing equation. These methods sit off-plane to the
+present work: they share neural-network machinery with the
+discovery pool above but are aimed at different objects.
+
+The methods in the discovery pool share one structural limitation that the
+present work targets: each is fitted \emph{per system}. None is positioned to
+amortise across a \emph{coefficient family} in the sense that a pre-trained
+model that was meta-trained over a coefficient distribution can adapt to new
+instances with fewer steps and less data than from-scratch training would
+require. Within the discovery pool, the present work is most closely aligned
+with Raissi's straight-on-regression line: we adopt the operator network as the
+underlying object of study, but re-parameterise its input through a
+structurally-designed feature library and train it through a meta-learning
+procedure rather than per-system regression. The cost and benefit of this
+re-parameterisation is the central subject of \S\ref{sec:results}.
+
+\subsection{Meta-Learning}\label{subsec:meta_learning}
+
+Meta-learning produces \emph{fast-adapting} models that adapt rapidly to a
+new task drawn from a related task distribution, by learning a parameter
+initialisation $\theta^*$ tuned for fast adaptation. Model-Agnostic
+Meta-Learning (MAML)~\cite{finn2017} formalises this through a bi-level
+optimisation: an \emph{inner loop} adapts the initialisation $\theta$ via
+$\tau$ steps of gradient descent on the task's support set
+$\mathcal{D}^{\text{tr}}_i$, producing task-specific parameters $\phi_i$, and
+an \emph{outer loop} updates $\theta$ to minimise the post-adaptation loss
+across the task distribution,
+%
+\begin{equation}\label{eq:maml_outer}
+F(\theta) := \frac{1}{M}\sum_{i=1}^{M}\mathcal{L}\bigl(\,
+\overbrace{\text{Alg}(\theta, \mathcal{D}^{\text{tr}}_i)}^{\text{inner-loop}},\,
+\mathcal{D}^{\text{test}}_i \bigr).
+\end{equation}
+%
+The meta-gradient $\nabla_\theta F(\theta)$ has backpropagation traversing
+through $M$ unrolled inner-loop $\tau$-step computation graphs for $M$ sampled
+tasks within each outer loop iteration, requiring second-order Hessian--vector
+products at each outer step.
+
+Standard MAML becomes ill-conditioned at longer inner-loop horizons.
+In few-shot classification, MAML's stable operating regime is a small
+number of inner steps (typically $\tau \leq 5$); beyond that the
+meta-gradient is prone to numerical instability and gradient-norm
+explosions~\cite{TODO_antoniou2019}. Antoniou et
+al.~\cite{TODO_antoniou2019} catalogue these failure modes and
+propose a suite of patches --- multi-step loss, derivative-order
+annealing, per-layer per-step learning rates, and cosine-annealed
+outer step --- collectively branded MAML++. The patches stabilise
+training but do not structurally remove the source of the difficulty:
+the meta-gradient still flows backward through every inner step, and
+the computational graph grows along with inner-loop depth.
+
+The inherent large memory requirement of MAML posed by second-order gradient
+computation, motivated formulations of workarounds. FOMAML~\cite{finn2017}
+replaces the meta-gradient with the gradient at the holdout loss of the adapted
+network, while Reptile~\cite{TODO_nichol2018} dispenses with the the bi-level
+structure altogether, taking the difference between adapted and pre-adaptation
+parameters as the surrogate meta-update. Both reduce per-step compute and
+memory, but discard the second-order term that semantically captures how
+task-specific minima depend on $\theta$ --- a term whose contribution becomes
+load-bearing when the inner loop lengthens~\cite{TODO_nichol2018}.
+
+Two further extensions modify what the inner loop optimises rather than how the
+meta-gradient is computed. MeTAL~\cite{TODO_baik2021} replaces the inner-loop
+loss function itself with a meta-learned, task-adaptive loss network applied
+per inner step. ANIL~\cite{TODO_raghu2020} (Almost No Inner Loop) takes the
+opposite tack: motivated by the empirical observation that primarily the
+network's final layer changes during MAML's inner adaptation, ANIL has the body
+frozen during the inner loop and adapts only the head weights that coincide with
+the output neurons, reducing the parameters that participate in the inner-loop
+optimisation. This project adopts ANIL's body--head split due to the observed
+stability compared to no split setups.
+
+The \emph{long inner loop} instability has emphasised the limited scalability
+of MAML. Fortunately, Implicit MAML (iMAML) \cite{TODO_rajeswaran2019} works around
+this instability by decoupling the inner loop and the outer loop. This
+formulation subsumes MAML, FOMAML, and Reptile, having declared itself as a
+superset among the three~\cite[Appendix~A]{TODO_rajeswaran2019}. Rather than
+differentiating through the inner-loop trajectory, iMAML defines the inner-loop
+as an algorithm $\text{Alg}(\theta, \mathcal{D}^{\text{tr}}_i)$ that returns
+the task-adapted parameters $\phi_i$ for task $\mathcal{T}_i$ after $\tau$
+inner steps.
+
+$$\phi_i := \text{Alg}(\theta, \mathcal{D}^{\text{tr}_i})$$
+
+The meta-gradient $g_i$ is the approximation $\lVert g_i - (I +
+\frac{1}{\lambda}\nabla^2\mathcal{L}_i(\phi_i, \mathcal{D}^{\text{tr}}_i))^{-1}v_i\rVert \leq \delta$
+obtained via CG Solve, with the holdout loss gradient $v_i =
+\nabla_{\phi_i}\mathcal{L}(\phi_i, \mathcal{D}^{\text{test}}_i)$.
+Ill-conditioned optimisation landscapes and medium-shot learning pose two
+challenges for standard MAML, the considerable computation and memory burden
+and the dependence of the task-adapted parameters ${\phi_i}$ on the current
+parameters $\theta$, shrinking and vanishing as the inner steps $\tau$
+increases. To overcome this, iMAML then uses an explicitly written regularisation
+term, named Proximal Regularisation\footnote{The implementation $\text{Alg}(\theta, \mathcal{D}^{\text{tr}}_i)$ is taken to be a $\delta$-accurate approximation of the exact minimiser $\text{Alg}^*$, i.e., $\lVert \text{Alg}(\theta, \mathcal{D}^{\text{tr}}_i) - \text{Alg}^*(\theta, \mathcal{D}^{\text{tr}}_i) \rVert \leq \delta$ (Definition~1 of~\cite{TODO_rajeswaran2019}).}:
+$$\text{Alg}(\theta,
+\mathcal{D}^{\text{tr}}_i) \approx \operatorname*{argmin}_{\phi' \in \Phi}
+\mathcal{L}\big(\phi',\, \mathcal{D}^{\mathrm{tr}}_i\big) + \frac{\lambda}{2}\,\big\lVert
+\phi' - \theta \big\rVert^2 = \text{Alg}^*(\theta, \mathcal{D}^{\text{tr}}_i).$$
+
+The proximal term ensures $\phi_i$ to remain close to $\theta$, and also guarantees
+a positive-definite Hessian\footnote{Per Theorem~1 of Rajeswaran et al.~\cite{TODO_rajeswaran2019}, $\lambda$ is chosen such that the regularised inner objective is strongly convex, ensuring the positive-definiteness of $\left(I + \frac{1}{\lambda}\nabla^2\mathcal{L}_i(\phi_i, \mathcal{D}^{\text{tr}}_i)\right)$ and hence its inverse.}:
+
+$$\frac{d\text{Alg}^*(\theta, \mathcal{D}^{\text{tr}}_i)}{d{\theta}} = \left(I + \frac{1}{\lambda}\nabla^2\mathcal{L}_i(\phi_i, \mathcal{D}^{\text{tr}}_i)\right)^{-1}$$.
+
+Since $\frac{d\text{Alg}^*(\theta, \mathcal{D}^{\text{tr}}_i)}{d{\theta}}$ is positive-definite (as the inverse of a PD matrix $\left(I + \frac{1}{\lambda}\nabla^2\mathcal{L}_i(\phi_i, \mathcal{D}^{\text{tr}}_i)\right)$), we have that:
+
+$$\mathcal{L}_{i}(\theta - g_{i}, \mathcal{D}^{\text{test}}_i) \approx \mathcal{L}_{i}(\theta, \mathcal{D}^{\text{test}}_i) - \text{(positive number)} < \mathcal{L}_i(\theta, \mathcal{D}^{\text{test}}_i)$$
+
+The decoupling allows the meta-gradient computation cost to be independent of
+the inner loop steps $\tau$, such that any inner-loop optimiser may be
+substituted, including second-order quasi-Newton methods such as L-BFGS,
+without affecting the meta-gradient computation. We showcase the full approach
+in full in \S\ref{sec:methodology}.
+
+Meta-PDE~\cite{TODO_qin2022}, the only example to be the most direct neighbour,
+uses MAML to amortise the training of physics-informed neural networks for
+\emph{forward} PDE solving --- recovering the solution given that the governing
+equation is known. To our knowledge, no prior work targets meta-learned and
+neural network approximated coefficient \emph{discovery}: the recovery of
+unknown PDE parameters from observed fields, under a few steps across a
+coefficient family with a neural network. In hindsight, the insights of the
+works iMAML and ANIL had been appreciated by this project to meet its
+deliverables. This project used iMAML algorithm extended with ANIL mode inner
+loop adaptation.
 
 % --- Failure modes that explain absorption ---
 % Simplicity bias (Shah et al. 2020) — MLP takes simplest predictive feature
@@ -531,10 +734,9 @@ amortisation, and what failure modes arise afterwards.
 % that low collinearity is necessary but not sufficient.
 % PINNsFormer (Zhao et al. 2024) could get a sentence here if relevant. 
 
-\section{Methodology}
+\section{Methodology}\label{sec:methodology}
 
-\subsection{PDE Operator Discovery}
-
+\subsection{Meta-Learning with iMAML}
 Raissi~\cite{raissi2018} considers nonlinear partial differential equations of
 the general form
 %
@@ -631,15 +833,15 @@ update, requiring a second-order gradient computation.
 % TODO(me): subsections for experimental specifics —
 % task definition, data generation, evaluation protocol, Jacobian extraction
 
-\section{Results}
+\section{Results}\label{sec:results}
 This section presents the results of the solutions. It should include information on experimental settings. The results should demonstrate the claimed benefits/disadvantages of the proposed solutions.
 
 This section should be around 2 pages in length.
 
-\section{Evaluation}
+\section{Evaluation}\label{sec:evaluation}
 This section should be between 1 to 2 pages in length.
 
-\section{Conclusion}
+\section{Conclusion}\label{sec:conclusion}
 This section summarises the main points of this paper. Do not replicate the abstract as the conclusion. A conclusion might elaborate on the importance of the work or suggest applications and extensions. This section should be no more than 1 page in length.
 
 The page lengths given for each section are indicative and will vary from project to project but should not exceed the upper limit. A summary is shown in Table \ref{table_2}.
