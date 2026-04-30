@@ -71,16 +71,20 @@ CONFIGS = [
 
 
 def r_squared(y: torch.Tensor, X: torch.Tensor) -> float:
-    """OLS R^2 of y on X (with intercept)."""
-    X_d = X.double()
-    y_d = y.double()
+    """OLS R^2 of y on X (with intercept). Uses CPU + pinv for numerical stability;
+    torch.linalg.lstsq on CUDA NaNs out for some LO raw target distributions."""
+    X_d = X.double().cpu()
+    y_d = y.double().cpu()
     if y_d.ndim == 1:
         y_d = y_d.unsqueeze(1)
-    X_aug = torch.cat([X_d, torch.ones(X_d.shape[0], 1, dtype=torch.float64, device=X_d.device)], dim=1)
-    sol = torch.linalg.lstsq(X_aug, y_d).solution
+    X_aug = torch.cat([X_d, torch.ones(X_d.shape[0], 1, dtype=torch.float64)], dim=1)
+    # Pseudoinverse is robust to rank-deficient or ill-conditioned matrices.
+    sol = torch.linalg.pinv(X_aug) @ y_d
     y_pred = X_aug @ sol
     ss_res = float(((y_d - y_pred) ** 2).sum())
     ss_tot = float(((y_d - y_d.mean()) ** 2).sum())
+    if not (ss_res == ss_res) or not (ss_tot == ss_tot):  # NaN check
+        return float("nan")
     return 1.0 - (ss_res / max(ss_tot, 1e-30))
 
 
