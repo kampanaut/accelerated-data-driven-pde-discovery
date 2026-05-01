@@ -42,28 +42,32 @@ CONFIGS = [
     {
         "label": "Heat",
         "pde_type": "heat",
-        "data_dir": "data/datasets/heat_test-1",
+        "test_dir": "data/datasets/heat_test-1",
+        "train_dir": "data/datasets/heat_train-2",
         "modes": ["library"],
         "n_points": 20000,
     },
     {
         "label": "NLHeat",
         "pde_type": "nl_heat",
-        "data_dir": "data/datasets/nl_heat_test-1",
+        "test_dir": "data/datasets/nl_heat_test-1",
+        "train_dir": "data/datasets/nl_heat_train-2",
         "modes": ["precompose", "raw"],
         "n_points": 20000,
     },
     {
         "label": "BR",
         "pde_type": "br",
-        "data_dir": "data/datasets/br_test-2",
+        "test_dir": "data/datasets/br_test-2",
+        "train_dir": "data/datasets/br_train-2",
         "modes": ["library", "raw"],
         "n_points": 40000,
     },
     {
         "label": "LO",
         "pde_type": "lo",
-        "data_dir": "data/datasets/lo_test-1",
+        "test_dir": "data/datasets/lo_test-1",
+        "train_dir": "data/datasets/lo_train-1",
         "modes": ["library", "raw"],
         "n_points": 40000,
     },
@@ -89,7 +93,8 @@ def r_squared(y: torch.Tensor, X: torch.Tensor) -> float:
 
 
 def collect_per_task_r2(
-    pde_type: str, data_dir: Path, mode: str, n_points: int, n_iter: int
+    pde_type: str, data_dir: Path, mode: str, n_points: int, n_iter: int,
+    noise_level: float = 0.0,
 ):
     """For each task in directory: N_iter resamples, compute R^2 per mixer.
 
@@ -111,16 +116,24 @@ def collect_per_task_r2(
         per_iter_r2 = [[] for _ in range(n_mixers)]
         for it in range(n_iter):
             seed = BASE_SEED + t_idx * 10_000 + it
+            # Per-iter seeded noise generator so noise injection is
+            # reproducible and independent across resamples.
+            noise_gen = None
+            if noise_level > 0.0:
+                noise_gen = torch.Generator(device=DEVICE)
+                noise_gen.manual_seed(seed)
             try:
                 (_, _), (qf_list, qt), _, _ = task.get_support_query_split(
                     K_shot=0, query_size=n_points,
                     k_seed=seed, snapshot_seed=seed,
+                    noise_level=noise_level, noise_generator=noise_gen,
                 )
             except Exception:
                 # fall back if K_shot=0 disallowed
                 (sf_list, st), (qf_list, qt), _, _ = task.get_support_query_split(
                     K_shot=1, query_size=n_points - 1,
                     k_seed=seed, snapshot_seed=seed,
+                    noise_level=noise_level, noise_generator=noise_gen,
                 )
                 # combine support+query for the regression
                 qf_list = [torch.cat([s, q], dim=0) for s, q in zip(sf_list, qf_list)]
@@ -180,6 +193,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_iter", type=int, default=50)
     parser.add_argument("--only", type=str, default="", help="comma-separated PDE labels filter")
+    parser.add_argument(
+        "--noise_level", type=float, default=0.0,
+        help="Source-level Fourier-coefficient noise scale (matches eval pipeline).",
+    )
+    parser.add_argument(
+        "--split", type=str, default="test", choices=["test", "train"],
+        help="Which dataset split to evaluate feasibility R^2 on.",
+    )
     args = parser.parse_args()
 
     only = set(args.only.split(",")) if args.only else None
@@ -189,17 +210,18 @@ def main():
     for cfg in CONFIGS:
         if only and cfg["label"] not in only:
             continue
-        data_dir = ROOT / cfg["data_dir"]
+        data_dir = ROOT / cfg[f"{args.split}_dir"]
         if not data_dir.exists():
-            print(f"\n[skip] {cfg['label']}: {data_dir} not found")
+            print(f"\n[skip] {cfg['label']} ({args.split}): {data_dir} not found")
             continue
         for mode in cfg["modes"]:
             print(f"\n{'=' * 80}")
-            print(f"  {cfg['label']}  |  mode = {mode}  |  N_points = {cfg['n_points']}  |  N_iter = {args.n_iter}")
+            print(f"  {cfg['label']}  |  split = {args.split}  |  mode = {mode}  |  N_points = {cfg['n_points']}  |  N_iter = {args.n_iter}  |  noise = {args.noise_level}")
             print(f"{'=' * 80}")
             try:
                 arr_per_mixer, task_names = collect_per_task_r2(
-                    cfg["pde_type"], data_dir, mode, cfg["n_points"], args.n_iter
+                    cfg["pde_type"], data_dir, mode, cfg["n_points"], args.n_iter,
+                    noise_level=args.noise_level,
                 )
             except Exception as e:
                 print(f"  [fail] {type(e).__name__}: {e}")
